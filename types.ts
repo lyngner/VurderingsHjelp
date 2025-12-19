@@ -38,7 +38,7 @@ export interface Candidate {
 export interface RubricCriterion {
   name: string;
   description: string;
-  suggestedSolution: string; // Flyttet hit for å vises sammen med kriteriene
+  suggestedSolution: string;
   maxPoints: number;
   tema?: string;
   commonMistakes: {
@@ -52,7 +52,7 @@ export interface Rubric {
   title: string;
   criteria: RubricCriterion[];
   totalMaxPoints: number;
-  overview?: string; // Valgfri overordnet tekst
+  overview?: string;
 }
 
 export interface Project {
@@ -63,6 +63,7 @@ export interface Project {
   taskDescription: string;
   taskFiles: Page[];
   candidates: Candidate[];
+  unprocessedPages?: Page[]; // Filer som venter på AI-behandling
   rubric: Rubric | null;
   status: 'draft' | 'analyzing' | 'reviewing' | 'completed';
 }

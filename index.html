@@ -6,9 +6,20 @@
     <title>ElevVurdering PRO</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+    <!-- MathJax for robust matematikk-rendering -->
+    <script>
+      window.MathJax = {
+        tex: {
+          inlineMath: [['$', '$'], ['\\(', '\\)']],
+          displayMath: [['$$', '$$'], ['\\[', '\\]']],
+          processEscapes: true
+        },
+        options: {
+          enableMenu: false
+        }
+      };
+    </script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <style>
         body { font-family: 'Inter', sans-serif; margin: 0; padding: 0; }
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
@@ -19,6 +30,8 @@
             .no-print { display: none !important; }
             .print-break { page-break-after: always; }
         }
+        /* Fix for MathJax spacing */
+        .mjx-chtml { outline: none !important; }
     </style>
 <script type="importmap">
 {
