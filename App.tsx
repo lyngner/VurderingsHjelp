@@ -67,36 +67,42 @@ const App: React.FC = () => {
 
   const handleTaskFileSelect = async (files: FileList) => {
     for (const file of Array.from(files)) {
-      if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-        const arrayBuffer = await file.arrayBuffer();
-        const result = await mammoth.extractRawText({ arrayBuffer });
-        const textPage: Page = {
-          id: Math.random().toString(36).substring(7),
-          fileName: file.name,
-          imagePreview: '', 
-          base64Data: '',
-          mimeType: 'text/plain',
-          transcription: result.value,
-          status: 'completed'
-        };
-        updateActiveProject({ 
-          taskFiles: [...(activeProject?.taskFiles || []), textPage],
-          taskDescription: (activeProject?.taskDescription || '') + "\n\nInnhold fra DOCX:\n" + result.value
-        });
-      } else if (file.type.startsWith('image/') || file.type === 'application/pdf') {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const page: Page = {
+      try {
+        if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+          const arrayBuffer = await file.arrayBuffer();
+          // Mammoth has limitations with math/equations. We try to get text but warn the user.
+          const result = await mammoth.extractRawText({ arrayBuffer });
+          const textPage: Page = {
             id: Math.random().toString(36).substring(7),
             fileName: file.name,
-            imagePreview: file.type === 'application/pdf' ? '' : e.target?.result as string,
-            base64Data: (e.target?.result as string).split(',')[1],
-            mimeType: file.type,
+            imagePreview: '', 
+            base64Data: '',
+            mimeType: 'text/plain',
+            transcription: result.value,
             status: 'completed'
           };
-          updateActiveProject({ taskFiles: [...(activeProject?.taskFiles || []), page] });
-        };
-        reader.readAsDataURL(file);
+          updateActiveProject({ 
+            taskFiles: [...(activeProject?.taskFiles || []), textPage],
+            taskDescription: (activeProject?.taskDescription || '') + "\n\nInnhold fra " + file.name + ":\n" + result.value
+          });
+        } else if (file.type.startsWith('image/') || file.type === 'application/pdf') {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            const page: Page = {
+              id: Math.random().toString(36).substring(7),
+              fileName: file.name,
+              imagePreview: file.type === 'application/pdf' ? '' : e.target?.result as string,
+              base64Data: (e.target?.result as string).split(',')[1],
+              mimeType: file.type,
+              status: 'completed'
+            };
+            updateActiveProject({ taskFiles: [...(activeProject?.taskFiles || []), page] });
+          };
+          reader.readAsDataURL(file);
+        }
+      } catch (err) {
+        console.error("Feil ved lesing av fil:", err);
+        alert("Kunne ikke lese " + file.name);
       }
     }
   };
@@ -107,67 +113,72 @@ const App: React.FC = () => {
     setProgress({ current: 0, total: files.length, statusText: 'Laster inn...' });
     setCurrentStep('review');
     
-    const rawPages: Page[] = [];
-    await Promise.all(Array.from(files).map(file => {
-      return new Promise<void>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          rawPages.push({
-            id: Math.random().toString(36).substring(7),
-            fileName: file.name,
-            imagePreview: e.target?.result as string,
-            base64Data: (e.target?.result as string).split(',')[1],
-            mimeType: file.type,
-            status: 'pending'
-          });
-          resolve();
-        };
-        reader.readAsDataURL(file);
-      });
-    }));
-
-    const total = rawPages.length;
-    setProgress({ current: 0, total, statusText: 'Analyserer kandidater...' });
-
-    let currentCandidates = [...activeProject.candidates];
-
-    for (let i = 0; i < rawPages.length; i++) {
-      const page = rawPages[i];
-      setProgress({ current: i + 1, total, statusText: `Leser ${page.fileName}...` });
-
-      try {
-        if (i > 0) await new Promise(r => setTimeout(r, 4500));
-        const results = await transcribeAndAnalyzeImage(page);
-        
-        results.forEach(res => {
-          const cId = res.candidateId || "Ukjent";
-          let candidate = currentCandidates.find(c => c.id === cId);
-          
-          const newPage: Page = {
-            ...page,
-            id: Math.random().toString(36).substring(7),
-            candidateId: cId,
-            pageNumber: res.pageNumber,
-            transcription: res.text,
-            status: 'completed'
+    try {
+      const rawPages: Page[] = [];
+      await Promise.all(Array.from(files).map(file => {
+        return new Promise<void>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            rawPages.push({
+              id: Math.random().toString(36).substring(7),
+              fileName: file.name,
+              imagePreview: e.target?.result as string,
+              base64Data: (e.target?.result as string).split(',')[1],
+              mimeType: file.type,
+              status: 'pending'
+            });
+            resolve();
           };
-
-          if (!candidate) {
-            currentCandidates.push({ id: cId, name: `Kandidat ${cId}`, status: 'processing', pages: [newPage] });
-          } else {
-            candidate.pages = [...candidate.pages, newPage].sort((a, b) => (a.pageNumber || 0) - (b.pageNumber || 0));
-          }
+          reader.readAsDataURL(file);
         });
+      }));
 
-        updateActiveProject({ candidates: [...currentCandidates] });
-        if (i === 0 && currentCandidates.length > 0) setSelectedCandidateId(currentCandidates[0].id);
+      const total = rawPages.length;
+      setProgress({ current: 0, total, statusText: 'Analyserer kandidater...' });
 
-      } catch (e) { console.error(e); }
+      let currentCandidates = [...activeProject.candidates];
+
+      for (let i = 0; i < rawPages.length; i++) {
+        const page = rawPages[i];
+        setProgress({ current: i + 1, total, statusText: `Leser ${page.fileName}...` });
+
+        try {
+          if (i > 0) await new Promise(r => setTimeout(r, 4500));
+          const results = await transcribeAndAnalyzeImage(page);
+          
+          results.forEach(res => {
+            const cId = res.candidateId || "Ukjent";
+            let candidate = currentCandidates.find(c => c.id === cId);
+            
+            const newPage: Page = {
+              ...page,
+              id: Math.random().toString(36).substring(7),
+              candidateId: cId,
+              pageNumber: res.pageNumber,
+              transcription: res.text,
+              status: 'completed'
+            };
+
+            if (!candidate) {
+              currentCandidates.push({ id: cId, name: `Kandidat ${cId}`, status: 'processing', pages: [newPage] });
+            } else {
+              candidate.pages = [...candidate.pages, newPage].sort((a, b) => (a.pageNumber || 0) - (b.pageNumber || 0));
+            }
+          });
+
+          updateActiveProject({ candidates: [...currentCandidates] });
+          if (i === 0 && currentCandidates.length > 0) setSelectedCandidateId(currentCandidates[0].id);
+
+        } catch (e) { 
+          console.error("Feil i bildeanalyse:", e); 
+        }
+      }
+
+      updateActiveProject({ candidates: currentCandidates.map(c => ({ ...c, status: 'completed' })), status: 'reviewing' });
+    } finally {
+      setIsProcessing(false);
+      setProgress({ current: 0, total: 0, statusText: '' });
     }
-
-    updateActiveProject({ candidates: currentCandidates.map(c => ({ ...c, status: 'completed' })), status: 'reviewing' });
-    setIsProcessing(false);
-    setProgress({ current: 0, total: 0, statusText: '' });
   };
 
   const selectedCandidate = activeProject?.candidates.find(c => c.id === selectedCandidateId);
@@ -221,7 +232,7 @@ const App: React.FC = () => {
             ))}
             {projects.length === 0 && (
               <div className="col-span-full py-20 text-center bg-white border border-dashed border-slate-200 rounded-2xl">
-                <p className="text-slate-400 font-bold text-sm">Ingen prosjekter ennå. Start din første vurdering over.</p>
+                <p className="text-slate-400 font-bold text-sm">Ingen vurderingsprosjekter ennå. Start din første vurdering over.</p>
               </div>
             )}
           </div>
@@ -250,7 +261,6 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen flex flex-col animate-in fade-in duration-500 bg-[#F8FAFC]">
-      {/* Horizontal Top Navigation */}
       <header className="no-print bg-white border-b border-slate-200 px-6 py-3 sticky top-0 z-50 flex items-center justify-between">
         <div className="flex items-center gap-6">
           <button 
@@ -327,6 +337,9 @@ const App: React.FC = () => {
                           </div>
                         ) : <p className="font-black text-slate-300 text-xs">Last opp oppgave</p>}
                      </div>
+                     <p className="mt-4 text-[10px] text-amber-600 font-bold bg-amber-50 p-2 rounded-lg">
+                       ⚠️ Tips: Hvis prøven inneholder mye matematikk eller formler, bør du bruke <b>PDF eller Bilde</b>. Word-filer kan miste matematiske tegn ved transkripsjon.
+                     </p>
                   </div>
 
                   <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col">
@@ -412,18 +425,22 @@ const App: React.FC = () => {
                    
                    <button 
                     onClick={async () => {
-                      setProgress({ current: 0, total: 1, statusText: 'Lager rettemanual...' });
                       setIsProcessing(true);
+                      setProgress({ current: 0, total: 1, statusText: 'Lager rettemanual...' });
                       try {
                         const samples = activeProject?.candidates.slice(0, 2).map(c => c.pages.map(p => p.transcription).join(" ")) || [];
                         const res = await generateRubricFromTaskAndSamples(activeProject?.taskFiles || [], activeProject?.taskDescription || '', samples);
                         updateActiveProject({ rubric: res });
-                      } catch (e) { alert("Analyse feilet."); }
-                      setIsProcessing(false);
-                      setProgress({ current: 0, total: 0, statusText: '' });
+                      } catch (e) { 
+                        console.error(e);
+                        alert("Analyse feilet. Prøv igjen eller sjekk internett."); 
+                      } finally {
+                        setIsProcessing(false);
+                        setProgress({ current: 0, total: 0, statusText: '' });
+                      }
                     }}
                     disabled={isProcessing}
-                    className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-md hover:bg-indigo-700 transition-all text-sm mb-8"
+                    className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-md hover:bg-indigo-700 transition-all text-sm mb-8 disabled:opacity-50"
                    >
                      {isProcessing ? 'Analyserer...' : 'Generer vurderingsplan ✨'}
                    </button>
@@ -446,22 +463,27 @@ const App: React.FC = () => {
                          <button 
                           onClick={async () => {
                             setIsProcessing(true);
-                            const updated = [...(activeProject?.candidates || [])];
-                            const taskContext = (activeProject?.taskDescription || '') + "\n" + (activeProject?.taskFiles.map(f => f.transcription || '').join("\n"));
-                            for (let i = 0; i < updated.length; i++) {
-                              try {
+                            try {
+                              const updated = [...(activeProject?.candidates || [])];
+                              const taskContext = (activeProject?.taskDescription || '') + "\n" + (activeProject?.taskFiles.map(f => f.transcription || '').join("\n"));
+                              for (let i = 0; i < updated.length; i++) {
                                 setProgress({ current: i + 1, total: updated.length, statusText: `Vurderer Kandidat ${updated[i].id}...` });
-                                updated[i].evaluation = await evaluateCandidate(updated[i], activeProject.rubric!, taskContext);
-                                updateActiveProject({ candidates: [...updated] });
-                              } catch (e) {}
+                                try {
+                                  updated[i].evaluation = await evaluateCandidate(updated[i], activeProject.rubric!, taskContext);
+                                  updateActiveProject({ candidates: [...updated] });
+                                } catch (e) {
+                                  console.error("Vurdering feilet for kandidat " + updated[i].id, e);
+                                }
+                              }
+                              setCurrentStep('results');
+                              updateActiveProject({ status: 'completed' });
+                            } finally {
+                              setIsProcessing(false);
+                              setProgress({ current: 0, total: 0, statusText: '' });
                             }
-                            setCurrentStep('results');
-                            setIsProcessing(false);
-                            updateActiveProject({ status: 'completed' });
-                            setProgress({ current: 0, total: 0, statusText: '' });
                           } }
                           disabled={isProcessing}
-                          className="w-full py-4 bg-slate-900 text-white rounded-xl font-bold text-base shadow-xl hover:bg-black transition-all"
+                          className="w-full py-4 bg-slate-900 text-white rounded-xl font-bold text-base shadow-xl hover:bg-black transition-all disabled:opacity-50"
                          >
                            Start vurdering av alle 🏆
                          </button>
@@ -504,13 +526,12 @@ const App: React.FC = () => {
           )}
         </div>
 
-        {/* Improved Progress HUD */}
         {isProcessing && (
           <div className="fixed bottom-6 right-6 bg-[#0B0E14] text-white px-6 py-4 rounded-2xl shadow-2xl border border-white/10 z-[100] flex items-center gap-6 animate-in slide-in-from-right-6">
              <div className="flex flex-col">
                 <div className="flex items-center gap-1.5 mb-1">
                    <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-ping"></div>
-                   <span className="text-[8px] font-black uppercase tracking-[0.2em] text-indigo-400">Systemstatus</span>
+                   <span className="text-[8px] font-black uppercase tracking-[0.3em] text-indigo-400">Systemstatus</span>
                 </div>
                 <span className="text-xs font-black whitespace-nowrap max-w-[150px] truncate">{progress.statusText}</span>
              </div>

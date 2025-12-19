@@ -22,28 +22,28 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<Transcribed
           },
         },
         {
-          text: `Analyser dette bildet av en elevbesvarelse. 
+          text: `Analyser dette bildet av en kandidatbesvarelse. 
           
           VIGTIG: 
-          1. Sjekk om bildet er et oppslag med to sider (f.eks. A3 skannet som to A4-sider side-om-side). 
-          2. Finn "Kandidatnummer" og "Sidenummer" som ofte står i bokser øverst på arket.
-          3. Transkriber teksten nøyaktig.
+          1. Sjekk om bildet er et oppslag med to sider. 
+          2. Finn "Kandidatnummer" og "Sidenummer".
+          3. Transkriber teksten nøyaktig, inkludert matematiske formler og symboler.
           
-          Returner resultatet som en liste med objekter. Hvis det er to sider i bildet, returner to objekter (venstre side først, så høyre). Hvis det bare er én side, returner ett objekt.`
+          Svar i JSON.`
         }
       ],
     },
     config: {
-      systemInstruction: "Du er en ekspert på å tolke håndskrevne eksamensbesvarelser. Du er nøyaktig med kandidatnummer og sidenummer for å sikre riktig sortering. Svar ALLTID i JSON-format.",
+      systemInstruction: "Du er en ekspert på å tolke håndskrevne eksamensbesvarelser. Du er nøyaktig med kandidatnummer og sidenummer. Svar ALLTID i JSON-format.",
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.ARRAY,
         items: {
           type: Type.OBJECT,
           properties: {
-            candidateId: { type: Type.STRING, description: "Kandidatnummer funnet på siden" },
-            pageNumber: { type: Type.NUMBER, description: "Sidenummer funnet på siden" },
-            text: { type: Type.STRING, description: "Den fullstendige transkriberte teksten fra denne siden" }
+            candidateId: { type: Type.STRING },
+            pageNumber: { type: Type.NUMBER },
+            text: { type: Type.STRING }
           },
           required: ["candidateId", "pageNumber", "text"]
         }
@@ -62,18 +62,25 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<Transcribed
 export const generateRubricFromTaskAndSamples = async (taskFiles: Page[], taskDescription: string, samples: string[]): Promise<Rubric> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
-  const parts: any[] = taskFiles.map(f => ({
-    inlineData: {
-      mimeType: f.mimeType,
-      data: f.base64Data
-    }
-  }));
+  const parts: any[] = taskFiles
+    .filter(f => f.base64Data) // Only include images/PDFs with actual data
+    .map(f => ({
+      inlineData: {
+        mimeType: f.mimeType,
+        data: f.base64Data
+      }
+    }));
+
+  const textContext = taskFiles.filter(f => !f.base64Data).map(f => f.transcription).join("\n\n");
 
   parts.push({
-    text: `Her er selve prøven/oppgaveteksten. 
+    text: `Her er selve prøven/oppgaveteksten (bilder/PDF og tekst). 
+    Tekstlig innhold fra filer: ${textContext}
     Lærerens tilleggsbeskrivelse: "${taskDescription}"
     
-    Eksempler på elevsvar for å kalibrere nivået:
+    Merk: Hvis teksten fra Word-filer virker mangelfull (f.eks. mangler ligninger), bruk konteksten fra bildene eller logisk slutning for å forstå hva oppgaven spør om.
+    
+    Eksempler på kandidatsvar for nivå-kalibrering:
     ${samples.join("\n---\n")}
 
     Lag en rettferdig og profesjonell vurderingsrubrikk basert på dette.`
@@ -83,7 +90,7 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[], taskDe
     model: 'gemini-3-pro-preview',
     contents: { parts },
     config: {
-      systemInstruction: "Lag en detaljert vurderingsrubrikk i JSON-format. Vær spesifikk på hva som kreves for full poengpott på hvert kriterium.",
+      systemInstruction: "Lag en detaljert vurderingsrubrikk i JSON-format. Vær spesifikk på poengkrav.",
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
@@ -111,16 +118,15 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[], taskDe
 
 export const evaluateCandidate = async (candidate: Candidate, rubric: Rubric, taskContext: string): Promise<Candidate['evaluation']> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const sortedPages = [...candidate.pages].sort((a, b) => (a.pageNumber || 0) - (b.pageNumber || 0));
-  const fullText = sortedPages.map(p => p.transcription).join("\n\n--- NESTE SIDE ---\n\n");
+  const fullText = candidate.pages.map(p => p.transcription).join("\n\n--- SIDE ---\n\n");
   
-  const prompt = `KONTEKST (Prøven): ${taskContext}\n\nELEV: ${candidate.id}\nTEKST:\n${fullText}\n\nRUBRIKK:\n${JSON.stringify(rubric)}`;
+  const prompt = `KONTEKST (Oppgaven): ${taskContext}\n\nKANDIDAT: ${candidate.id}\nTEKST:\n${fullText}\n\nRUBRIKK:\n${JSON.stringify(rubric)}`;
 
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
     contents: prompt,
     config: {
-      systemInstruction: "Vurder eleven basert på både oppgaveteksten og rubrikken. Gi konstruktiv tilbakemelding. Svar i JSON.",
+      systemInstruction: "Vurder kandidaten nøyaktig basert på oppgave og rubrikk. Vær observant på matematiske utregninger. Svar i JSON.",
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
