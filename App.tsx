@@ -1,28 +1,133 @@
 
-import React, { useState, useEffect, useRef } from 'react';
-import { Page, Candidate, Rubric, Project } from './types';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Page, Candidate, Rubric, Project, RubricCriterion } from './types';
 import { transcribeAndAnalyzeImage, generateRubricFromTaskAndSamples, evaluateCandidate } from './services/geminiService';
 import { saveProject, getAllProjects, deleteProject } from './services/storageService';
-// @ts-ignore
-import mammoth from 'mammoth';
+
+const steps = [
+  { id: 'setup', label: 'Oppsett', sub: 'Last opp filer', icon: '📝' },
+  { id: 'review', label: 'Gjennomgang', sub: 'Verifiser data', icon: '🔍' },
+  { id: 'rubric', label: 'Rettemanual', sub: 'AI Analyse', icon: '📋' },
+  { id: 'results', label: 'Resultater', sub: 'Vurdering klar', icon: '🏆' },
+];
+
+// Helper to split A3 scans into two A4 pages
+const splitA3IfNecessary = async (file: File): Promise<Page[]> => {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const aspect = img.width / img.height;
+        if (aspect > 1.2) {
+          const pages: Page[] = [];
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return resolve([]);
+
+          canvas.width = img.width / 2;
+          canvas.height = img.height;
+          ctx.drawImage(img, 0, 0, img.width / 2, img.height, 0, 0, img.width / 2, img.height);
+          const leftBase64 = canvas.toDataURL('image/jpeg', 0.85);
+          pages.push({
+            id: Math.random().toString(36).substring(7),
+            fileName: `${file.name} (Del 1)`,
+            imagePreview: leftBase64,
+            base64Data: leftBase64.split(',')[1],
+            mimeType: 'image/jpeg',
+            status: 'completed'
+          });
+
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, img.width / 2, 0, img.width / 2, img.height, 0, 0, img.width / 2, img.height);
+          const rightBase64 = canvas.toDataURL('image/jpeg', 0.85);
+          pages.push({
+            id: Math.random().toString(36).substring(7),
+            fileName: `${file.name} (Del 2)`,
+            imagePreview: rightBase64,
+            base64Data: rightBase64.split(',')[1],
+            mimeType: 'image/jpeg',
+            status: 'completed'
+          });
+
+          resolve(pages);
+        } else {
+          const base64 = e.target?.result as string;
+          resolve([{
+            id: Math.random().toString(36).substring(7),
+            fileName: file.name,
+            imagePreview: base64,
+            base64Data: base64.split(',')[1],
+            mimeType: file.type,
+            status: 'completed'
+          }]);
+        }
+      };
+      img.src = e.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
+};
+
+// KaTeX Component
+const LatexRenderer: React.FC<{ content: string }> = ({ content }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  
+  useEffect(() => {
+    if (containerRef.current && (window as any).renderMathInElement) {
+      try {
+        (window as any).renderMathInElement(containerRef.current, {
+          delimiters: [
+            { left: '$$', right: '$$', display: true },
+            { left: '$', right: '$', display: false },
+          ],
+          throwOnError: false,
+        });
+      } catch (err) {
+        console.warn("KaTeX rendering error:", err);
+      }
+    }
+  }, [content]);
+
+  return <div ref={containerRef} className="whitespace-pre-wrap leading-relaxed">{content}</div>;
+};
 
 const App: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [view, setView] = useState<'dashboard' | 'editor'>('dashboard');
   const [currentStep, setCurrentStep] = useState<'setup' | 'review' | 'rubric' | 'results'>('setup');
+  const [resultView, setResultView] = useState<'individual' | 'table' | 'group'>('individual');
   
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [progress, setProgress] = useState({ current: 0, total: 0, statusText: '' });
+  const [processStatus, setProcessStatus] = useState<{
+    type: 'candidates' | 'rubric' | 'evaluation' | 'upload' | null;
+    current: number;
+    total: number;
+    statusText: string;
+  }>({ type: null, current: 0, total: 0, statusText: '' });
+
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const taskInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    loadAllProjects();
-  }, []);
+  useEffect(() => { loadAllProjects(); }, []);
+
+  const sortedCandidates = useMemo(() => {
+    if (!activeProject) return [];
+    return [...activeProject.candidates].sort((a, b) => {
+      const aId = parseInt(a.id.replace(/\D/g, '')) || 0;
+      const bId = parseInt(b.id.replace(/\D/g, '')) || 0;
+      return aId - bId || a.id.localeCompare(b.id);
+    });
+  }, [activeProject?.candidates]);
+
+  // Added currentCandidate definition to fix "Cannot find name 'currentCandidate'" errors
+  const currentCandidate = useMemo(() => {
+    if (!activeProject || !selectedCandidateId) return null;
+    return activeProject.candidates.find(c => c.id === selectedCandidateId) || null;
+  }, [activeProject, selectedCandidateId]);
 
   const loadAllProjects = async () => {
     const all = await getAllProjects();
@@ -33,13 +138,8 @@ const App: React.FC = () => {
     const newProj: Project = {
       id: Math.random().toString(36).substring(7),
       name: `Ny vurdering ${new Date().toLocaleDateString('no-NO')}`,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      taskDescription: '',
-      taskFiles: [],
-      candidates: [],
-      rubric: null,
-      status: 'draft'
+      createdAt: Date.now(), updatedAt: Date.now(),
+      taskDescription: '', taskFiles: [], candidates: [], rubric: null, status: 'draft'
     };
     setActiveProject(newProj);
     setCurrentStep('setup');
@@ -48,503 +148,496 @@ const App: React.FC = () => {
 
   const handleProjectSelect = (project: Project) => {
     setActiveProject(project);
-    if (project.candidates.length > 0) {
-      setCurrentStep('review');
-      setSelectedCandidateId(project.candidates[0].id);
-    } else {
-      setCurrentStep('setup');
-    }
+    setCurrentStep(project.candidates.length > 0 ? 'review' : 'setup');
+    if (project.candidates.length > 0) setSelectedCandidateId(project.candidates[0].id);
     setView('editor');
   };
 
   const updateActiveProject = async (updates: Partial<Project>) => {
+    setActiveProject(prev => {
+      if (!prev) return null;
+      const updated = { ...prev, ...updates, updatedAt: Date.now() };
+      saveProject(updated).catch(console.error);
+      return updated;
+    });
+  };
+
+  const handleGenerateRubric = async (allCandidates: boolean = false) => {
     if (!activeProject) return;
-    const updated = { ...activeProject, ...updates, updatedAt: Date.now() };
-    setActiveProject(updated);
-    await saveProject(updated);
-    loadAllProjects();
+    setProcessStatus({ type: 'rubric', current: 0, total: 100, statusText: 'Analyserer oppgaver og genererer manual...' });
+    try {
+      const sampleCount = allCandidates ? 10 : 2;
+      const samples = activeProject.candidates
+        .slice(0, sampleCount)
+        .map(c => c.pages.map(p => p.transcription).join(" "));
+      const res = await generateRubricFromTaskAndSamples(activeProject.taskFiles, activeProject.taskDescription, samples);
+      setActiveProject(prev => {
+        if (!prev) return null;
+        const updated = { ...prev, rubric: res, updatedAt: Date.now() };
+        saveProject(updated);
+        return updated;
+      });
+    } finally { setProcessStatus({ type: null, current: 0, total: 0, statusText: '' }); }
   };
 
   const handleTaskFileSelect = async (files: FileList) => {
-    for (const file of Array.from(files)) {
-      try {
-        if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-          const arrayBuffer = await file.arrayBuffer();
-          // Mammoth has limitations with math/equations. We try to get text but warn the user.
-          const result = await mammoth.extractRawText({ arrayBuffer });
-          const textPage: Page = {
-            id: Math.random().toString(36).substring(7),
-            fileName: file.name,
-            imagePreview: '', 
-            base64Data: '',
-            mimeType: 'text/plain',
-            transcription: result.value,
-            status: 'completed'
-          };
-          updateActiveProject({ 
-            taskFiles: [...(activeProject?.taskFiles || []), textPage],
-            taskDescription: (activeProject?.taskDescription || '') + "\n\nInnhold fra " + file.name + ":\n" + result.value
-          });
-        } else if (file.type.startsWith('image/') || file.type === 'application/pdf') {
-          const reader = new FileReader();
-          reader.onload = (e) => {
-            const page: Page = {
-              id: Math.random().toString(36).substring(7),
-              fileName: file.name,
-              imagePreview: file.type === 'application/pdf' ? '' : e.target?.result as string,
-              base64Data: (e.target?.result as string).split(',')[1],
-              mimeType: file.type,
-              status: 'completed'
-            };
-            updateActiveProject({ taskFiles: [...(activeProject?.taskFiles || []), page] });
-          };
-          reader.readAsDataURL(file);
-        }
-      } catch (err) {
-        console.error("Feil ved lesing av fil:", err);
-        alert("Kunne ikke lese " + file.name);
-      }
+    if (!activeProject) return;
+    setProcessStatus({ type: 'upload', current: 0, total: files.length, statusText: 'Behandler oppgavefiler...' });
+    
+    const allLoadedPages: Page[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      setProcessStatus(p => ({ ...p, current: i + 1, statusText: `Behandler ${file.name}...` }));
+      const splitPages = await splitA3IfNecessary(file);
+      allLoadedPages.push(...splitPages);
     }
+    
+    const updatedTaskFiles = [...activeProject.taskFiles, ...allLoadedPages];
+    await updateActiveProject({ taskFiles: updatedTaskFiles });
+    setProcessStatus({ type: null, current: 0, total: 0, statusText: '' });
+    handleGenerateRubric(false);
   };
 
-  const startAnalysis = async (files: FileList) => {
+  const handleCandidateFileSelect = async (files: FileList) => {
     if (!activeProject) return;
-    setIsProcessing(true);
-    setProgress({ current: 0, total: files.length, statusText: 'Laster inn...' });
-    setCurrentStep('review');
+    setProcessStatus({ type: 'upload', current: 0, total: files.length, statusText: 'Behandler besvarelser...' });
     
-    try {
-      const rawPages: Page[] = [];
-      await Promise.all(Array.from(files).map(file => {
-        return new Promise<void>((resolve) => {
-          const reader = new FileReader();
-          reader.onload = (e) => {
-            rawPages.push({
-              id: Math.random().toString(36).substring(7),
-              fileName: file.name,
-              imagePreview: e.target?.result as string,
-              base64Data: (e.target?.result as string).split(',')[1],
-              mimeType: file.type,
-              status: 'pending'
-            });
-            resolve();
-          };
-          reader.readAsDataURL(file);
-        });
-      }));
+    const newPages: Page[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      setProcessStatus(p => ({ ...p, current: i + 1, statusText: `Behandler ${file.name}...` }));
+      const splitPages = await splitA3IfNecessary(file);
+      newPages.push(...splitPages);
+    }
+    await processPages(newPages);
+  };
 
-      const total = rawPages.length;
-      setProgress({ current: 0, total, statusText: 'Analyserer kandidater...' });
-
-      let currentCandidates = [...activeProject.candidates];
-
-      for (let i = 0; i < rawPages.length; i++) {
-        const page = rawPages[i];
-        setProgress({ current: i + 1, total, statusText: `Leser ${page.fileName}...` });
-
-        try {
-          if (i > 0) await new Promise(r => setTimeout(r, 4500));
-          const results = await transcribeAndAnalyzeImage(page);
-          
+  const processPages = async (pages: Page[]) => {
+    setProcessStatus({ type: 'candidates', current: 0, total: pages.length, statusText: 'Analyserer håndskrift...' });
+    for (let i = 0; i < pages.length; i++) {
+      const page = pages[i];
+      setProcessStatus(p => ({ ...p, current: i + 1, statusText: `Leser ${page.fileName}...` }));
+      if (i > 0) await new Promise(r => setTimeout(r, 4000));
+      try {
+        const results = await transcribeAndAnalyzeImage(page);
+        setActiveProject(prev => {
+          if (!prev) return null;
+          let currentCandidates = [...prev.candidates];
           results.forEach(res => {
             const cId = res.candidateId || "Ukjent";
             let candidate = currentCandidates.find(c => c.id === cId);
-            
             const newPage: Page = {
-              ...page,
-              id: Math.random().toString(36).substring(7),
-              candidateId: cId,
-              pageNumber: res.pageNumber,
-              transcription: res.text,
-              status: 'completed'
+              ...page, id: Math.random().toString(36).substring(7), candidateId: cId,
+              pageNumber: res.pageNumber, transcription: res.text, identifiedTasks: res.tasks,
+              drawings: res.drawings, illegibleSegments: res.illegible, status: 'completed'
             };
-
             if (!candidate) {
-              currentCandidates.push({ id: cId, name: `Kandidat ${cId}`, status: 'processing', pages: [newPage] });
+              candidate = { id: cId, name: `Kand. ${cId}`, status: 'completed', pages: [newPage] };
+              currentCandidates.push(candidate);
             } else {
               candidate.pages = [...candidate.pages, newPage].sort((a, b) => (a.pageNumber || 0) - (b.pageNumber || 0));
             }
           });
-
-          updateActiveProject({ candidates: [...currentCandidates] });
-          if (i === 0 && currentCandidates.length > 0) setSelectedCandidateId(currentCandidates[0].id);
-
-        } catch (e) { 
-          console.error("Feil i bildeanalyse:", e); 
-        }
-      }
-
-      updateActiveProject({ candidates: currentCandidates.map(c => ({ ...c, status: 'completed' })), status: 'reviewing' });
-    } finally {
-      setIsProcessing(false);
-      setProgress({ current: 0, total: 0, statusText: '' });
+          const updated = { ...prev, candidates: currentCandidates, status: 'reviewing' as any };
+          saveProject(updated);
+          return updated;
+        });
+      } catch (e) { console.error(e); }
     }
+    setCurrentStep('review');
+    setProcessStatus({ type: null, current: 0, total: 0, statusText: '' });
   };
 
-  const selectedCandidate = activeProject?.candidates.find(c => c.id === selectedCandidateId);
-  const progressPercentage = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
+  const performEvaluation = async () => {
+    if (!activeProject || !activeProject.rubric) return;
+    const candidatesToEval = activeProject.candidates.filter(c => c.status !== 'evaluated');
+    if (candidatesToEval.length === 0) return;
+    setProcessStatus({ type: 'evaluation', current: 0, total: candidatesToEval.length, statusText: 'Vurderer besvarelser...' });
+    try {
+      const taskContext = (activeProject.taskDescription || '') + "\n" + (activeProject.taskFiles.map(f => f.transcription || '').join("\n"));
+      for (let i = 0; i < candidatesToEval.length; i++) {
+        setProcessStatus(p => ({ ...p, current: i + 1, statusText: `Vurderer ${candidatesToEval[i].id}...` }));
+        const evalResult = await evaluateCandidate(candidatesToEval[i], activeProject.rubric!, taskContext);
+        setActiveProject(prev => {
+          if (!prev) return null;
+          const updatedCandidates = prev.candidates.map(c => c.id === candidatesToEval[i].id ? { ...c, evaluation: evalResult, status: 'evaluated' as any } : c);
+          const updated = { ...prev, candidates: updatedCandidates, updatedAt: Date.now() };
+          saveProject(updated);
+          return updated;
+        });
+      }
+      updateActiveProject({ status: 'completed' });
+    } finally { setProcessStatus({ type: null, current: 0, total: 0, statusText: '' }); }
+  };
+
+  const updateRubricCriterion = (index: number, updates: Partial<RubricCriterion>) => {
+    if (!activeProject || !activeProject.rubric) return;
+    const newCriteria = [...activeProject.rubric.criteria];
+    newCriteria[index] = { ...newCriteria[index], ...updates };
+    updateActiveProject({
+      rubric: { ...activeProject.rubric, criteria: newCriteria }
+    });
+  };
 
   if (view === 'dashboard') {
     return (
-      <div className="min-h-screen bg-[#F8FAFC] p-6 lg:p-12 animate-in fade-in duration-500">
+      <div className="min-h-screen p-8 bg-[#F1F5F9]">
         <div className="max-w-6xl mx-auto">
-          <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-black shadow-lg shadow-indigo-100 rotate-2 text-lg">E</div>
-                <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">Mine vurderingsprosjekter</h1>
-              </div>
-              <p className="text-slate-500 text-sm font-medium">Digital assistent for retting og vurdering</p>
-            </div>
-            <button 
-              onClick={createNewProject}
-              className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95 text-sm"
-            >
-              <span>+</span> Nytt vurderingsprosjekt
-            </button>
+          <header className="flex justify-between items-center mb-10">
+            <h1 className="text-3xl font-black text-slate-900 tracking-tight">Vurderingsportal</h1>
+            <button onClick={createNewProject} className="bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold shadow-xl shadow-indigo-100 transition-all hover:bg-indigo-700">Ny vurdering</button>
           </header>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
             {projects.map(p => (
-              <div 
-                key={p.id} 
-                className="bg-white rounded-xl p-5 border border-slate-200 shadow-sm hover:shadow-md transition-all group cursor-pointer relative"
-                onClick={() => handleProjectSelect(p)}
-              >
-                <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                   <button 
-                      onClick={(e) => { e.stopPropagation(); if(confirm("Slette vurderingsprosjekt?")) deleteProject(p.id).then(loadAllProjects); }}
-                      className="w-7 h-7 bg-red-50 text-red-500 rounded-full flex items-center justify-center hover:bg-red-500 hover:text-white transition-all text-xs"
-                   >✕</button>
-                </div>
-                <div className="mb-4">
-                   <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[7px] font-black uppercase tracking-widest mb-2 ${p.status === 'completed' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
-                      {p.status === 'completed' ? 'Ferdig' : 'Aktiv'}
-                   </div>
-                   <h3 className="text-base font-black text-slate-800 leading-tight mb-0.5 truncate">{p.name}</h3>
-                   <p className="text-slate-400 text-[8px] font-bold uppercase tracking-widest">{new Date(p.updatedAt).toLocaleDateString()}</p>
-                </div>
-                <div className="flex items-center justify-between pt-3 border-t border-slate-50">
-                   <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{p.candidates.length} kandidater</span>
-                   <span className="text-indigo-600 font-bold text-[10px]">Åpne →</span>
-                </div>
+              <div key={p.id} onClick={() => handleProjectSelect(p)} className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm cursor-pointer hover:shadow-lg transition-all group relative">
+                <button onClick={(e) => { e.stopPropagation(); if(confirm("Slette prosjekt?")) deleteProject(p.id).then(loadAllProjects); }} className="absolute top-4 right-4 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
+                <div className={`w-10 h-1 rounded-full mb-4 ${p.status === 'completed' ? 'bg-emerald-500' : 'bg-blue-500'}`} />
+                <h3 className="font-black text-slate-800 text-lg mb-1">{p.name}</h3>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{p.candidates.length} kandidater</p>
               </div>
             ))}
-            {projects.length === 0 && (
-              <div className="col-span-full py-20 text-center bg-white border border-dashed border-slate-200 rounded-2xl">
-                <p className="text-slate-400 font-bold text-sm">Ingen vurderingsprosjekter ennå. Start din første vurdering over.</p>
-              </div>
-            )}
-          </div>
-
-          <div className="bg-slate-900 rounded-2xl p-6 lg:p-10 text-white shadow-xl">
-             <div className="max-w-2xl">
-                <h2 className="text-xl font-black mb-3 flex items-center gap-2">🔒 Personvern & Sikkerhet</h2>
-                <p className="text-slate-400 text-sm font-medium leading-relaxed">
-                   Data lagres <strong>kun lokalt</strong> i din nettleser (IndexedDB). 
-                   Ingen bilder eller transkripsjoner lagres sentralt. 
-                   AI-analyse utføres kryptert via Google Gemini.
-                </p>
-             </div>
           </div>
         </div>
       </div>
     );
   }
 
-  const steps = [
-    { id: 'setup', label: '1. Oppsett', sub: 'Prøve & Ark', icon: '📎' },
-    { id: 'review', label: '2. Kontroll', sub: 'Verifiser lesing', icon: '🔍' },
-    { id: 'rubric', label: '3. Rettemanual', sub: 'Kriterier', icon: '🎯' },
-    { id: 'results', label: '4. Resultater', sub: 'Vurdering', icon: '🏆' }
-  ];
-
   return (
-    <div className="min-h-screen flex flex-col animate-in fade-in duration-500 bg-[#F8FAFC]">
-      <header className="no-print bg-white border-b border-slate-200 px-6 py-3 sticky top-0 z-50 flex items-center justify-between">
-        <div className="flex items-center gap-6">
-          <button 
-            onClick={() => { updateActiveProject({}); setView('dashboard'); }}
-            className="flex items-center gap-2 text-slate-400 hover:text-indigo-600 transition-all font-black uppercase text-[10px] tracking-widest border-r border-slate-100 pr-6 h-10"
-          >
-            <span>←</span> Oversikt
-          </button>
-          <div className="flex flex-col">
-            <p className="text-[8px] font-black text-slate-300 uppercase tracking-widest">Aktiv vurdering:</p>
-            <input 
-              className="bg-transparent font-black text-slate-900 outline-none focus:text-indigo-600 text-sm truncate w-48"
-              value={activeProject?.name}
-              onChange={(e) => updateActiveProject({ name: e.target.value })}
-            />
-          </div>
-        </div>
-
-        <nav className="flex items-center gap-1 md:gap-4 flex-1 justify-center max-w-4xl px-4">
-          {steps.map(step => (
-            <button
-              key={step.id}
-              disabled={step.id !== 'setup' && activeProject?.candidates.length === 0}
-              onClick={() => setCurrentStep(step.id as any)}
-              className={`flex items-center gap-2 px-3 md:px-5 py-2 rounded-xl border transition-all relative overflow-hidden flex-1 max-w-[200px] ${currentStep === step.id ? 'bg-indigo-600 border-indigo-600 text-white shadow-md' : 'bg-slate-50 border-transparent hover:bg-white text-slate-400'}`}
-            >
-              <span className="text-xl hidden md:inline">{step.icon}</span>
-              <div className="text-left">
-                 <p className="font-black text-[9px] md:text-xs leading-none">{step.label}</p>
-                 <p className="text-[7px] md:text-[8px] font-bold uppercase tracking-widest opacity-70 leading-none mt-1 hidden sm:block">{step.sub}</p>
-              </div>
+    <div className="min-h-screen flex flex-col bg-[#F8FAFC]">
+      <header className="no-print bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between sticky top-0 z-50">
+        <button onClick={() => setView('dashboard')} className="font-black text-[10px] text-slate-400 uppercase tracking-widest hover:text-indigo-600 transition-colors">← Oversikt</button>
+        <nav className="flex gap-4">
+          {steps.map(s => (
+            <button key={s.id} onClick={() => setCurrentStep(s.id as any)} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${currentStep === s.id ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>
+              {s.icon} {s.label}
             </button>
           ))}
         </nav>
-
-        <div className="w-32 flex justify-end">
-          {isProcessing && (
-            <div className="flex items-center gap-2 text-indigo-600 animate-pulse">
-               <div className="w-1.5 h-1.5 bg-indigo-600 rounded-full"></div>
-               <span className="text-[9px] font-black uppercase tracking-widest">Arbeider...</span>
-            </div>
-          )}
-        </div>
+        <div className="w-20" />
       </header>
 
-      <main className="flex-1 overflow-y-auto relative flex flex-col">
-        {zoomedImage && (
-          <div className="fixed inset-0 z-[100] bg-slate-900/90 backdrop-blur-md flex items-center justify-center p-4 cursor-zoom-out" onClick={() => setZoomedImage(null)}>
-            <img src={zoomedImage} className="max-w-full max-h-full object-contain rounded-xl shadow-2xl" alt="Zoom" />
+      <main className="flex-1 overflow-y-auto">
+        {currentStep === 'setup' && (
+          <div className="max-w-4xl mx-auto py-12 px-6">
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+               <div className="bg-white p-8 border rounded-3xl shadow-sm border-t-8 border-t-indigo-600">
+                 <h3 className="font-black text-xs uppercase mb-4 text-slate-400">1. Prøven / Fasit</h3>
+                 <button onClick={() => taskInputRef.current?.click()} className="w-full h-40 border-2 border-dashed border-indigo-200 rounded-2xl flex flex-col items-center justify-center text-indigo-400 font-black hover:bg-indigo-50 transition-all">
+                    <span className="text-2xl mb-2">📄</span>
+                    <span>Last opp oppgave/fasit</span>
+                    <span className="text-[10px] mt-2 font-bold opacity-60">Splittes automatisk ved bred scan</span>
+                 </button>
+                 <input ref={taskInputRef} type="file" multiple className="hidden" onChange={e => e.target.files && handleTaskFileSelect(e.target.files)} />
+                 
+                 <div className="mt-8 space-y-3">
+                    <p className="text-[10px] font-black uppercase text-slate-300 tracking-widest">Opplastede filer:</p>
+                    {activeProject?.taskFiles.length === 0 && <p className="text-xs text-slate-300 italic">Ingen filer lastet opp ennå.</p>}
+                    {activeProject?.taskFiles.map(f => (
+                        <div key={f.id} className="text-[11px] font-bold bg-slate-50 p-4 rounded-xl flex justify-between items-center border border-slate-100 animate-in fade-in slide-in-from-top-2">
+                           <span className="truncate pr-4 flex items-center gap-2">
+                             <div className="w-2 h-2 rounded-full bg-indigo-500"></div>
+                             {f.fileName}
+                           </span>
+                           <button onClick={() => updateActiveProject({ taskFiles: activeProject.taskFiles.filter(i => i.id !== f.id) })} className="text-red-300 hover:text-red-500 transition-colors">✕</button>
+                        </div>
+                    ))}
+                 </div>
+               </div>
+               
+               <div className="bg-white p-8 border rounded-3xl shadow-sm border-t-8 border-t-emerald-600">
+                 <h3 className="font-black text-xs uppercase mb-4 text-slate-400">2. Elevbesvarelser</h3>
+                 <button onClick={() => fileInputRef.current?.click()} className="w-full h-40 border-2 border-dashed border-emerald-200 rounded-2xl flex flex-col items-center justify-center text-emerald-400 font-black hover:bg-emerald-50 transition-all">
+                    <span className="text-2xl mb-2">📸</span>
+                    <span>Last opp besvarelser</span>
+                    <span className="text-[10px] mt-2 font-bold opacity-60">JPG bilder</span>
+                 </button>
+                 <input ref={fileInputRef} type="file" multiple className="hidden" onChange={e => e.target.files && handleCandidateFileSelect(e.target.files)} />
+                 
+                 <div className="mt-8 space-y-3 max-h-[400px] overflow-y-auto custom-scrollbar">
+                    <p className="text-[10px] font-black uppercase text-slate-300 tracking-widest">Kandidatoversikt:</p>
+                    {sortedCandidates.length === 0 && <p className="text-xs text-slate-300 italic">Ingen besvarelser lastet opp ennå.</p>}
+                    {sortedCandidates.map(c => (
+                        <div key={c.id} className="bg-emerald-50 p-4 rounded-xl border border-emerald-100 animate-in fade-in slide-in-from-top-2">
+                           <div className="flex justify-between items-center mb-2">
+                              <span className="text-[10px] font-black text-emerald-800 uppercase tracking-widest">Kandidat {c.id}</span>
+                              <span className="text-[9px] font-bold text-emerald-400 uppercase">{c.pages.length} sider</span>
+                           </div>
+                           <div className="flex flex-wrap gap-1">
+                              {c.pages.map(p => <div key={p.id} className="w-3 h-3 rounded-[2px] bg-emerald-200 border border-emerald-300" />)}
+                           </div>
+                        </div>
+                    ))}
+                 </div>
+               </div>
+             </div>
           </div>
         )}
 
-        <div className="flex-1 flex flex-col h-full">
-          {currentStep === 'setup' && (
-            <div className="max-w-4xl mx-auto py-8 px-6 animate-in fade-in duration-500 w-full">
-               <h2 className="text-3xl font-black text-slate-900 mb-2 tracking-tight">Klargjør vurdering</h2>
-               <p className="text-slate-500 text-sm font-medium mb-8">Last opp prøven og kandidatenes svar.</p>
-
-               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col">
-                     <h3 className="text-base font-black mb-3">Prøven (DOCX/PDF/Bilde)</h3>
-                     <div 
-                        onClick={() => taskInputRef.current?.click()}
-                        className="flex-1 min-h-[140px] border-2 border-dashed border-slate-100 rounded-xl p-4 hover:border-indigo-200 cursor-pointer flex flex-col items-center justify-center group bg-slate-50/30"
-                     >
-                        <input ref={taskInputRef} type="file" multiple className="hidden" onChange={(e) => e.target.files && handleTaskFileSelect(e.target.files)} />
-                        {activeProject?.taskFiles.length ? (
-                          <div className="w-full grid grid-cols-1 gap-1.5">
-                             {activeProject.taskFiles.map(f => (
-                               <div key={f.id} className="flex items-center gap-2 p-1.5 bg-white rounded-lg border border-slate-100 text-[10px] font-bold truncate">
-                                  📄 {f.fileName}
-                               </div>
-                             ))}
-                          </div>
-                        ) : <p className="font-black text-slate-300 text-xs">Last opp oppgave</p>}
-                     </div>
-                     <p className="mt-4 text-[10px] text-amber-600 font-bold bg-amber-50 p-2 rounded-lg">
-                       ⚠️ Tips: Hvis prøven inneholder mye matematikk eller formler, bør du bruke <b>PDF eller Bilde</b>. Word-filer kan miste matematiske tegn ved transkripsjon.
-                     </p>
-                  </div>
-
-                  <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col">
-                     <h3 className="text-base font-black mb-3">Kandidatenes svar (Bilder)</h3>
-                     <div 
-                        onClick={() => fileInputRef.current?.click()}
-                        className="flex-1 min-h-[140px] border-2 border-dashed border-slate-100 rounded-xl p-4 hover:border-green-200 cursor-pointer flex flex-col items-center justify-center bg-slate-50/30"
-                     >
-                        <input ref={fileInputRef} type="file" multiple accept="image/*" className="hidden" onChange={(e) => e.target.files && startAnalysis(e.target.files)} />
-                        <p className="font-black text-slate-300 text-xs">Last opp kandidatliste</p>
-                     </div>
-                  </div>
-               </div>
+        {currentStep === 'review' && (
+          <div className="flex h-[calc(100vh-73px)]">
+            <div className="w-64 bg-white border-r overflow-y-auto p-4 custom-scrollbar">
+              <h3 className="font-black text-[10px] text-slate-400 uppercase mb-4">Kandidater</h3>
+              {sortedCandidates.map(c => (
+                <button key={c.id} onClick={() => setSelectedCandidateId(c.id)} className={`w-full text-left p-4 rounded-xl mb-1 font-black text-xs transition-all ${selectedCandidateId === c.id ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-slate-50 text-slate-600'}`}>Kandidat {c.id}</button>
+              ))}
             </div>
-          )}
-
-          {currentStep === 'review' && (
-             <div className="flex-1 flex overflow-hidden">
-                <div className="w-64 border-r border-slate-200 bg-white p-4 flex flex-col shrink-0 overflow-hidden">
-                   <h3 className="font-black text-slate-400 text-[9px] uppercase tracking-widest px-2 mb-3">Kandidater</h3>
-                   <div className="space-y-1 overflow-y-auto pr-1 custom-scrollbar flex-1">
-                     {activeProject?.candidates.map(c => (
-                       <button 
-                         key={c.id}
-                         onClick={() => setSelectedCandidateId(c.id)}
-                         className={`w-full text-left p-3 rounded-xl border transition-all flex items-center justify-between ${selectedCandidateId === c.id ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm' : 'bg-slate-50 border-transparent hover:bg-white text-slate-600'}`}
-                       >
-                         <span className="font-black text-[11px]">Kandidat {c.id}</span>
-                         <span className="text-[9px] opacity-70 font-bold">{c.pages.length} s</span>
-                       </button>
-                     ))}
-                   </div>
+            <div className="flex-1 p-8 overflow-y-auto custom-scrollbar bg-slate-50">
+              {currentCandidate ? currentCandidate.pages.map(p => (
+                <div key={p.id} className="bg-white border p-8 rounded-[40px] mb-8 grid grid-cols-1 xl:grid-cols-2 gap-8 shadow-sm group relative">
+                  <div className="relative group/img">
+                    <img src={p.imagePreview} className="rounded-2xl border shadow-sm w-full h-auto cursor-zoom-in" onClick={() => setZoomedImage(p.imagePreview)} />
+                    <div className="absolute top-4 right-4 bg-white/90 backdrop-blur px-3 py-1 rounded-full text-[10px] font-black uppercase text-slate-500 shadow-sm opacity-0 group-hover/img:opacity-100 transition-opacity">Klikk for å zoome</div>
+                  </div>
+                  <div className="flex flex-col gap-6">
+                    <div>
+                      <p className="text-[10px] font-black uppercase text-slate-300 mb-2 tracking-widest">Håndskriftstolkning (KaTeX)</p>
+                      <div className="bg-indigo-50/40 p-5 rounded-3xl border border-indigo-100/50 text-sm font-medium min-h-[80px]">
+                        <LatexRenderer content={p.transcription || "Ingen matematikk detektert."} />
+                      </div>
+                    </div>
+                    <div className="flex-1 flex flex-col">
+                      <p className="text-[10px] font-black uppercase text-slate-300 mb-2 tracking-widest">Rediger råtekst</p>
+                      <textarea 
+                          className="flex-1 bg-white border-2 border-slate-50 p-6 rounded-3xl text-sm font-medium leading-relaxed resize-none focus:border-indigo-100 focus:ring-4 focus:ring-indigo-50 transition-all outline-none min-h-[250px]" 
+                          value={p.transcription} 
+                          onChange={(e) => {
+                              const newTxt = e.target.value;
+                              updateActiveProject({
+                                  candidates: activeProject?.candidates.map(c => c.id === currentCandidate.id ? {
+                                      ...c, pages: c.pages.map(page => page.id === p.id ? {...page, transcription: newTxt} : page)
+                                  } : c)
+                              });
+                          }}
+                      />
+                    </div>
+                  </div>
                 </div>
+              )) : <div className="h-full flex items-center justify-center text-slate-300 font-black uppercase tracking-[0.2em]">Velg en kandidat for å verifisere data</div>}
+            </div>
+          </div>
+        )}
 
-                <div className="flex-1 bg-white flex flex-col overflow-hidden relative">
-                   {selectedCandidate ? (
-                     <>
-                        <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-                           <h2 className="text-lg font-black">Kandidat {selectedCandidate.id}</h2>
-                           <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Verifiser transkripsjon</span>
-                        </div>
-                        <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
-                          {selectedCandidate.pages.map((page, idx) => (
-                            <div key={page.id} className="grid grid-cols-1 xl:grid-cols-2 gap-6 bg-slate-50/30 p-4 rounded-2xl border border-slate-100">
-                               <div className="cursor-zoom-in relative" onClick={() => setZoomedImage(page.imagePreview)}>
-                                  <div className="absolute top-2 left-2 bg-slate-900/80 text-white text-[9px] font-black px-2 py-0.5 rounded-md">SIDE {idx+1}</div>
-                                  <img src={page.imagePreview} className="w-full rounded-xl border border-slate-200 shadow-sm" alt="Scan" />
-                               </div>
-                               <textarea 
-                                  value={page.transcription}
-                                  onChange={(e) => {
-                                    const newText = e.target.value;
-                                    updateActiveProject({
-                                      candidates: activeProject?.candidates.map(c => c.id === selectedCandidate.id ? {
-                                        ...c, pages: c.pages.map(p => p.id === page.id ? { ...p, transcription: newText } : p)
-                                      } : c)
-                                    });
-                                  }}
-                                  className="w-full p-4 bg-white rounded-xl border border-slate-200 text-xs font-medium leading-relaxed resize-none outline-none focus:ring-4 focus:ring-indigo-50 min-h-[250px]"
-                                  placeholder="Ingen tekst funnet..."
-                                />
+        {currentStep === 'rubric' && (
+          <div className="max-w-7xl mx-auto py-12 px-6">
+            <div className="bg-white p-12 rounded-[40px] border shadow-sm">
+               <h2 className="text-3xl font-black mb-2 tracking-tight text-slate-900">Rettemanual & Løsningsforslag</h2>
+               <p className="text-slate-400 text-sm mb-12 font-medium italic">Finstem AI-ens foreslåtte manual. Bruk $...$ for matematikk.</p>
+               
+               {activeProject?.rubric && (
+                 <div className="space-y-16 animate-in fade-in duration-700">
+                   <div className="space-y-12">
+                     {activeProject.rubric.criteria.map((c, idx) => (
+                       <div key={idx} className="bg-slate-50 rounded-[40px] border border-slate-100 overflow-hidden shadow-sm hover:shadow-md transition-all">
+                         <div className="p-8 bg-indigo-900 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+                            <div className="flex flex-col md:flex-row gap-4 items-start md:items-center flex-1 w-full">
+                                <div className="flex flex-col w-full md:w-auto">
+                                  <label className="text-[9px] font-black uppercase opacity-60 mb-1 tracking-widest">Oppgave-ID</label>
+                                  <input 
+                                    className="bg-white/10 border-none rounded-xl px-4 py-2 font-black text-xl w-full md:w-48 outline-none focus:bg-white/20 transition-all" 
+                                    value={c.name} 
+                                    onChange={e => updateRubricCriterion(idx, { name: e.target.value })}
+                                  />
+                                </div>
+                                <div className="flex flex-col w-full md:w-auto">
+                                  <label className="text-[9px] font-black uppercase opacity-60 mb-1 tracking-widest">Tema</label>
+                                  <input 
+                                    className="text-[10px] uppercase font-black bg-white/10 border-none rounded-xl px-4 py-3 outline-none focus:bg-white/20 transition-all tracking-[0.2em] w-full md:w-64" 
+                                    value={c.tema} 
+                                    onChange={e => updateRubricCriterion(idx, { tema: e.target.value })}
+                                  />
+                                </div>
                             </div>
-                          ))}
-                        </div>
-                     </>
-                   ) : <div className="flex-1 flex items-center justify-center text-slate-300 font-bold text-sm italic">Velg en kandidat til venstre</div>}
-                </div>
-             </div>
-          )}
-
-          {currentStep === 'rubric' && (
-             <div className="max-w-3xl mx-auto py-8 px-6 animate-in fade-in duration-500 w-full">
-                <div className="bg-white rounded-2xl p-8 border border-slate-200 shadow-sm">
-                   <h2 className="text-2xl font-black mb-1 tracking-tight">Rettemanual</h2>
-                   <p className="text-slate-500 text-xs font-medium mb-6">Opprett poengfordeling og kriterier automatisk eller manuelt.</p>
-
-                   <textarea 
-                      value={activeProject?.taskDescription}
-                      onChange={(e) => updateActiveProject({ taskDescription: e.target.value })}
-                      placeholder="Legg til føringer eller sensorveiledning..."
-                      className="w-full h-24 p-4 rounded-xl bg-slate-50 border border-slate-100 mb-6 text-xs font-medium outline-none focus:bg-white"
-                   />
-                   
-                   <button 
-                    onClick={async () => {
-                      setIsProcessing(true);
-                      setProgress({ current: 0, total: 1, statusText: 'Lager rettemanual...' });
-                      try {
-                        const samples = activeProject?.candidates.slice(0, 2).map(c => c.pages.map(p => p.transcription).join(" ")) || [];
-                        const res = await generateRubricFromTaskAndSamples(activeProject?.taskFiles || [], activeProject?.taskDescription || '', samples);
-                        updateActiveProject({ rubric: res });
-                      } catch (e) { 
-                        console.error(e);
-                        alert("Analyse feilet. Prøv igjen eller sjekk internett."); 
-                      } finally {
-                        setIsProcessing(false);
-                        setProgress({ current: 0, total: 0, statusText: '' });
-                      }
-                    }}
-                    disabled={isProcessing}
-                    className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-md hover:bg-indigo-700 transition-all text-sm mb-8 disabled:opacity-50"
-                   >
-                     {isProcessing ? 'Analyserer...' : 'Generer vurderingsplan ✨'}
-                   </button>
-
-                   {activeProject?.rubric && (
-                      <div className="animate-in slide-in-from-bottom-4 duration-500 border-t border-slate-100 pt-6">
-                         <h3 className="text-lg font-black mb-4">{activeProject.rubric.title}</h3>
-                         <div className="space-y-2 mb-8">
-                            {activeProject.rubric.criteria.map((c, i) => (
-                              <div key={i} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center group">
-                                 <div className="flex-1 pr-4">
-                                    <p className="font-bold text-slate-800 text-xs">{c.name}</p>
-                                    <p className="text-[9px] text-slate-400 leading-tight mt-0.5">{c.description}</p>
-                                 </div>
-                                 <span className="font-black text-indigo-600 bg-white px-2 py-1 rounded-lg border border-indigo-50 shadow-sm text-[11px] min-w-[32px] text-center">{c.maxPoints}p</span>
-                              </div>
-                            ))}
+                            <div className="flex flex-col items-center">
+                               <label className="text-[9px] font-black uppercase opacity-60 mb-1 tracking-widest">Maks Poeng</label>
+                               <input 
+                                 type="number"
+                                 className="bg-white/20 px-6 py-2 rounded-xl text-lg font-black backdrop-blur-sm w-24 outline-none text-center"
+                                 value={c.maxPoints}
+                                 onChange={e => updateRubricCriterion(idx, { maxPoints: Number(e.target.value) })}
+                               />
+                            </div>
                          </div>
                          
-                         <button 
-                          onClick={async () => {
-                            setIsProcessing(true);
-                            try {
-                              const updated = [...(activeProject?.candidates || [])];
-                              const taskContext = (activeProject?.taskDescription || '') + "\n" + (activeProject?.taskFiles.map(f => f.transcription || '').join("\n"));
-                              for (let i = 0; i < updated.length; i++) {
-                                setProgress({ current: i + 1, total: updated.length, statusText: `Vurderer Kandidat ${updated[i].id}...` });
-                                try {
-                                  updated[i].evaluation = await evaluateCandidate(updated[i], activeProject.rubric!, taskContext);
-                                  updateActiveProject({ candidates: [...updated] });
-                                } catch (e) {
-                                  console.error("Vurdering feilet for kandidat " + updated[i].id, e);
-                                }
-                              }
-                              setCurrentStep('results');
-                              updateActiveProject({ status: 'completed' });
-                            } finally {
-                              setIsProcessing(false);
-                              setProgress({ current: 0, total: 0, statusText: '' });
-                            }
-                          } }
-                          disabled={isProcessing}
-                          className="w-full py-4 bg-slate-900 text-white rounded-xl font-bold text-base shadow-xl hover:bg-black transition-all disabled:opacity-50"
-                         >
-                           Start vurdering av alle 🏆
-                         </button>
-                      </div>
-                   )}
-                </div>
-             </div>
-          )}
+                         <div className="grid grid-cols-1 lg:grid-cols-2 min-h-[500px]">
+                            {/* Løsningsforslag */}
+                            <div className="p-10 border-r border-slate-200 bg-white flex flex-col gap-6">
+                                <h5 className="text-[11px] font-black uppercase text-indigo-600 tracking-widest flex items-center gap-2">
+                                    <span className="bg-indigo-100 p-1.5 rounded-lg">💡</span> Løsningsforslag
+                                </h5>
+                                <div className="p-6 bg-slate-50 rounded-3xl border border-slate-100/50 text-base font-medium leading-relaxed text-slate-800 min-h-[150px] shadow-inner overflow-y-auto">
+                                    <LatexRenderer content={c.suggestedSolution} />
+                                </div>
+                                <textarea 
+                                  className="flex-1 w-full bg-white p-6 rounded-3xl text-sm font-medium border-2 border-slate-100 focus:border-indigo-200 focus:ring-4 focus:ring-indigo-50 transition-all outline-none leading-relaxed resize-none"
+                                  value={c.suggestedSolution}
+                                  onChange={e => updateRubricCriterion(idx, { suggestedSolution: e.target.value })}
+                                  placeholder="Rediger løsningsforslag her..."
+                                />
+                            </div>
 
-          {currentStep === 'results' && (
-             <div className="max-w-6xl mx-auto py-8 px-6 animate-in fade-in w-full">
-                <header className="flex justify-between items-center mb-6 no-print">
-                   <h2 className="text-2xl font-black tracking-tight">Vurderingsresultater</h2>
-                   <div className="flex gap-2">
-                     <button onClick={() => window.print()} className="px-4 py-1.5 bg-white border border-slate-200 rounded-lg font-bold shadow-sm text-xs">🖨️ Skriv ut</button>
-                     <button onClick={() => setView('dashboard')} className="px-4 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg font-bold text-xs">Ferdig</button>
+                            {/* Kriterier */}
+                            <div className="p-10 bg-slate-50/40 flex flex-col gap-6">
+                                <h5 className="text-[11px] font-black uppercase text-emerald-600 tracking-widest flex items-center gap-2">
+                                    <span className="bg-emerald-100 p-1.5 rounded-lg">✅</span> Vurderingskriterier
+                                </h5>
+                                <div className="p-6 bg-white border border-slate-200/50 rounded-3xl text-sm font-medium text-slate-600 italic leading-relaxed shadow-sm min-h-[150px] overflow-y-auto">
+                                    <LatexRenderer content={c.description} />
+                                </div>
+                                <textarea 
+                                  className="flex-1 w-full bg-white p-6 rounded-3xl text-sm font-medium border-2 border-slate-100 focus:border-emerald-200 focus:ring-4 focus:ring-emerald-50 transition-all outline-none leading-relaxed resize-none"
+                                  value={c.description}
+                                  onChange={e => updateRubricCriterion(idx, { description: e.target.value })}
+                                  placeholder="Beskriv hva som gir poeng..."
+                                />
+                                
+                                {c.commonMistakes && c.commonMistakes.length > 0 && (
+                                    <div className="mt-4 space-y-4">
+                                        <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Vanlige feil & poengtrekk:</p>
+                                        <div className="grid grid-cols-1 gap-3">
+                                            {c.commonMistakes.map((m, mi) => (
+                                                <div key={mi} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-2">
+                                                    <div className="flex justify-between font-black items-center">
+                                                        <span className="text-red-500">{m.mistake}</span>
+                                                        <span className="bg-red-50 text-red-600 px-4 py-1.5 rounded-xl text-[10px]">-{m.deduction}p</span>
+                                                    </div>
+                                                    <p className="text-[11px] text-slate-500 leading-relaxed"><LatexRenderer content={m.explanation} /></p>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                         </div>
+                       </div>
+                     ))}
                    </div>
-                </header>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                   {activeProject?.candidates.map(c => (
-                     <div key={c.id} className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm border-t-4 border-t-indigo-600 flex flex-col h-full print-break">
-                        <div className="flex justify-between items-start mb-4">
-                          <h4 className="font-black text-sm text-slate-900">Kandidat {c.id}</h4>
-                          <div className="bg-indigo-600 text-white w-8 h-8 flex items-center justify-center rounded-lg font-black text-lg shadow-md">
-                            {c.evaluation?.grade || '-'}
-                          </div>
-                        </div>
-                        <div className="bg-slate-50 p-4 rounded-xl flex-1 text-[11px] text-slate-700 italic leading-relaxed mb-4 border border-slate-100 overflow-y-auto max-h-32 custom-scrollbar">
-                          "{c.evaluation?.feedback || 'Ingen tilbakemelding.'}"
-                        </div>
-                        <div className="flex justify-between items-center text-[8px] font-black text-slate-400 uppercase tracking-widest px-1">
-                           <span>Score:</span>
-                           <span className="text-indigo-600 text-sm font-black">{c.evaluation?.score || 0} / {activeProject?.rubric?.totalMaxPoints}</span>
-                        </div>
-                     </div>
-                   ))}
-                </div>
-             </div>
-          )}
-        </div>
+                   <div className="pt-12 border-t border-slate-100 flex flex-col gap-4">
+                        <button onClick={() => { setCurrentStep('results'); performEvaluation(); }} className="w-full py-8 bg-emerald-600 text-white rounded-[32px] font-black text-2xl shadow-2xl shadow-emerald-100 hover:bg-emerald-700 transition-all transform hover:scale-[1.02] active:scale-95">
+                            🚀 Start automatisk retting av alle besvarelser
+                        </button>
+                        <button onClick={() => handleGenerateRubric(true)} className="w-full py-4 text-slate-400 font-black hover:text-indigo-600 transition-all text-[11px] uppercase tracking-[0.3em]">
+                            Oppdater manual basert på flere elevbesvarelser
+                        </button>
+                   </div>
+                 </div>
+               )}
+            </div>
+          </div>
+        )}
 
-        {isProcessing && (
-          <div className="fixed bottom-6 right-6 bg-[#0B0E14] text-white px-6 py-4 rounded-2xl shadow-2xl border border-white/10 z-[100] flex items-center gap-6 animate-in slide-in-from-right-6">
-             <div className="flex flex-col">
-                <div className="flex items-center gap-1.5 mb-1">
-                   <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-ping"></div>
-                   <span className="text-[8px] font-black uppercase tracking-[0.3em] text-indigo-400">Systemstatus</span>
+        {currentStep === 'results' && activeProject && (
+          <div className="max-w-7xl mx-auto py-12 px-6 animate-in fade-in duration-500">
+            <header className="flex justify-between items-center mb-12 no-print">
+               <div>
+                  <h2 className="text-4xl font-black tracking-tight text-slate-900">Resultater</h2>
+                  <p className="text-slate-500 font-medium text-sm mt-1">Vurdering utført av AI basert på din rettemanual.</p>
+               </div>
+               <div className="flex bg-white p-1.5 rounded-2xl border shadow-sm">
+                 <button onClick={() => setResultView('individual')} className={`px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${resultView === 'individual' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'text-slate-400 hover:text-slate-600'}`}>Enkelt-kandidat</button>
+                 <button onClick={() => setResultView('group')} className={`px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${resultView === 'group' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'text-slate-400 hover:text-slate-600'}`}>Klassenivå</button>
+               </div>
+            </header>
+
+            {resultView === 'individual' && currentCandidate && (
+              <div className="bg-white rounded-[40px] shadow-sm border p-12 animate-in slide-in-from-bottom-12 duration-500">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-16 gap-10">
+                   <div className="flex items-center gap-6 bg-slate-50 p-6 rounded-3xl border border-slate-100">
+                      <span className="font-black text-slate-400 text-[11px] uppercase tracking-widest">Velg elev:</span>
+                      <select className="bg-white border-2 border-slate-100 rounded-xl px-8 py-3 font-black text-base outline-none focus:ring-4 focus:ring-indigo-100 transition-all" value={currentCandidate.id} onChange={e => setSelectedCandidateId(e.target.value)}>
+                        {sortedCandidates.map(c => <option key={c.id} value={c.id}>{c.id}</option>)}
+                      </select>
+                   </div>
+                   <div className="flex flex-col items-end">
+                      <div className="text-7xl font-black text-indigo-700 leading-none flex items-baseline gap-3">
+                          {currentCandidate.evaluation?.score.toFixed(1)} 
+                          <span className="text-3xl text-slate-200">/ {activeProject.rubric?.totalMaxPoints}</span>
+                      </div>
+                      <div className="text-xs font-black uppercase tracking-[0.3em] text-slate-300 mt-4 flex items-center gap-3">Karakter: <span className="text-white bg-indigo-600 px-5 py-2 rounded-xl shadow-lg shadow-indigo-100">{currentCandidate.evaluation?.grade}</span></div>
+                   </div>
                 </div>
-                <span className="text-xs font-black whitespace-nowrap max-w-[150px] truncate">{progress.statusText}</span>
-             </div>
-             <div className="relative w-12 h-12 flex-shrink-0">
-                <svg className="w-full h-full -rotate-90" viewBox="0 0 36 36">
-                  <circle className="text-slate-800" strokeWidth="3" stroke="currentColor" fill="none" r="16" cx="18" cy="18" />
-                  <circle className="text-indigo-500" strokeDasharray={`${progressPercentage}, 100`} strokeWidth="3" strokeLinecap="round" stroke="currentColor" fill="none" r="16" cx="18" cy="18" style={{ transition: 'stroke-dasharray 0.3s ease-out' }} />
-                </svg>
-                <div className="absolute inset-0 flex items-center justify-center text-[9px] font-black">{progressPercentage}%</div>
-             </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-20">
+                   <div className="space-y-16">
+                      <section>
+                        <h4 className="text-indigo-900 font-black text-[11px] uppercase tracking-widest mb-6 flex items-center gap-3"><div className="w-4 h-1 bg-indigo-600 rounded-full"></div> Oppsummering</h4>
+                        <div className="bg-indigo-50/40 p-10 rounded-[40px] border border-indigo-100 italic text-indigo-950 text-lg leading-relaxed shadow-inner">
+                          <LatexRenderer content={currentCandidate.evaluation?.feedback || ""} />
+                        </div>
+                      </section>
+
+                      <section>
+                        <h4 className="text-indigo-900 font-black text-[11px] uppercase tracking-widest mb-6 flex items-center gap-3"><div className="w-4 h-1 bg-indigo-600 rounded-full"></div> Vekstpunkter</h4>
+                        <div className="space-y-4">
+                           {currentCandidate.evaluation?.vekstpunkter?.map((v, i) => (
+                             <div key={i} className="flex items-start gap-6 p-6 bg-white border border-slate-100 rounded-3xl shadow-sm hover:border-indigo-200 transition-all group">
+                               <span className="w-10 h-10 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0 text-sm font-black group-hover:bg-indigo-600 group-hover:text-white transition-all">{i+1}</span>
+                               <div className="pt-2 leading-relaxed font-semibold text-slate-700"><LatexRenderer content={v} /></div>
+                             </div>
+                           ))}
+                        </div>
+                      </section>
+                   </div>
+
+                   <div className="bg-white rounded-[40px] border border-slate-100 p-2 shadow-inner overflow-hidden self-start">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                           <tr className="bg-slate-50">
+                              <th className="p-8 text-[11px] font-black uppercase text-slate-400 tracking-widest rounded-tl-[38px]">DELOPPGAVE</th>
+                              <th className="p-8 text-[11px] font-black uppercase text-slate-400 tracking-widest">TEMA</th>
+                              <th className="p-8 text-[11px] font-black uppercase text-slate-400 tracking-widest text-center">POENG</th>
+                              <th className="p-8 text-[11px] font-black uppercase text-slate-400 tracking-widest text-center">MAKS</th>
+                              <th className="p-8 rounded-tr-[38px]"></th>
+                           </tr>
+                        </thead>
+                        <tbody>
+                           {currentCandidate.evaluation?.taskBreakdown?.map((tb, i) => (
+                             <tr key={i} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50 transition-all">
+                                <td className="p-8 font-black text-base text-slate-800">{tb.taskName}</td>
+                                <td className="p-8 text-[11px] font-bold text-slate-400 uppercase tracking-widest">{tb.tema}</td>
+                                <td className="p-8 font-black text-emerald-600 text-xl text-center">{tb.score.toFixed(1)}</td>
+                                <td className="p-8 text-[11px] font-bold text-slate-200 text-center">/ {tb.max}</td>
+                                <td className="p-8 text-right">
+                                   {tb.score === tb.max ? (
+                                       <span className="text-[10px] font-black uppercase bg-emerald-100 text-emerald-600 px-4 py-2 rounded-xl shadow-sm">Full uttelling</span>
+                                   ) : <span className="text-[10px] font-black uppercase bg-amber-50 text-amber-500 px-4 py-2 rounded-xl">Delvis</span>}
+                                </td>
+                             </tr>
+                           ))}
+                        </tbody>
+                      </table>
+                   </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </main>
+
+      {zoomedImage && (
+          <div className="fixed inset-0 z-[1000] bg-slate-900/95 backdrop-blur-md flex items-center justify-center p-6 cursor-zoom-out" onClick={() => setZoomedImage(null)}>
+              <img src={zoomedImage} className="max-w-full max-h-full object-contain rounded-3xl shadow-2xl border-4 border-white/10 animate-in zoom-in duration-300" alt="Forstørret bilde" />
+          </div>
+      )}
+
+      {/* Global Status Indicator */}
+      {processStatus.type && (
+        <div className="fixed bottom-12 right-12 bg-slate-900 text-white p-10 rounded-[40px] shadow-2xl flex items-center gap-12 z-[200] border border-white/10 animate-in slide-in-from-right-12 duration-500">
+          <div className="flex flex-col">
+            <span className="text-[11px] font-black uppercase tracking-[0.4em] text-indigo-400 mb-4">
+              {processStatus.type === 'upload' ? 'Filbehandling' : processStatus.type === 'rubric' ? 'Analyse' : 'Retting'}
+            </span>
+            <span className="text-lg font-black truncate max-w-[300px] leading-tight">{processStatus.statusText}</span>
+          </div>
+          <div className="w-24 h-24 relative flex items-center justify-center">
+            <svg className="w-full h-full -rotate-90" viewBox="0 0 36 36">
+              <circle className="text-white/5" strokeWidth="3" stroke="currentColor" fill="none" r="16" cx="18" cy="18" />
+              <circle className="text-indigo-500" strokeDasharray={`${processStatus.total > 0 ? Math.round((processStatus.current/processStatus.total)*100) : 0}, 100`} strokeWidth="3" strokeLinecap="round" stroke="currentColor" fill="none" r="16" cx="18" cy="18" style={{ transition: 'stroke-dasharray 0.5s ease-out' }} />
+            </svg>
+            <span className="absolute text-base font-black tracking-tight">{processStatus.total > 0 ? Math.round((processStatus.current/processStatus.total)*100) : 0}%</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
