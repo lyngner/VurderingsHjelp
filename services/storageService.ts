@@ -4,10 +4,11 @@ import { Project } from "../types";
 const DB_NAME = "ElevVurderingDB";
 const STORE_NAME = "projects";
 const CACHE_STORE = "global_cache";
+const DB_VERSION = 2; // Vi holder oss på versjon 2 for å unngå utilsiktet wiping
 
 const openDB = (): Promise<IDBDatabase> => {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 2); 
+    const request = indexedDB.open(DB_NAME, DB_VERSION); 
     request.onupgradeneeded = (event) => {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {

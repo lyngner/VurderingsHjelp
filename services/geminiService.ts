@@ -5,7 +5,7 @@ import { Page, Candidate, Rubric } from "../types";
 class RateLimiter {
   private queue: Promise<any> = Promise.resolve();
   private lastRequestTime: number = 0;
-  private readonly MIN_DELAY = 4000; // Økt til 4 sekunder for å være mer konservativ mot 429
+  private readonly MIN_DELAY = 3000;
 
   async schedule<T>(fn: () => Promise<T>): Promise<T> {
     this.queue = this.queue.then(async () => {
@@ -14,34 +14,22 @@ class RateLimiter {
       if (timeSinceLast < this.MIN_DELAY) {
         await new Promise(resolve => setTimeout(resolve, this.MIN_DELAY - timeSinceLast));
       }
-      
       this.lastRequestTime = Date.now();
 
       let attempt = 0;
-      const maxRetries = 5;
-      let currentBackoff = 8000; // Starter på 8 sekunder ved feil
-
+      const maxRetries = 3;
       while (attempt < maxRetries) {
         try {
           return await fn();
         } catch (error: any) {
           attempt++;
-          const errorMsg = error?.message || JSON.stringify(error);
-          const isQuota = errorMsg.includes("429") || errorMsg.includes("RESOURCE_EXHAUSTED") || errorMsg.includes("Quota");
-
-          if (isQuota && attempt < maxRetries) {
-            console.warn(`[API] Kvote nådd (Forsøk ${attempt}/${maxRetries}). Venter ${currentBackoff/1000}s før nytt forsøk...`);
-            await new Promise(resolve => setTimeout(resolve, currentBackoff));
-            currentBackoff *= 2.5; 
-          } else {
-            console.error("[API] Kritisk feil:", errorMsg);
-            throw error;
-          }
+          if ((error?.message?.includes("429") || error?.message?.includes("Quota")) && attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, 5000 * attempt));
+          } else throw error;
         }
       }
-      throw new Error("Klarte ikke å fullføre forespørselen etter 5 forsøk pga. kvotebegrensninger.");
+      throw new Error("API Limit reached");
     });
-
     return this.queue;
   }
 }
@@ -56,12 +44,12 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<any[]> => {
       contents: {
         parts: [
           { inlineData: { mimeType: page.mimeType, data: page.base64Data } },
-          { text: `Les elevbesvarelsen nøye. 
-          1. Finn Kandidatnr og Sidenr. 
-          2. Transkriber alt innhold. 
-          3. Identifiser spesifikke oppgaver og deloppgaver (f.eks. Oppgave '1', Deloppgave 'a'). 
-          Bruk LaTeX ($...$) for all matematikk. 
-          Svar i JSON-format med en liste over transkriberte deler per oppgave.` }
+          { text: `Analyse denne elevbesvarelsen. 
+          VIKTIG: Identifiser om dette er 'Del 1' eller 'Del 2' (eller lignende). 
+          Finn Kandidatnr og Sidenr. 
+          Transkriber innholdet og koble det til oppgaver (f.eks. Oppgave '1a'). 
+          Bruk LaTeX ($...$) for matematikk.
+          Returner JSON.` }
         ],
       },
       config: {
@@ -72,6 +60,7 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<any[]> => {
             type: Type.OBJECT,
             properties: {
               candidateId: { type: Type.STRING },
+              part: { type: Type.STRING, description: "F.eks 'Del 1' eller 'Del 2'" },
               pageNumber: { type: Type.NUMBER },
               tasks: {
                 type: Type.ARRAY,
@@ -87,7 +76,7 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<any[]> => {
               },
               fullText: { type: Type.STRING }
             },
-            required: ["candidateId", "pageNumber", "tasks", "fullText"]
+            required: ["candidateId", "part", "pageNumber", "tasks", "fullText"]
           }
         }
       }
@@ -99,27 +88,15 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<any[]> => {
 export const generateRubricFromTaskAndSamples = async (taskFiles: Page[], taskDescription: string, samples: string[]): Promise<Rubric> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   return limiter.schedule(async () => {
-    const parts: any[] = taskFiles.filter(f => f.base64Data).map(f => ({ 
+    const parts: any[] = taskFiles.map(f => ({ 
       inlineData: { mimeType: f.mimeType, data: f.base64Data } 
     }));
     
-    if (parts.length === 0) {
-      throw new Error("Ingen filer å analysere for rettemanual.");
-    }
-
-    const promptText = `Lag en profesjonell og detaljert rettemanual basert på de vedlagte dokumentene (oppgave/fasit). 
-    
-    KRAV:
-    - Sett standard poengsum til 2 poeng per deloppgave hvis ikke annet er spesifisert i fasit.
-    - Analyser de vedlagte ELEV-EKSEMPLENE for å identifisere vanlige feilkilder, misoppfatninger eller slurvefeil.
-    - Legg disse inn i "commonErrors" for hver kriterie.
-    - Inkluder temaer, beskrivelser og løsningsforslag med LaTeX ($...$).
-    
-    KONTEKST: ${taskDescription || "Vurdering av prøve/eksamen"}
-    ELEVARBEID (SAMPLES): 
-    ${samples.join("\n---\n")}
-    
-    Svar med et JSON-objekt som følger skjemaet nøyaktig.`;
+    const promptText = `Lag en detaljert rettemanual. 
+    Prøven kan ha flere deler (Del 1, Del 2). Identifiser disse tydelig.
+    Bruk LaTeX ($...$) for alle formler.
+    Inkluder 'commonErrors' basert på disse eksemplene fra elevene:
+    ${samples.join("\n---\n")}`;
 
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
@@ -137,6 +114,7 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[], taskDe
                 type: Type.OBJECT,
                 properties: {
                   name: { type: Type.STRING },
+                  part: { type: Type.STRING, description: "F.eks 'Del 1'" },
                   description: { type: Type.STRING },
                   suggestedSolution: { type: Type.STRING },
                   tema: { type: Type.STRING },
@@ -147,14 +125,13 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[], taskDe
                       type: Type.OBJECT,
                       properties: {
                         error: { type: Type.STRING },
-                        deduction: { type: Type.NUMBER },
-                        frequency_observation: { type: Type.STRING }
+                        deduction: { type: Type.NUMBER }
                       },
                       required: ["error", "deduction"]
                     }
                   }
                 },
-                required: ["name", "description", "suggestedSolution", "maxPoints", "tema", "commonErrors"]
+                required: ["name", "part", "description", "suggestedSolution", "maxPoints", "tema", "commonErrors"]
               }
             }
           },
@@ -162,19 +139,7 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[], taskDe
         }
       }
     });
-
-    const text = response.text || "{}";
-    try {
-      const parsed = JSON.parse(text);
-      return { 
-        title: parsed.title || "Rettemanual", 
-        totalMaxPoints: parsed.totalMaxPoints || 0, 
-        criteria: parsed.criteria || [] 
-      };
-    } catch (e) {
-      console.error("Feil ved parsing av manual-JSON:", text);
-      throw e;
-    }
+    return JSON.parse(response.text || "{}");
   });
 };
 
@@ -183,19 +148,25 @@ export const evaluateCandidate = async (candidate: Candidate, rubric: Rubric, ta
   return limiter.schedule(async () => {
     let contentToEvaluate = "";
     if (candidate.structuredAnswers) {
-      Object.entries(candidate.structuredAnswers.tasks).forEach(([taskNum, taskContent]) => {
-        contentToEvaluate += `\nOPPGAVE ${taskNum}:\n`;
-        Object.entries(taskContent.subtasks).forEach(([sub, text]) => {
-          contentToEvaluate += `${sub ? `Deloppgave ${sub}: ` : ''}${text}\n`;
+      Object.entries(candidate.structuredAnswers.parts).forEach(([partName, tasks]) => {
+        contentToEvaluate += `\n--- ${partName.toUpperCase()} ---\n`;
+        Object.entries(tasks).forEach(([taskNum, taskContent]) => {
+          contentToEvaluate += `OPPGAVE ${taskNum}:\n`;
+          Object.entries(taskContent.subtasks).forEach(([sub, text]) => {
+            contentToEvaluate += `${sub ? `(${sub}) ` : ''}${text}\n`;
+          });
         });
       });
     } else {
-      contentToEvaluate = candidate.pages.map(p => `SIDE ${p.pageNumber}: ${p.transcription}`).join("\n\n");
+      contentToEvaluate = candidate.pages
+        .sort((a,b) => (a.part||"").localeCompare(b.part||"") || (a.pageNumber||0)-(b.pageNumber||0))
+        .map(p => `[${p.part || 'Ukjent Del'}] SIDE ${p.pageNumber}: ${p.transcription}`).join("\n\n");
     }
 
     const response = await ai.models.generateContent({
       model: 'gemini-3-pro-preview',
-      contents: `Vurder denne elevbesvarelsen mot rettemanualen. Gi konstruktiv tilbakemelding og sett poeng per oppgave/kriterium. Bruk LaTeX ($...$) for matematikk.\n\nBESVARELSE:\n${contentToEvaluate}\n\nMANUAL:\n${JSON.stringify(rubric)}`,
+      contents: `Vurder besvarelsen mot manualen. Vær obs på at Del 1 og Del 2 kan ha samme oppgavenummer.
+      BESVARELSE:\n${contentToEvaluate}\n\nMANUAL:\n${JSON.stringify(rubric)}`,
       config: {
         thinkingConfig: { thinkingBudget: 8192 },
         responseMimeType: "application/json",
@@ -212,12 +183,13 @@ export const evaluateCandidate = async (candidate: Candidate, rubric: Rubric, ta
                 type: Type.OBJECT,
                 properties: {
                   taskName: { type: Type.STRING },
+                  part: { type: Type.STRING },
                   score: { type: Type.NUMBER },
                   max: { type: Type.NUMBER },
                   tema: { type: Type.STRING },
                   comment: { type: Type.STRING }
                 },
-                required: ["taskName", "score", "max", "tema", "comment"]
+                required: ["taskName", "part", "score", "max", "tema", "comment"]
               }
             }
           },

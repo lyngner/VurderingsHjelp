@@ -4,7 +4,7 @@ export interface TaskContent {
 }
 
 export interface CandidateHierarchy {
-  tasks: Record<string, TaskContent>; // Oppgave -> TaskContent
+  parts: Record<string, Record<string, TaskContent>>; // Del (f.eks "Del 1") -> Oppgave -> TaskContent
 }
 
 export interface Page {
@@ -16,15 +16,16 @@ export interface Page {
   mimeType: string;
   transcription?: string;
   candidateId?: string;
+  part?: string; // F.eks. "Del 1" eller "Del 2"
   pageNumber?: number;
   identifiedTasks?: string[];
   status: 'pending' | 'processing' | 'completed' | 'error';
-  // Flag to indicate if the page results were retrieved from local cache
   isCached?: boolean;
 }
 
 export interface TaskEvaluation {
   taskName: string;
+  part: string; // Hvilken del oppgaven tilhører
   score: number;
   max: number;
   tema: string;
@@ -35,7 +36,7 @@ export interface Candidate {
   id: string;
   name: string; 
   pages: Page[];
-  structuredAnswers?: CandidateHierarchy; // "Clean JSON" hierarkiet
+  structuredAnswers?: CandidateHierarchy;
   evaluation?: {
     grade: string;
     feedback: string;
@@ -54,11 +55,12 @@ export interface CommonError {
 
 export interface RubricCriterion {
   name: string;
+  part: string; // Hvilken del kriteriet tilhører
   description: string;
   suggestedSolution: string;
   maxPoints: number;
   tema: string;
-  commonErrors: CommonError[]; // Nytt felt for vanlige feil
+  commonErrors: CommonError[];
 }
 
 export interface Rubric {
