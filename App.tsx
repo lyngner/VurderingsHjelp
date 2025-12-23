@@ -188,7 +188,7 @@ const PageDetailView: React.FC<{ page: Page; onClose: () => void; onUpdate: (upd
 const App: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
-  const [view, setView] = useState<'dashboard' | 'editor' | 'settings'>('dashboard');
+  const [view, setView] = useState<'dashboard' | 'editor'>('dashboard');
   const [currentStep, setCurrentStep] = useState<'setup' | 'review' | 'rubric' | 'results'>('setup');
   const [resultsSubView, setResultsSubView] = useState<'individual' | 'summary'>('individual');
   const [reviewCandidateId, setReviewCandidateId] = useState<string | null>(null);
@@ -197,10 +197,9 @@ const App: React.FC = () => {
   const [detailPage, setDetailPage] = useState<Page | null>(null);
   const [selectedResultCandidateId, setSelectedResultCandidateId] = useState<string | null>(null);
   const [cacheStats, setCacheStats] = useState<{ count: number }>({ count: 0 });
-  const [isEditingRubric, setIsEditingRubric] = useState(false);
 
   useEffect(() => { if (activeProject) saveProject(activeProject); }, [activeProject]);
-  useEffect(() => { if (view === 'dashboard' || view === 'settings') { loadAllProjects(); getCacheStats().then(setCacheStats); } }, [view]);
+  useEffect(() => { if (view === 'dashboard') { loadAllProjects(); getCacheStats().then(setCacheStats); } }, [view]);
 
   const stats = useMemo(() => {
     if (!activeProject || activeProject.candidates.length === 0) return null;
@@ -223,6 +222,30 @@ const App: React.FC = () => {
     setProjects(all.sort((a, b) => b.updatedAt - a.updatedAt));
   };
 
+  const createNewProject = () => {
+    const newProj: Project = {
+      id: Math.random().toString(36).substring(7),
+      name: "Nytt prosjekt " + new Date().toLocaleDateString(),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      taskDescription: "",
+      taskFiles: [],
+      candidates: [],
+      unprocessedPages: [],
+      rubric: null,
+      status: 'draft'
+    };
+    setActiveProject(newProj);
+    setView('editor');
+    setCurrentStep('setup');
+  };
+
+  const selectProject = (p: Project) => {
+    setActiveProject(p);
+    setView('editor');
+    setCurrentStep('setup');
+  };
+
   const updateActiveProject = (updates: Partial<Project>) => {
     setActiveProject(prev => prev ? { ...prev, ...updates, updatedAt: Date.now() } : null);
   };
@@ -237,18 +260,18 @@ const App: React.FC = () => {
           for (let i = 1; i <= pdf.numPages; i++) {
             pagesPromises.push((async () => {
               const page = await pdf.getPage(i);
-              const viewport = page.getViewport({ scale: 2 });
+              const viewport = page.getViewport({ scale: 1.5 });
               const canvas = document.createElement('canvas');
               const context = canvas.getContext('2d');
               canvas.height = viewport.height; canvas.width = viewport.width;
               await page.render({ canvasContext: context, viewport }).promise;
-              const base64 = canvas.toDataURL('image/jpeg', 0.85);
+              const base64 = canvas.toDataURL('image/jpeg', 0.7);
               return {
                 id: Math.random().toString(36).substring(7),
                 fileName: `${file.name} (Side ${i})`,
                 imagePreview: base64,
                 base64Data: base64.split(',')[1],
-                contentHash: generateHash(base64.substring(50, 2000)),
+                contentHash: generateHash(base64.substring(100, 2000)),
                 mimeType: 'image/jpeg',
                 status: 'pending',
                 rotation: 0, zoom: 1
@@ -274,24 +297,21 @@ const App: React.FC = () => {
           const result = await mammoth.extractRawText({ arrayBuffer });
           const fullText = extraText + "\n" + result.value;
           const canvas = document.createElement('canvas');
-          canvas.width = 800; canvas.height = 1000;
+          canvas.width = 600; canvas.height = 800;
           const ctx = canvas.getContext('2d');
           if (ctx) {
-            ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,800,1000);
-            ctx.fillStyle = '#f8fafc'; ctx.fillRect(0,0,800,50);
-            ctx.fillStyle = '#334155'; ctx.font = 'bold 16px Inter';
-            ctx.fillText(file.name.substring(0, 45), 40, 32);
-            ctx.font = '14px Courier New';
-            const lines = fullText.split('\n').filter(l => l.trim()).slice(0, 45);
-            lines.forEach((l, idx) => ctx.fillText(l.substring(0, 80), 40, 90 + (idx * 20)));
+            ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,600,800);
+            ctx.fillStyle = '#334155'; ctx.font = '12px Courier New';
+            const lines = fullText.split('\n').filter(l => l.trim()).slice(0, 30);
+            lines.forEach((l, idx) => ctx.fillText(l.substring(0, 60), 30, 50 + (idx * 15)));
           }
-          const base64 = canvas.toDataURL('image/jpeg');
+          const base64 = canvas.toDataURL('image/jpeg', 0.6);
           resolve([{
             id: Math.random().toString(36).substring(7),
             fileName: file.name,
             imagePreview: base64,
             base64Data: base64.split(',')[1],
-            contentHash: generateHash(fullText.substring(0, 1000)),
+            contentHash: generateHash(fullText.substring(0, 500)),
             mimeType: 'image/jpeg',
             status: 'pending', 
             transcription: fullText,
@@ -304,19 +324,35 @@ const App: React.FC = () => {
       const reader = new FileReader();
       reader.onload = async (e) => {
         const base64Full = e.target?.result as string;
-        const base64Data = base64Full.split(',')[1];
-        const contentHash = generateHash(base64Data.substring(0, 5000));
-        if (!file.type.startsWith('image/')) { resolve([]); return; }
         const img = new Image();
         img.onload = () => {
-          if (img.width / img.height > 1.3) {
-            const canvas = document.createElement('canvas'); const ctx = canvas.getContext('2d'); if (!ctx) return resolve([]);
-            canvas.width = img.width / 2; canvas.height = img.height;
-            ctx.drawImage(img, 0, 0, img.width / 2, img.height, 0, 0, img.width / 2, img.height); const left = canvas.toDataURL('image/jpeg', 0.85);
-            ctx.clearRect(0,0,canvas.width,canvas.height);
-            ctx.drawImage(img, img.width / 2, 0, img.width / 2, img.height, 0, 0, img.width / 2, img.height); const right = canvas.toDataURL('image/jpeg', 0.85);
-            resolve([{ id: Math.random().toString(36).substring(7), fileName: `${file.name} (Del 1)`, imagePreview: left, base64Data: left.split(',')[1], contentHash: generateHash(left.substring(50, 1000)), mimeType: 'image/jpeg', status: 'pending', rotation: 0, zoom: 1 }, { id: Math.random().toString(36).substring(7), fileName: `${file.name} (Del 2)`, imagePreview: right, base64Data: right.split(',')[1], contentHash: generateHash(right.substring(50, 1000)), mimeType: 'image/jpeg', status: 'pending', rotation: 0, zoom: 1 }]);
-          } else { resolve([{ id: Math.random().toString(36).substring(7), fileName: file.name, imagePreview: base64Full, base64Data, contentHash, mimeType: file.type, status: 'pending', rotation: 0, zoom: 1 }]); }
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return resolve([]);
+          
+          const maxDim = 1600;
+          let w = img.width, h = img.height;
+          if (w > maxDim || h > maxDim) {
+            const scale = maxDim / Math.max(w, h);
+            w *= scale; h *= scale;
+          }
+          canvas.width = w; canvas.height = h;
+          ctx.drawImage(img, 0, 0, w, h);
+          const compressed = canvas.toDataURL('image/jpeg', 0.75);
+          const base64Data = compressed.split(',')[1];
+          const contentHash = generateHash(base64Data.substring(0, 1000));
+          
+          resolve([{ 
+            id: Math.random().toString(36).substring(7), 
+            fileName: file.name, 
+            imagePreview: compressed, 
+            base64Data, 
+            contentHash, 
+            mimeType: 'image/jpeg', 
+            status: 'pending', 
+            rotation: 0, 
+            zoom: 1 
+          }]);
         };
         img.src = base64Full;
       };
@@ -358,14 +394,20 @@ const App: React.FC = () => {
     const processNext = async () => {
       if (queue.length === 0) return;
       const page = queue.shift()!;
-      setActiveProject(prev => ({ ...prev!, unprocessedPages: prev!.unprocessedPages?.map(p => p.id === page.id ? { ...p, status: 'processing' } : p) }));
+      setActiveProject(prev => {
+        if (!prev) return null;
+        return { ...prev, unprocessedPages: prev.unprocessedPages?.map(p => p.id === page.id ? { ...p, status: 'processing' } : p) };
+      });
       try {
         const results = page.transcription ? await analyzeTextContent(page.transcription) : await transcribeAndAnalyzeImage(page);
         integrateResultsIntoActiveProject(page, results);
         await processNext();
       } catch (err) {
         console.error("Prosessering feilet for side:", page.fileName, err);
-        setActiveProject(prev => ({ ...prev!, unprocessedPages: prev!.unprocessedPages?.map(p => p.id === page.id ? { ...p, status: 'error' } : p) }));
+        setActiveProject(prev => {
+          if (!prev) return null;
+          return { ...prev, unprocessedPages: prev.unprocessedPages?.map(p => p.id === page.id ? { ...p, status: 'error' } : p) };
+        });
         await processNext();
       }
     };
@@ -398,6 +440,34 @@ const App: React.FC = () => {
     if (detailPage?.id === pId) setDetailPage(prev => prev ? { ...prev, ...updates } : null);
   };
 
+  if (view === 'dashboard') {
+    return (
+      <div className="min-h-screen bg-[#F8FAFC] p-12">
+        <header className="max-w-6xl mx-auto flex justify-between items-end mb-16">
+          <div>
+            <h1 className="text-5xl font-black text-slate-800 tracking-tighter">ElevVurdering <span className="text-indigo-600">PRO</span></h1>
+            <p className="text-slate-400 font-bold uppercase text-[10px] tracking-widest mt-4">Profesjonell vurdering av besvarelser</p>
+          </div>
+          <button onClick={createNewProject} className="bg-indigo-600 text-white px-10 py-5 rounded-[25px] font-black text-sm shadow-2xl shadow-indigo-100 hover:scale-105 transition-transform active:scale-95">Nytt prosjekt +</button>
+        </header>
+
+        <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+          {projects.map(p => (
+            <div key={p.id} onClick={() => selectProject(p)} className="bg-white p-10 rounded-[45px] border border-slate-100 shadow-sm hover:shadow-xl hover:border-indigo-100 transition-all cursor-pointer group relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-2 h-full bg-indigo-50 group-hover:bg-indigo-600 transition-colors"></div>
+              <h3 className="font-black text-xl text-slate-800 mb-2 truncate">{p.name}</h3>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-8">{new Date(p.updatedAt).toLocaleDateString()}</p>
+              <div className="flex justify-between items-center">
+                <span className="bg-slate-50 text-slate-500 text-[9px] font-black px-4 py-2 rounded-full uppercase tracking-widest">{p.candidates.length} elever</span>
+                <span className="text-indigo-600 font-black text-xs group-hover:translate-x-1 transition-transform">Åpne →</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-[#F8FAFC]">
       <header className="bg-white border-b px-8 py-4 flex items-center justify-between sticky top-0 z-50 no-print">
@@ -419,11 +489,11 @@ const App: React.FC = () => {
         {currentStep === 'setup' && (
           <div className="p-10 max-w-5xl mx-auto space-y-12">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-              <div className="bg-white p-10 rounded-[50px] shadow-sm border border-slate-100 min-h-[400px]">
+              <div className="bg-white p-10 rounded-[50px] shadow-sm border border-slate-100 min-h-[400px] flex flex-col">
                 <h3 className="font-black text-[10px] uppercase text-slate-400 mb-8 tracking-widest">1. Oppgave / Fasit</h3>
-                <div className="relative group">
+                <div className="relative group flex-1">
                   <input type="file" multiple accept=".pdf,.docx,.jpg,.jpeg,.png" onChange={e => e.target.files && handleTaskFileSelect(e.target.files)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
-                  <div className="border-2 border-dashed border-slate-100 rounded-[30px] p-12 text-center group-hover:border-indigo-200 transition-colors">
+                  <div className="border-2 border-dashed border-slate-100 rounded-[30px] h-full flex flex-col items-center justify-center p-12 text-center group-hover:border-indigo-200 transition-colors">
                     <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Dra filer hit eller klikk</p>
                     <p className="text-[9px] text-slate-300 mt-2">Støtter PDF, Word og Bilder</p>
                   </div>
@@ -431,13 +501,13 @@ const App: React.FC = () => {
                 <div className="mt-8 space-y-2">{activeProject?.taskFiles?.map(f => (<div key={f.id} className="text-[10px] font-bold bg-slate-50 p-3 rounded-xl border flex justify-between items-center animate-in fade-in"><span>{f.fileName}</span><button onClick={() => updateActiveProject({ taskFiles: activeProject!.taskFiles.filter(i => i.id !== f.id) })}>✕</button></div>))}</div>
               </div>
               
-              <div className="bg-white p-10 rounded-[50px] shadow-sm border border-slate-100 min-h-[400px]">
+              <div className="bg-white p-10 rounded-[50px] shadow-sm border border-slate-100 min-h-[400px] flex flex-col">
                 <h3 className="font-black text-[10px] uppercase text-slate-400 mb-8 tracking-widest">2. Elevbesvarelser</h3>
-                <div className="relative group">
+                <div className="relative group flex-1">
                   <input type="file" multiple accept=".pdf,.docx,.jpg,.jpeg,.png" onChange={e => e.target.files && handleCandidateFileSelect(e.target.files)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
-                  <div className="border-2 border-dashed border-slate-100 rounded-[30px] p-12 text-center group-hover:border-emerald-200 transition-colors">
+                  <div className="border-2 border-dashed border-slate-100 rounded-[30px] h-full flex flex-col items-center justify-center p-12 text-center group-hover:border-emerald-200 transition-colors">
                     <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Dra elevbesvarelser hit</p>
-                    <p className="text-[9px] text-slate-300 mt-2">Opptil 50 filer samtidig</p>
+                    <p className="text-[9px] text-slate-300 mt-2">Sider grupperes automatisk</p>
                   </div>
                 </div>
                 <div className="mt-8 space-y-2">
