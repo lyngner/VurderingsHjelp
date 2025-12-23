@@ -21,6 +21,8 @@ export interface Page {
   identifiedTasks?: string[];
   status: 'pending' | 'processing' | 'completed' | 'error';
   isCached?: boolean;
+  rotation?: number; // 0, 90, 180, 270 grader
+  zoom?: number; // Zoom-faktor (1.0 = normal)
 }
 
 export interface TaskEvaluation {
@@ -80,4 +82,7 @@ export interface Project {
   unprocessedPages?: Page[];
   rubric: Rubric | null;
   status: 'draft' | 'processing' | 'review' | 'completed';
+  // Metadata for oversikt
+  totalTasks?: number;
+  totalParts?: number;
 }

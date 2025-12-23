@@ -1,11 +1,36 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { Page, Candidate, Rubric } from "../types";
+import { getFromGlobalCache, saveToGlobalCache } from "./storageService";
+
+const cleanJson = (text: string | undefined): string => {
+  if (!text) return "[]";
+  return text.replace(/```json/g, "").replace(/```/g, "").trim();
+};
+
+/**
+ * Robust retry-mekanisme med exponential backoff for å håndtere 500-feil og nettverksbrudd.
+ */
+async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 2000): Promise<T> {
+  try {
+    return await fn();
+  } catch (error: any) {
+    const isNetworkError = error?.message?.includes('fetch') || error?.message?.includes('Network');
+    const isServerError = error?.status === 500 || error?.message?.includes('Internal error');
+    
+    if ((isNetworkError || isServerError) && retries > 0) {
+      console.warn(`API-feil oppsto. Prøver på nytt om ${delay}ms... (${retries} forsøk igjen)`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return retry(fn, retries - 1, delay * 2);
+    }
+    throw error;
+  }
+}
 
 class RateLimiter {
   private queue: Promise<any> = Promise.resolve();
   private lastRequestTime: number = 0;
-  private readonly MIN_DELAY = 3000;
+  private readonly MIN_DELAY = 1000; 
 
   async schedule<T>(fn: () => Promise<T>): Promise<T> {
     this.queue = this.queue.then(async () => {
@@ -15,20 +40,7 @@ class RateLimiter {
         await new Promise(resolve => setTimeout(resolve, this.MIN_DELAY - timeSinceLast));
       }
       this.lastRequestTime = Date.now();
-
-      let attempt = 0;
-      const maxRetries = 3;
-      while (attempt < maxRetries) {
-        try {
-          return await fn();
-        } catch (error: any) {
-          attempt++;
-          if ((error?.message?.includes("429") || error?.message?.includes("Quota")) && attempt < maxRetries) {
-            await new Promise(resolve => setTimeout(resolve, 5000 * attempt));
-          } else throw error;
-        }
-      }
-      throw new Error("API Limit reached");
+      return retry(fn);
     });
     return this.queue;
   }
@@ -36,167 +48,126 @@ class RateLimiter {
 
 const limiter = new RateLimiter();
 
-export const transcribeAndAnalyzeImage = async (page: Page): Promise<any[]> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+export const analyzeTextContent = async (text: string): Promise<any> => {
   return limiter.schedule(async () => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const prompt = `Analyser følgende uthentede tekst fra en elevbesvarelse (inkludert eventuelle headere/footere).
+    DIN OPPGAVE:
+    1. Identifiser Kandidatnummer (Candidate ID). Se spesielt etter tall inne i merkelapper som [HEADER/FOOTER: ...].
+    2. Identifiser hvilken del av prøven dette er (Part, f.eks "Del 1" eller "Del 2").
+    3. Finn sidetall hvis oppgitt.
+    
+    TEKST:
+    ${text}
+    
+    Returner JSON: { "candidateId": "streng", "part": "streng", "pageNumber": tall, "fullText": "original tekst" }`;
+
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: {
-        parts: [
-          { inlineData: { mimeType: page.mimeType, data: page.base64Data } },
-          { text: `Analyse denne elevbesvarelsen. 
-          VIKTIG: Identifiser om dette er 'Del 1' eller 'Del 2' (eller lignende). 
-          Finn Kandidatnr og Sidenr. 
-          Transkriber innholdet og koble det til oppgaver (f.eks. Oppgave '1a'). 
-          Bruk LaTeX ($...$) for matematikk.
-          Returner JSON.` }
-        ],
-      },
+      contents: prompt,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              candidateId: { type: Type.STRING },
-              part: { type: Type.STRING, description: "F.eks 'Del 1' eller 'Del 2'" },
-              pageNumber: { type: Type.NUMBER },
-              tasks: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    taskNum: { type: Type.STRING },
-                    subTask: { type: Type.STRING },
-                    text: { type: Type.STRING }
-                  },
-                  required: ["taskNum", "text"]
-                }
-              },
-              fullText: { type: Type.STRING }
-            },
-            required: ["candidateId", "part", "pageNumber", "tasks", "fullText"]
-          }
+          type: Type.OBJECT,
+          properties: {
+            candidateId: { type: Type.STRING },
+            part: { type: Type.STRING },
+            pageNumber: { type: Type.NUMBER },
+            fullText: { type: Type.STRING }
+          },
+          required: ["candidateId", "part", "pageNumber", "fullText"]
         }
       }
     });
-    return JSON.parse(response.text || "[]");
+    return JSON.parse(cleanJson(response.text));
+  });
+};
+
+export const transcribeAndAnalyzeImage = async (page: Page): Promise<any[]> => {
+  const cachedData = await getFromGlobalCache(page.contentHash);
+  if (cachedData) return cachedData;
+
+  return limiter.schedule(async () => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const systemInstruction = `Du er en ekspert på OCR av håndskrevne elevbesvarelser i matematikk.
+    DIN OPPGAVE:
+    1. Identifiser Kandidatnummer og Sidenummer (se ofte øverst til høyre eller i headere).
+    2. Transkriber ALL tekst ordrett. Bevar norske bokstaver (æ, ø, å).
+    3. MATEMATIKK-REGLER: IKKE bruk LaTeX-delimitere som $. Bruk ren tekst-notasjon som x^2, lim x->0.
+    4. Returner JSON med candidateId, part, pageNumber, og fullText.`;
+
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: {
+          parts: [
+            { inlineData: { mimeType: page.mimeType, data: page.base64Data } },
+            { text: systemInstruction }
+          ],
+        },
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                candidateId: { type: Type.STRING },
+                part: { type: Type.STRING },
+                pageNumber: { type: Type.NUMBER },
+                fullText: { type: Type.STRING }
+              },
+              required: ["candidateId", "part", "pageNumber", "fullText"]
+            }
+          }
+        }
+      });
+      const results = JSON.parse(cleanJson(response.text));
+      await saveToGlobalCache(page.contentHash, results);
+      return results;
+    } catch (error) {
+      console.error("OCR feilet etter forsøk:", error);
+      throw error;
+    }
   });
 };
 
 export const generateRubricFromTaskAndSamples = async (taskFiles: Page[], taskDescription: string, samples: string[]): Promise<Rubric> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   return limiter.schedule(async () => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const parts: any[] = taskFiles.map(f => ({ 
       inlineData: { mimeType: f.mimeType, data: f.base64Data } 
     }));
-    
-    const promptText = `Lag en detaljert rettemanual. 
-    Prøven kan ha flere deler (Del 1, Del 2). Identifiser disse tydelig.
-    Bruk LaTeX ($...$) for alle formler.
-    Inkluder 'commonErrors' basert på disse eksemplene fra elevene:
-    ${samples.join("\n---\n")}`;
+    const promptText = `Lag en profesjonell rettemanual basert på oppgavearkene og elev-eksemplene.
+    ${samples.join("\n---\n")}
+    Returner JSON med title, totalMaxPoints og criteria-liste.`;
 
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: { parts: [...parts, { text: promptText }] },
       config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            title: { type: Type.STRING },
-            totalMaxPoints: { type: Type.NUMBER },
-            criteria: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  part: { type: Type.STRING, description: "F.eks 'Del 1'" },
-                  description: { type: Type.STRING },
-                  suggestedSolution: { type: Type.STRING },
-                  tema: { type: Type.STRING },
-                  maxPoints: { type: Type.NUMBER },
-                  commonErrors: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        error: { type: Type.STRING },
-                        deduction: { type: Type.NUMBER }
-                      },
-                      required: ["error", "deduction"]
-                    }
-                  }
-                },
-                required: ["name", "part", "description", "suggestedSolution", "maxPoints", "tema", "commonErrors"]
-              }
-            }
-          },
-          required: ["title", "totalMaxPoints", "criteria"]
-        }
+        responseMimeType: "application/json"
       }
     });
-    return JSON.parse(response.text || "{}");
+    return JSON.parse(cleanJson(response.text)) as Rubric;
   });
 };
 
-export const evaluateCandidate = async (candidate: Candidate, rubric: Rubric, taskContext: string): Promise<any> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+export const evaluateCandidate = async (candidate: Candidate, rubric: Rubric, taskContext: string): Promise<NonNullable<Candidate['evaluation']>> => {
   return limiter.schedule(async () => {
-    let contentToEvaluate = "";
-    if (candidate.structuredAnswers) {
-      Object.entries(candidate.structuredAnswers.parts).forEach(([partName, tasks]) => {
-        contentToEvaluate += `\n--- ${partName.toUpperCase()} ---\n`;
-        Object.entries(tasks).forEach(([taskNum, taskContent]) => {
-          contentToEvaluate += `OPPGAVE ${taskNum}:\n`;
-          Object.entries(taskContent.subtasks).forEach(([sub, text]) => {
-            contentToEvaluate += `${sub ? `(${sub}) ` : ''}${text}\n`;
-          });
-        });
-      });
-    } else {
-      contentToEvaluate = candidate.pages
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    let contentToEvaluate = candidate.pages
         .sort((a,b) => (a.part||"").localeCompare(b.part||"") || (a.pageNumber||0)-(b.pageNumber||0))
         .map(p => `[${p.part || 'Ukjent Del'}] SIDE ${p.pageNumber}: ${p.transcription}`).join("\n\n");
-    }
 
     const response = await ai.models.generateContent({
       model: 'gemini-3-pro-preview',
-      contents: `Vurder besvarelsen mot manualen. Vær obs på at Del 1 og Del 2 kan ha samme oppgavenummer.
-      BESVARELSE:\n${contentToEvaluate}\n\nMANUAL:\n${JSON.stringify(rubric)}`,
+      contents: `Vurder besvarelsen mot manualen: ${JSON.stringify(rubric)}\n\nBESVARELSE:\n${contentToEvaluate}`,
       config: {
-        thinkingConfig: { thinkingBudget: 8192 },
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            grade: { type: Type.STRING },
-            feedback: { type: Type.STRING },
-            score: { type: Type.NUMBER },
-            vekstpunkter: { type: Type.ARRAY, items: { type: Type.STRING } },
-            taskBreakdown: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  taskName: { type: Type.STRING },
-                  part: { type: Type.STRING },
-                  score: { type: Type.NUMBER },
-                  max: { type: Type.NUMBER },
-                  tema: { type: Type.STRING },
-                  comment: { type: Type.STRING }
-                },
-                required: ["taskName", "part", "score", "max", "tema", "comment"]
-              }
-            }
-          },
-          required: ["grade", "feedback", "score", "vekstpunkter", "taskBreakdown"]
-        }
+        thinkingConfig: { thinkingBudget: 12000 },
+        responseMimeType: "application/json"
       }
     });
-    return JSON.parse(response.text || "{}");
+    return JSON.parse(cleanJson(response.text)) as NonNullable<Candidate['evaluation']>;
   });
 };
