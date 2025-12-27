@@ -1,29 +1,48 @@
 
-# ElevVurdering PRO - V2
+# ElevVurdering PRO - Brukermanual & Teknisk Dokumentasjon
 
-ElevVurdering PRO er et spesialisert verktøy designet for lærere som ønsker å digitalisere, transkribere og vurdere håndskrevne elevbesvarelser ved hjelp av avansert kunstig intelligens (Google Gemini).
-
-## 🌟 Kritisk Funksjonalitetslogg (Feature Log)
-*For å forhindre de-generering av appen, må følgende funksjoner alltid vedlikeholdes:*
-
-1.  **Global OCR Cache:** Sider hashes basert på innhold. Ved gjenbruk av samme fil (på tvers av prosjekter) hentes transkripsjon umiddelbart fra `global_cache` i IndexedDB uten API-kall.
-2.  **Duplikatsjekk:** Systemet hindrer opplasting av samme side flere ganger i samme prosjekt ved å sjekke hashes før prosessering.
-3.  **Discovery Search:** Knappen "Finn tidligere besvarelser" søker gjennom hele databasen etter besvarelser som ikke finnes i nåværende prosjekt.
-4.  **Inkrementell Gruppestatistikk:** Resultatvisningen gir umiddelbar snittberegning og fremgangsoversikt så snart første elev er vurdert.
-5.  **Varmekart (Heatmap):** En fargekodet tabell som viser alle elever mot alle oppgaver for rask identifisering av kollektive misforståelser i klassen.
-6.  **A3 Symmetrisk Splitting:** Automatisk deteksjon og deling av brede bilder.
-7.  **Auto-LaTeX Rendering:** Bruker MathJax for profesjonell visning av matematiske formler i både transkripsjon og fasit.
+## 🚀 Versjon 3.0 - Analyse & Gruppeoversikt
+Denne versjonen introduserer avansert statistikk og en helhetlig gruppeoversikt for å gi læreren bedre innsikt i klassens prestasjoner.
 
 ---
 
-## 🛠 Teknisk Løsning
+## 🏗 Prosjektets Fire Hovedfaser
 
-### Arkitektur
-*   **Frontend:** React 19 + Tailwind CSS.
-*   **KI-Motor:** `gemini-3-flash-preview` og `gemini-3-pro-preview`.
-*   **Lokal Lagring:** IndexedDB (`projects` og `global_cache`).
+### 1. Innlasting (Setup) - `SetupStep.tsx`
+*   **Hovedoppgave**: Samle inn oppgaveark (fasit) og elevbesvarelser.
+*   **Viktig funksjonalitet**: Automatisk gruppering via OCR, køhåndtering og lokal bildeoptimalisering.
 
-## 🔐 Personvern (GDPR)
-*   Appen er bygget etter "Privacy by Design".
-*   Ingen elevdata lagres sentralt; alt forblir i lærerens lokale nettleserdatabase.
-*   API-kall til Google Gemini brukes kun til prosessering, ikke trening av modeller (enterprise-standard).
+### 2. Kontroll (Review) - `ReviewStep.tsx`
+*   **Hovedoppgave**: Verifisere transkripsjon mot originalbilder.
+*   **Viktig funksjonalitet**: Side-om-side visning, justerbar splitter, LaTeX-rendring og bilderotering.
+
+### 3. Rettemanual (Rubric) - `RubricStep.tsx`
+*   **Hovedoppgave**: Definere vurderingsstandarder.
+*   **Viktig funksjonalitet**: KI-generert rettemanual med fasit og poengrammer.
+
+### 4. Resultater (Results) - `ResultsStep.tsx`
+*   **Hovedoppgave**: Analyse av resultater på både individ- og gruppenivå.
+*   **Ny Funksjonalitet**:
+    *   **Gruppeoversikt**: Dashbord med gjennomsnittlig poengsum og karakterfordeling.
+    *   **Kandidattabell**: En samlet oversikt over alle elever, deres status, poeng og karakter.
+    *   **Individuell Rapport**: Dypdykk i hver elevs prestasjon med konkrete vekstpunkter og poeng per oppgave.
+    *   **Utskriftsoptimalisert**: Både gruppeoversikten og elevrapportene er designet for profesjonell utskrift.
+
+---
+
+## 📊 Dataspesifikasjoner (JSON)
+
+### Vurderingsrapport (`Evaluation`)
+- `grade`: Karakterforslag (1-6).
+- `score`: Oppnådde poeng totalt.
+- `feedback`: Pedagogisk begrunnelse.
+- `vekstpunkter`: Liste med konkrete tips.
+- `taskBreakdown`: Detaljert poengoversikt per deloppgave inkludert kommentarer.
+
+---
+
+## 🛠 Teknisk Arkitektur
+- **Frontend**: Modulær React-arkitektur.
+- **KI**: Gemini 3 Flash (OCR/Setup) og Gemini 3 Pro (Vurdering).
+- **Persistence**: IndexedDB for sikker lokal lagring av store bildemengder.
+- **Statistikk**: Sanntids beregning av gruppedata via `useMemo` for optimal ytelse.
