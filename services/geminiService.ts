@@ -1,5 +1,4 @@
-
-import { GoogleGenAI, Type, Modality } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { Page, Candidate, Rubric } from "../types";
 import { getFromGlobalCache, saveToGlobalCache } from "./storageService";
 
@@ -21,15 +20,13 @@ const cleanJson = (text: string | undefined): string => {
   return cleaned;
 };
 
-async function retry<T>(fn: () => Promise<T>, retries = 4, delay = 3000): Promise<T> {
+async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 2000): Promise<T> {
   try {
     return await fn();
   } catch (error: any) {
-    const isRateLimit = error?.message?.includes('429') || error?.status === 429;
-    const waitTime = isRateLimit ? delay * 2 : delay;
-    if (retries > 0) {
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-      return retry(fn, retries - 1, waitTime * 1.5);
+    if (retries > 0 && (error?.status === 429 || error?.message?.includes('429'))) {
+      await new Promise(resolve => setTimeout(resolve, delay * 2));
+      return retry(fn, retries - 1, delay * 2);
     }
     throw error;
   }
@@ -46,7 +43,6 @@ class RateLimiter {
     }
     this.activeCount++;
     try {
-      await new Promise(resolve => setTimeout(resolve, 300));
       return await retry(fn);
     } finally {
       this.activeCount--;
@@ -60,21 +56,6 @@ class RateLimiter {
 
 const limiter = new RateLimiter();
 
-export const analyzeTextContent = async (text: string): Promise<any> => {
-  return limiter.schedule(async () => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: `Analyser tekst og trekk ut kandidatinformasjon: ${text}`,
-      config: { 
-        systemInstruction: "Returner KUN gyldig JSON. Bruk LaTeX ($...$) for matematiske formler.",
-        responseMimeType: "application/json"
-      }
-    });
-    return JSON.parse(cleanJson(response.text));
-  });
-};
-
 export const transcribeAndAnalyzeImage = async (page: Page): Promise<any> => {
   const cachedData = await getFromGlobalCache(page.contentHash);
   if (cachedData) return cachedData;
@@ -86,59 +67,92 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<any> => {
       contents: {
         parts: [
           { inlineData: { mimeType: page.mimeType, data: page.base64Data } }, 
-          { text: "Transkriber alt innhold på denne siden nøyaktig. Identifiser også kandidatnummer, del (f.eks. 'Del 1') og sidetall hvis det er synlig." }
+          { text: "Transkriber alt innhold og finn kandidat-ID." }
         ],
       },
       config: { 
-        systemInstruction: "Du er en ekspert på OCR og eksamensretting. Din oppgave er å trekke ut data fra skannede elevbesvarelser. Finn kandidatnummer/ID (ofte øverst), hvilken del av prøven det er, og sidetallet. Deretter skal du transkribere ALL håndskreven og trykket tekst på siden nøyaktig. Bruk LaTeX ($...$) for matematiske formler. Hvis du ikke finner KandidatID, bruk filnavnet eller returner 'Ukjent'.",
+        systemInstruction: "OCR-ekspert. Finn KandidatID, Part, PageNumber og FullText. Svar KUN JSON.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            candidateId: { type: Type.STRING, description: "Kandidatnummer eller ID funnet på siden." },
-            part: { type: Type.STRING, description: "Del av prøven (f.eks. 'Del 1' eller 'Del 2')." },
-            pageNumber: { type: Type.INTEGER, description: "Sidetallet i besvarelsen." },
-            fullText: { type: Type.STRING, description: "Fullstendig og nøyaktig transkripsjon av alt innhold på siden." }
+            candidateId: { type: Type.STRING },
+            part: { type: Type.STRING },
+            pageNumber: { type: Type.INTEGER },
+            fullText: { type: Type.STRING }
           },
           required: ["fullText", "candidateId"]
         }
       }
     });
     
-    const text = response.text;
-    if (!text) throw new Error("API returnerte tom tekst");
-    
-    const results = JSON.parse(cleanJson(text));
+    const results = JSON.parse(cleanJson(response.text));
     await saveToGlobalCache(page.contentHash, results);
     return results;
   });
 };
 
-export const generateRubricFromTaskAndSamples = async (taskFiles: Page[], taskDescription: string, samples: string[]): Promise<Rubric> => {
+/**
+ * Analyserer ren tekst (f.eks. fra Word) for å finne kandidat-ID og metadata.
+ */
+export const analyzeTextContent = async (text: string): Promise<any> => {
   return limiter.schedule(async () => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const parts: any[] = (taskFiles || []).map(f => f.base64Data ? { inlineData: { mimeType: f.mimeType, data: f.base64Data } } : { text: f.transcription });
-    
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: { parts: [...parts, { text: "Lag en detaljert rettemanual basert på disse oppgavene. Inkluder løsningsforslag med LaTeX." }] },
+      contents: {
+        parts: [
+          { text: `Analyser følgende tekst fra et elevdokument og finn kandidat-ID, navn eller referansenummer. Dette står ofte øverst i dokumentet eller i en 'topptekst' (header).\n\nVIKTIG: Prioriter de første 10 linjene med tekst.\n\nTEKST:\n${text.substring(0, 5000)}` }
+        ],
+      },
       config: { 
-        systemInstruction: "Generer en strukturert rettemanual i JSON-format. Manualen må inneholde en liste over kriterier/oppgaver med beskrivelse, fasit/løsningsforslag og maksimal poengsum.",
+        systemInstruction: "Dokumentanalytiker. Din oppgave er å identifisere hvem som har skrevet dokumentet. Se etter 'Kandidatnr', 'Navn', 'Elev-ID', 'Navn:' eller bare tallrekker som ligner på kandidatnumre, spesielt i starten av dokumentet. Svar KUN JSON.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            title: { type: Type.STRING, description: "Tittel på prøven/vurderingen." },
+            candidateId: { type: Type.STRING, description: "Kandidatnummer eller ID. Bruk 'Ukjent' hvis ikke funnet." },
+            name: { type: Type.STRING, description: "Fullt navn hvis det finnes i teksten." },
+            part: { type: Type.STRING },
+            pageNumber: { type: Type.INTEGER },
+            fullText: { type: Type.STRING }
+          },
+          required: ["candidateId", "fullText"]
+        }
+      }
+    });
+    
+    const res = JSON.parse(cleanJson(response.text));
+    return { ...res, fullText: text };
+  });
+};
+
+export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promise<Rubric> => {
+  return limiter.schedule(async () => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const parts: any[] = taskFiles.map(f => ({ inlineData: { mimeType: f.mimeType, data: f.base64Data } }));
+    
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: { parts: [...parts, { text: "Lag en detaljert rettemanual basert på disse oppgavearkene." }] },
+      config: { 
+        systemInstruction: "Du skal lage en profesjonell rettemanual. Finn alle oppgaver, deres poengsum (standard 2 poeng hvis ikke oppgitt) og lag et løsningsforslag med LaTeX ($...$). Inkluder også en beskrivelse av 'vanlige feil' og hvordan disse skal poenggis for hver deloppgave. Svar KUN JSON.",
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            title: { type: Type.STRING },
             criteria: {
               type: Type.ARRAY,
               items: {
                 type: Type.OBJECT,
                 properties: {
-                  name: { type: Type.STRING, description: "Oppgavenummer eller navn (f.eks '1a')." },
-                  description: { type: Type.STRING, description: "Hva oppgaven går ut på." },
-                  suggestedSolution: { type: Type.STRING, description: "Fullstendig løsningsforslag/fasit i LaTeX." },
-                  maxPoints: { type: Type.INTEGER, description: "Maksimalt antall poeng for oppgaven." },
-                  tema: { type: Type.STRING, description: "Faglig tema for oppgaven." }
+                  name: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                  suggestedSolution: { type: Type.STRING },
+                  commonErrors: { type: Type.STRING },
+                  maxPoints: { type: Type.INTEGER },
+                  tema: { type: Type.STRING }
                 },
                 required: ["name", "description", "suggestedSolution", "maxPoints"]
               }
@@ -155,16 +169,16 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[], taskDe
   });
 };
 
-export const evaluateCandidate = async (candidate: Candidate, rubric: Rubric, taskContext: string): Promise<NonNullable<Candidate['evaluation']>> => {
+export const evaluateCandidate = async (candidate: Candidate, rubric: Rubric): Promise<any> => {
   return limiter.schedule(async () => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    let content = (candidate.pages || []).map(p => `[${p.part}] SIDE ${p.pageNumber}: ${p.transcription}`).join("\n\n");
+    const content = candidate.pages.map(p => `SIDE ${p.pageNumber}: ${p.transcription}`).join("\n\n");
 
     const response = await ai.models.generateContent({
       model: 'gemini-3-pro-preview',
-      contents: `Vurder denne besvarelsen:\n\n${content}\n\nBruk denne rettemanualen:\n${JSON.stringify(rubric)}`,
+      contents: `Vurder besvarelsen:\n\n${content}\n\nMot manualen:\n${JSON.stringify(rubric)}`,
       config: { 
-        systemInstruction: "Du er en rettferdig sensor. Vurder besvarelsen mot kriteriene og gi konstruktiv tilbakemelding. Svar KUN JSON.",
+        systemInstruction: "Sensor-modus. Gi karakter og detaljert poengsum per oppgave. Bruk rettemanualens beskrivelser av vanlige feil for å trekke poeng korrekt. Svar KUN JSON.",
         thinkingConfig: { thinkingBudget: 16000 }, 
         responseMimeType: "application/json",
         responseSchema: {
@@ -192,6 +206,6 @@ export const evaluateCandidate = async (candidate: Candidate, rubric: Rubric, ta
         }
       }
     });
-    return JSON.parse(cleanJson(response.text)) as any;
+    return JSON.parse(cleanJson(response.text));
   });
 };

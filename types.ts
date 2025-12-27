@@ -1,12 +1,4 @@
 
-export interface TaskContent {
-  subtasks: Record<string, string>; // Deloppgave -> Råtekst
-}
-
-export interface CandidateHierarchy {
-  parts: Record<string, Record<string, TaskContent>>; // Del (f.eks "Del 1") -> Oppgave -> TaskContent
-}
-
 export interface Page {
   id: string;
   fileName: string;
@@ -16,29 +8,26 @@ export interface Page {
   mimeType: string;
   transcription?: string;
   candidateId?: string;
-  part?: string; // F.eks. "Del 1" eller "Del 2"
+  part?: string;
   pageNumber?: number;
   identifiedTasks?: string[];
   status: 'pending' | 'processing' | 'completed' | 'error';
-  isCached?: boolean;
-  rotation?: number; // 0, 90, 180, 270 grader
-  zoom?: number; // Zoom-faktor (1.0 = normal)
+  rotation?: number;
 }
 
 export interface TaskEvaluation {
   taskName: string;
-  part: string; // Hvilken del oppgaven tilhører
+  part?: string;
   score: number;
   max: number;
-  tema: string;
   comment: string;
+  tema?: string;
 }
 
 export interface Candidate {
   id: string;
   name: string; 
   pages: Page[];
-  structuredAnswers?: CandidateHierarchy;
   evaluation?: {
     grade: string;
     feedback: string;
@@ -49,20 +38,14 @@ export interface Candidate {
   status: 'pending' | 'processing' | 'completed' | 'evaluated';
 }
 
-export interface CommonError {
-  error: string;
-  deduction: number;
-  frequency_observation: string;
-}
-
 export interface RubricCriterion {
   name: string;
-  part: string; // Hvilken del kriteriet tilhører
+  part?: string;
   description: string;
   suggestedSolution: string;
+  commonErrors?: string; // Lagt til for vanlige feil og poenggiving
   maxPoints: number;
-  tema: string;
-  commonErrors: CommonError[];
+  tema?: string;
 }
 
 export interface Rubric {
@@ -82,7 +65,4 @@ export interface Project {
   unprocessedPages?: Page[];
   rubric: Rubric | null;
   status: 'draft' | 'processing' | 'review' | 'completed';
-  // Metadata for oversikt
-  totalTasks?: number;
-  totalParts?: number;
 }

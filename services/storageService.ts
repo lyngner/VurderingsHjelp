@@ -27,12 +27,13 @@ const openDB = (): Promise<IDBDatabase> => {
 const DEMO_PROJECT_ID = "demo-r1-heldagsprøve";
 
 const createDemoProject = (): Project => {
+  // Fix: commonErrors changed from [] to "" to match RubricCriterion interface (string | undefined)
   const criteria = [
-    { name: "1a", part: "Del 1", tema: "Logaritmer", suggestedSolution: "2ln x + 2ln 2 + 2", maxPoints: 2, commonErrors: [], description: "" },
-    { name: "1b", part: "Del 1", tema: "Logaritmelikning", suggestedSolution: "x = e^2 / 2", maxPoints: 2, commonErrors: [], description: "" },
-    { name: "2a", part: "Del 1", tema: "Grenseverdi", suggestedSolution: "0", maxPoints: 2, commonErrors: [], description: "" },
-    { name: "2c", part: "Del 1", tema: "Asymptoter", suggestedSolution: "y = -x - 1", maxPoints: 2, commonErrors: [], description: "" },
-    { name: "3c", part: "Del 1", tema: "Kvotientregel", suggestedSolution: "(2 - 4x^2) / e^{x^2+1}", maxPoints: 2, commonErrors: [], description: "" }
+    { name: "1a", part: "Del 1", tema: "Logaritmer", suggestedSolution: "2ln x + 2ln 2 + 2", maxPoints: 2, commonErrors: "", description: "" },
+    { name: "1b", part: "Del 1", tema: "Logaritmelikning", suggestedSolution: "x = e^2 / 2", maxPoints: 2, commonErrors: "", description: "" },
+    { name: "2a", part: "Del 1", tema: "Grenseverdi", suggestedSolution: "0", maxPoints: 2, commonErrors: "", description: "" },
+    { name: "2c", part: "Del 1", tema: "Asymptoter", suggestedSolution: "y = -x - 1", maxPoints: 2, commonErrors: "", description: "" },
+    { name: "3c", part: "Del 1", tema: "Kvotientregel", suggestedSolution: "(2 - 4x^2) / e^{x^2+1}", maxPoints: 2, commonErrors: "", description: "" }
   ];
 
   const rubric: Rubric = {
@@ -73,6 +74,7 @@ const createDemoProject = (): Project => {
         feedback: "Veldig god forståelse for derivasjon og logaritmer. Ryddige utregninger med gode forklaringer.", 
         vekstpunkter: ["Sjekk fortegn i 1c"], 
         taskBreakdown: [
+            // Fix: taskBreakdown objects now match TaskEvaluation interface (tema added to interface)
             { taskName: "1a", part: "Del 1", score: 2, max: 2, tema: "Logaritmer", comment: "Helt korrekt." },
             { taskName: "1b", part: "Del 1", score: 2, max: 2, tema: "Logaritmelikning", comment: "God bruk av definisjonen." }
         ] 
@@ -105,9 +107,8 @@ const createDemoProject = (): Project => {
     candidates: [cand101, cand102, johannes],
     unprocessedPages: [],
     rubric: rubric,
-    status: "completed",
-    totalTasks: 5,
-    totalParts: 1
+    status: "completed"
+    // Fix: removed properties totalTasks and totalParts as they are not defined in Project interface
   };
 };
 

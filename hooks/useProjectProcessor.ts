@@ -1,6 +1,6 @@
 
 import { useState } from 'react';
-import { Project, Page, Candidate } from '../types';
+import { Project, Page } from '../types';
 import { processFileToImages } from '../services/fileService';
 import { 
   transcribeAndAnalyzeImage, 
@@ -25,7 +25,7 @@ export const useProjectProcessor = (
     if (!proj || (proj.taskFiles?.length || 0) === 0) return;
     setRubricStatus({ loading: true, text: 'Analyserer oppgaver...' });
     try {
-      const rubric = await generateRubricFromTaskAndSamples(proj.taskFiles, "", []);
+      const rubric = await generateRubricFromTaskAndSamples(proj.taskFiles);
       updateActiveProject({ rubric });
     } catch (e) {
       console.error("Rubric generation failed:", e);
@@ -37,21 +37,18 @@ export const useProjectProcessor = (
   const integratePageResult = (page: Page, results: any, isError = false) => {
     setActiveProject(prev => {
       if (!prev) return null;
-      
       if (isError) {
         return {
           ...prev,
-          unprocessedPages: (prev.unprocessedPages || []).map(p => 
-            p.id === page.id ? { ...p, status: 'error' as const } : p
-          )
+          unprocessedPages: (prev.unprocessedPages || []).map(p => p.id === page.id ? { ...p, status: 'error' as const } : p)
         };
       }
-
       let cands = [...(prev.candidates || [])];
       const resArr = Array.isArray(results) ? results : [results];
-      
       resArr.forEach((res: any) => {
         const cId = String(res.candidateId || "Ukjent");
+        const cName = res.name || `Kandidat ${cId}`;
+        
         let candIndex = cands.findIndex(c => c.id === cId);
         const newPage: Page = { 
           ...page, 
@@ -63,15 +60,18 @@ export const useProjectProcessor = (
         };
         
         if (candIndex === -1) {
-          cands.push({ id: cId, name: `Kandidat ${cId}`, status: 'completed', pages: [newPage] });
+          cands.push({ id: cId, name: cName, status: 'completed', pages: [newPage] });
         } else {
+          // Oppdater navn hvis vi fant et mer spesifikt ett i dette dokumentet
+          if (res.name && cands[candIndex].name === `Kandidat ${cId}`) {
+            cands[candIndex].name = res.name;
+          }
           const pageExists = cands[candIndex].pages.some(p => p.contentHash === page.contentHash);
           if (!pageExists) {
             cands[candIndex] = { ...cands[candIndex], pages: [...cands[candIndex].pages, newPage] };
           }
         }
       });
-
       return { 
         ...prev, 
         candidates: cands, 
@@ -82,18 +82,10 @@ export const useProjectProcessor = (
 
   const processSinglePage = async (page: Page) => {
     try {
-      // Oppdater status til pending mens vi prøver på nytt
-      setActiveProject(prev => prev ? ({
-        ...prev,
-        unprocessedPages: (prev.unprocessedPages || []).map(p => p.id === page.id ? { ...p, status: 'pending' as const } : p)
-      }) : null);
-      
-      const res = page.mimeType === 'text/plain' 
-        ? await analyzeTextContent(page.transcription!) 
-        : await transcribeAndAnalyzeImage(page);
+      setActiveProject(prev => prev ? ({ ...prev, unprocessedPages: (prev.unprocessedPages || []).map(p => p.id === page.id ? { ...p, status: 'pending' as const } : p) }) : null);
+      const res = page.mimeType === 'text/plain' ? await analyzeTextContent(page.transcription!) : await transcribeAndAnalyzeImage(page);
       integratePageResult(page, res);
     } catch (e) {
-      console.error(`Failed to process page ${page.fileName}:`, e);
       integratePageResult(page, null, true);
     } finally {
       setProcessingCount(prev => Math.max(0, prev - 1));
@@ -104,7 +96,6 @@ export const useProjectProcessor = (
     if (!activeProject) return;
     const fileList = Array.from(files);
     setProcessingCount(prev => prev + fileList.length);
-
     try {
       const allNewTaskPages: Page[] = [];
       for (const file of fileList) {
@@ -146,7 +137,7 @@ export const useProjectProcessor = (
       const cands = [...(activeProject.candidates || [])];
       for (let i = 0; i < cands.length; i++) {
         if (cands[i].status === 'evaluated') continue;
-        const evalRes = await evaluateCandidate(cands[i], activeProject.rubric, "");
+        const evalRes = await evaluateCandidate(cands[i], activeProject.rubric);
         cands[i] = { ...cands[i], evaluation: evalRes, status: 'evaluated' };
         setActiveProject(prev => prev ? { ...prev, candidates: [...cands] } : null);
       }
