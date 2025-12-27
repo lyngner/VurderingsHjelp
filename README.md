@@ -1,48 +1,39 @@
 
 # ElevVurdering PRO - Brukermanual & Teknisk Dokumentasjon
 
-## 🚀 Versjon 3.0 - Analyse & Gruppeoversikt
-Denne versjonen introduserer avansert statistikk og en helhetlig gruppeoversikt for å gi læreren bedre innsikt i klassens prestasjoner.
+## 🚀 Versjon 3.2 - Optimalisert Arkitektur
+Denne versjonen har skilt ut all "tung" forretningslogikk fra brukergrensesnittet for å øke robustheten.
 
 ---
 
-## 🏗 Prosjektets Fire Hovedfaser
+## 🏗 Prosjektets Arkitektur
 
-### 1. Innlasting (Setup) - `SetupStep.tsx`
-*   **Hovedoppgave**: Samle inn oppgaveark (fasit) og elevbesvarelser.
-*   **Viktig funksjonalitet**: Automatisk gruppering via OCR, køhåndtering og lokal bildeoptimalisering.
+### 🆕 Tjenestelag (Services & Hooks)
+For å gjøre appen robust, har vi flyttet logikken ut av komponentene:
 
-### 2. Kontroll (Review) - `ReviewStep.tsx`
-*   **Hovedoppgave**: Verifisere transkripsjon mot originalbilder.
-*   **Viktig funksjonalitet**: Side-om-side visning, justerbar splitter, LaTeX-rendring og bilderotering.
+*   **`services/fileService.ts`**: Hjertet i filhåndteringen. Ansvarlig for å konvertere PDF-sider til bilder og lese DOCX-tekst. Ved å isolere dette kan vi enkelt oppgradere bildekvaliteten eller legge til nye filtyper uten å røre UI-koden.
+*   **`hooks/useProjectProcessor.ts`**: Orkestrerer arbeidsflyten. Den vet *når* et oppgaveark skal sendes til Gemini for å lage en rettemanual, og *hvordan* en elevside skal integreres i riktig kandidatmappe. Den fungerer som en bro mellom brukerens handlinger og KI-tjenestene.
+*   **`services/geminiService.ts`**: Håndterer API-forespørsler til Google. Inkluderer robust feilhåndtering (`retry`) og begrensning av samtidig aktivitet (`RateLimiter`) for å unngå krasj ved store opplastinger.
 
-### 3. Rettemanual (Rubric) - `RubricStep.tsx`
-*   **Hovedoppgave**: Definere vurderingsstandarder.
-*   **Viktig funksjonalitet**: KI-generert rettemanual med fasit og poengrammer.
-
-### 4. Resultater (Results) - `ResultsStep.tsx`
-*   **Hovedoppgave**: Analyse av resultater på både individ- og gruppenivå.
-*   **Ny Funksjonalitet**:
-    *   **Gruppeoversikt**: Dashbord med gjennomsnittlig poengsum og karakterfordeling.
-    *   **Kandidattabell**: En samlet oversikt over alle elever, deres status, poeng og karakter.
-    *   **Individuell Rapport**: Dypdykk i hver elevs prestasjon med konkrete vekstpunkter og poeng per oppgave.
-    *   **Utskriftsoptimalisert**: Både gruppeoversikten og elevrapportene er designet for profesjonell utskrift.
+### 🖼 Grensesnitt (Components)
+*   **`App.tsx`**: Fungerer nå kun som en navigasjons-sentral og lagrer den overordnede tilstanden for det aktive prosjektet.
+*   **`Dashboard.tsx`**: Håndterer prosjektarkivet. Her kan læreren se historikk og administrere sletting. Inkluderer også GDPR-panelet (Tannhjulet).
+*   **`SetupStep.tsx`**: Spesialisert visning for innlasting. Viser sanntidsstatus på hva som prosesseres.
+*   **`ReviewStep.tsx`**: Kvalitetskontroll. Lar læreren manuelt korrigere KI-transkripsjoner dersom håndskriften er spesielt utfordrende.
+*   **`RubricStep.tsx`**: Viser den KI-genererte rettemanualen og lar læreren be om en ny versjon dersom kriteriene må finpusses.
+*   **`ResultsStep.tsx`**: Sluttrapportene. Gir både klasseoversikt og detaljerte enkeltelev-rapporter.
 
 ---
 
-## 📊 Dataspesifikasjoner (JSON)
-
-### Vurderingsrapport (`Evaluation`)
-- `grade`: Karakterforslag (1-6).
-- `score`: Oppnådde poeng totalt.
-- `feedback`: Pedagogisk begrunnelse.
-- `vekstpunkter`: Liste med konkrete tips.
-- `taskBreakdown`: Detaljert poengoversikt per deloppgave inkludert kommentarer.
+## 🔒 GDPR & Personvern
+Appen er bygget med "Privacy by Design":
+1.  **Ingen sky-lagring**: All data lagres i din nettlesers `IndexedDB`.
+2.  **Lokal prosessering**: PDF-splitting og DOCX-lesing skjer 100% lokalt på din maskin.
+3.  **Sikker KI-overføring**: Bilder sendes kun til Google Gemini for analyse og lagres ikke der permanent i henhold til Enterprise-vilkår.
 
 ---
 
-## 🛠 Teknisk Arkitektur
-- **Frontend**: Modulær React-arkitektur.
-- **KI**: Gemini 3 Flash (OCR/Setup) og Gemini 3 Pro (Vurdering).
-- **Persistence**: IndexedDB for sikker lokal lagring av store bildemengder.
-- **Statistikk**: Sanntids beregning av gruppedata via `useMemo` for optimal ytelse.
+## 🛠 For Utviklere
+- **Modulær design**: Nye funksjoner legges til som Hooks eller Services.
+- **Robusthet**: Separation of Concerns sikrer at feil i én modul ikke senker hele skipet.
+- **Ytelse**: Bruker IndexedDB for rask tilgang til store bilde-filer uten å belaste RAM.

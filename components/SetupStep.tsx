@@ -24,11 +24,11 @@ export const SetupStep: React.FC<SetupStepProps> = ({
 }) => {
   return (
     <div className="p-8 max-w-[1200px] mx-auto h-full flex flex-col overflow-hidden">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 h-full">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 h-full max-h-[85vh]">
         
         {/* KOLONNE 1: OPPGAVE / FASIT */}
-        <div className="bg-white rounded-[45px] shadow-sm border border-slate-100 flex flex-col overflow-hidden">
-          <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/30">
+        <div className="bg-white rounded-[45px] shadow-sm border border-slate-100 flex flex-col overflow-hidden h-full">
+          <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/30 shrink-0">
             <div className="flex flex-col">
               <h3 className="font-black text-[11px] uppercase text-slate-400 tracking-widest">1. Oppgave / Fasit</h3>
               <p className="text-[9px] text-slate-400 font-bold">Grunnlag for rettemanual</p>
@@ -39,51 +39,42 @@ export const SetupStep: React.FC<SetupStepProps> = ({
           </div>
 
           <div className="p-8 flex-1 flex flex-col gap-6 overflow-hidden">
-            {/* Dropzone */}
+            {/* Dropzone - Låst høyde for symmetri */}
             <div className="relative group h-32 shrink-0">
               <input type="file" multiple accept=".pdf,.docx,.jpg,.jpeg,.png" onChange={e => e.target.files && handleTaskFileSelect(e.target.files)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
               <div className="border-2 border-dashed border-slate-100 rounded-[25px] h-full flex flex-col items-center justify-center p-4 text-center group-hover:border-indigo-200 transition-colors bg-slate-50/50">
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Velg oppgaveark</p>
+                <p className="text-[8px] text-slate-300 mt-1 uppercase font-bold tracking-tighter">Slipp filer her</p>
               </div>
             </div>
 
-            {/* List area */}
+            {/* Filliste - Skrollbar uten å påvirke layout */}
             <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-2">
               {(activeProject?.taskFiles || []).length === 0 && (
                 <div className="h-full flex items-center justify-center text-slate-300 text-[10px] font-bold uppercase tracking-widest opacity-50">
-                  Ingen filer valgt
+                  Ingen oppgaveark valgt
                 </div>
               )}
               {(activeProject?.taskFiles || []).map(f => (
                 <div key={f.id} className="text-[10px] font-bold bg-white p-4 rounded-2xl border border-slate-100 flex justify-between items-center shadow-sm animate-in fade-in slide-in-from-bottom-1">
                   <span className="truncate flex-1 pr-4">{f.fileName}</span>
-                  <span className="text-[8px] bg-slate-100 text-slate-400 px-2 py-0.5 rounded">PDF</span>
+                  {rubricStatus.loading ? (
+                    <div className="flex items-center gap-3">
+                      <span className="text-[8px] text-indigo-400 font-black uppercase tracking-tight">Analyserer...</span>
+                      <Spinner size="w-3 h-3" />
+                    </div>
+                  ) : (
+                    <span className="text-[8px] bg-slate-100 text-slate-400 px-2 py-0.5 rounded shrink-0">KLAR</span>
+                  )}
                 </div>
               ))}
             </div>
-
-            {/* Action Button */}
-            {(activeProject?.taskFiles?.length || 0) > 0 && (
-              <button 
-                onClick={handleGenerateRubric} 
-                disabled={rubricStatus.loading} 
-                className={`w-full py-5 rounded-2xl text-[10px] font-black uppercase transition-all shadow-lg active:scale-95 flex items-center justify-center gap-3 shrink-0 ${
-                  rubricStatus.loading ? 'bg-indigo-50 text-indigo-400' : 'bg-slate-800 text-white hover:bg-indigo-600'
-                }`}
-              >
-                {rubricStatus.loading ? (
-                  <><Spinner color="text-indigo-400" /><span>Analyserer...</span></>
-                ) : (
-                  activeProject.rubric ? 'Oppdater Rettemanual →' : 'Lag Rettemanual →'
-                )}
-              </button>
-            )}
           </div>
         </div>
         
         {/* KOLONNE 2: ELEVBESVARELSER */}
-        <div className="bg-white rounded-[45px] shadow-sm border border-slate-100 flex flex-col overflow-hidden">
-          <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/30">
+        <div className="bg-white rounded-[45px] shadow-sm border border-slate-100 flex flex-col overflow-hidden h-full">
+          <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/30 shrink-0">
             <div className="flex flex-col">
               <h3 className="font-black text-[11px] uppercase text-slate-400 tracking-widest">2. Elevbesvarelser</h3>
               <p className="text-[9px] text-slate-400 font-bold">Skannede jpg/pdf-filer</p>
@@ -94,38 +85,41 @@ export const SetupStep: React.FC<SetupStepProps> = ({
           </div>
 
           <div className="p-8 flex-1 flex flex-col gap-6 overflow-hidden">
-            {/* Dropzone */}
+            {/* Dropzone - Samme høyde for symmetri */}
             <div className="relative group h-32 shrink-0">
               <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png" onChange={e => e.target.files && handleCandidateFileSelect(e.target.files)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
               <div className="border-2 border-dashed border-slate-100 rounded-[25px] h-full flex flex-col items-center justify-center p-4 text-center group-hover:border-emerald-200 transition-colors bg-slate-50/50">
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Legg til elevsider</p>
+                <p className="text-[8px] text-slate-300 mt-1 uppercase font-bold tracking-tighter">JPG eller PDF</p>
               </div>
             </div>
 
-            {/* List area */}
+            {/* List area - Skrollbar */}
             <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-3">
               {(activeProject?.unprocessedPages || []).length === 0 && (activeProject?.candidates || []).length === 0 && (
                 <div className="h-full flex items-center justify-center text-slate-300 text-[10px] font-bold uppercase tracking-widest opacity-50">
-                  Ingen besvarelser
+                  Ingen besvarelser lastet inn
                 </div>
               )}
               
-              {/* Kø */}
+              {/* Kø (Under behandling) */}
               {(activeProject?.unprocessedPages || []).map(p => (
                 <div key={p.id} className="text-[10px] font-bold bg-slate-50 p-4 rounded-2xl border border-dashed border-slate-200 flex gap-4 items-center animate-in fade-in">
-                  <div className="shrink-0">{p.status === 'processing' || !p.status || p.status === 'pending' ? <Spinner size="w-3 h-3" /> : '•'}</div>
+                  <div className="shrink-0">
+                    {p.status === 'processing' || !p.status || p.status === 'pending' ? <Spinner size="w-3 h-3" /> : '•'}
+                  </div>
                   <span className="truncate text-slate-400">{p.fileName}</span>
                 </div>
               ))}
 
-              {/* Ferdige kandidater */}
+              {/* Ferdige kandidater (Gruppert) */}
               {(activeProject?.candidates || []).map(c => (
                 <div key={c.id} className="text-[11px] font-black bg-emerald-50 p-5 rounded-[25px] border border-emerald-100 text-emerald-700 flex justify-between items-center shadow-sm animate-in zoom-in-95">
                   <div className="flex items-center gap-3">
                     <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
                     <span>{c.name}</span>
                   </div>
-                  <span className="text-[9px] bg-emerald-500 text-white px-3 py-1 rounded-full uppercase">{(c.pages || []).length} Sider</span>
+                  <span className="text-[9px] bg-emerald-500 text-white px-3 py-1 rounded-full uppercase shrink-0">{(c.pages || []).length} Sider</span>
                 </div>
               ))}
             </div>

@@ -5,13 +5,13 @@ import { LatexRenderer, Spinner } from './SharedUI';
 
 interface RubricStepProps {
   activeProject: Project;
-  handleEvaluateAll: () => void;
+  handleGenerateRubric: () => void;
   rubricStatus: { loading: boolean; text: string };
 }
 
 export const RubricStep: React.FC<RubricStepProps> = ({
   activeProject,
-  handleEvaluateAll,
+  handleGenerateRubric,
   rubricStatus
 }) => {
   const isGenerating = rubricStatus.loading && !activeProject.rubric;
@@ -27,7 +27,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
         </div>
         <div className="space-y-2">
           <h2 className="text-xl font-black text-slate-800 uppercase tracking-widest">Genererer Rettemanual</h2>
-          <p className="text-slate-400 text-sm font-medium max-w-xs mx-auto">Gemini analyserer oppgavearkene dine for å identifisere oppgaver og løsningsforslag...</p>
+          <p className="text-slate-400 text-sm font-medium max-w-xs mx-auto">Gemini analyserer oppgavearkene dine...</p>
         </div>
       </div>
     );
@@ -39,7 +39,14 @@ export const RubricStep: React.FC<RubricStepProps> = ({
         <div className="text-6xl grayscale opacity-30">📋</div>
         <div className="space-y-2">
           <h2 className="text-xl font-black text-slate-800 uppercase tracking-widest">Ingen rettemanual ennå</h2>
-          <p className="text-slate-400 text-sm font-medium">Gå til "Innlasting" og legg til et oppgaveark for å starte.</p>
+          <p className="text-slate-400 text-sm font-medium mb-8">Legg til oppgaveark for å starte.</p>
+          <button 
+            onClick={handleGenerateRubric} 
+            disabled={rubricStatus.loading}
+            className="bg-indigo-600 text-white px-10 py-4 rounded-full font-black text-xs uppercase shadow-lg active:scale-95"
+          >
+            {rubricStatus.loading ? <Spinner color="text-white" /> : 'Generer Rettemanual'}
+          </button>
         </div>
       </div>
     );
@@ -53,15 +60,9 @@ export const RubricStep: React.FC<RubricStepProps> = ({
           <h2 className="text-3xl font-black text-slate-800">{activeProject.rubric.title}</h2>
           <p className="text-slate-400 font-bold uppercase text-[10px] mt-2 tracking-widest">Vurderingskriterier & Fasit</p>
         </div>
-        <button 
-          onClick={handleEvaluateAll} 
-          disabled={rubricStatus.loading}
-          className={`px-10 py-5 rounded-[25px] font-black text-xs uppercase shadow-xl transition-all active:scale-95 flex items-center gap-3 ${
-            rubricStatus.loading ? 'bg-indigo-100 text-indigo-400' : 'bg-indigo-600 text-white hover:bg-indigo-700'
-          }`}
-        >
-          {rubricStatus.loading ? <><Spinner color="text-indigo-400" /><span>Vurderer...</span></> : 'Start Vurdering 🚀'}
-        </button>
+        <div className="text-indigo-600 font-black text-[10px] uppercase tracking-widest px-6 py-3 bg-indigo-50 rounded-full">
+           KLAR TIL BRUK
+        </div>
       </header>
 
       <div className="bg-white rounded-[50px] border border-slate-100 shadow-sm overflow-hidden">
@@ -101,8 +102,17 @@ export const RubricStep: React.FC<RubricStepProps> = ({
         </table>
       </div>
       
-      <div className="pb-20 text-center">
+      <div className="pb-20 flex flex-col items-center gap-6">
         <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.3em]">Totalt {activeProject.rubric.totalMaxPoints} poeng tilgjengelig</p>
+        <button 
+          onClick={handleGenerateRubric} 
+          disabled={rubricStatus.loading}
+          className={`px-10 py-5 rounded-[25px] font-black text-[10px] uppercase shadow-lg transition-all active:scale-95 flex items-center gap-3 ${
+            rubricStatus.loading ? 'bg-indigo-50 text-indigo-300' : 'bg-white border text-slate-600 hover:border-indigo-200'
+          }`}
+        >
+          {rubricStatus.loading ? <Spinner size="w-4 h-4" /> : '🔄 Oppdater Rettemanual'}
+        </button>
       </div>
     </div>
   );
