@@ -28,7 +28,6 @@ const App: React.FC = () => {
   const [view, setView] = useState<'dashboard' | 'editor'>('dashboard');
   const [currentStep, setCurrentStep] = useState<'setup' | 'review' | 'rubric' | 'results'>('setup');
   
-  // Bruker den nye hooken for all tung logikk
   const {
     processingCount,
     rubricStatus,
@@ -36,6 +35,7 @@ const App: React.FC = () => {
     handleCandidateFileSelect,
     handleEvaluateAll,
     handleGenerateRubric,
+    handleRetryPage,
     updateActiveProject
   } = useProjectProcessor(activeProject, setActiveProject);
 
@@ -109,7 +109,7 @@ const App: React.FC = () => {
       <main className="flex-1 overflow-hidden">
         {activeProject && (
           <>
-            {currentStep === 'setup' && <SetupStep activeProject={activeProject} isProcessing={processingCount > 0} rubricStatus={rubricStatus} handleTaskFileSelect={handleTaskFileSelect} handleGenerateRubric={() => handleGenerateRubric()} handleCandidateFileSelect={handleCandidateFileSelect} updateActiveProject={updateActiveProject} />}
+            {currentStep === 'setup' && <SetupStep activeProject={activeProject} isProcessing={processingCount > 0} rubricStatus={rubricStatus} handleTaskFileSelect={handleTaskFileSelect} handleGenerateRubric={() => handleGenerateRubric()} handleCandidateFileSelect={handleCandidateFileSelect} handleRetryPage={handleRetryPage} updateActiveProject={updateActiveProject} />}
             {currentStep === 'review' && <ReviewStep activeProject={activeProject} selectedReviewCandidateId={selectedReviewCandidateId} setSelectedReviewCandidateId={(id) => setSelectedReviewCandidateId(id)} reviewFilter={reviewFilter} setReviewFilter={setReviewFilter} filteredCandidates={filteredCandidates} currentReviewCandidate={activeProject.candidates.find(c => c.id === selectedReviewCandidateId) || null} rotatePage={(id) => {}} setActiveProject={setActiveProject} />}
             {currentStep === 'rubric' && <RubricStep activeProject={activeProject} handleGenerateRubric={() => handleGenerateRubric()} rubricStatus={rubricStatus} />}
             {currentStep === 'results' && <ResultsStep activeProject={activeProject} selectedResultCandidateId={selectedResultCandidateId} setSelectedResultCandidateId={setSelectedResultCandidateId} handleEvaluateAll={handleEvaluateAll} handleGenerateRubric={() => handleGenerateRubric()} rubricStatus={rubricStatus} />}

@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Project } from '../types';
+import { Project, Page } from '../types';
 import { Spinner } from './SharedUI';
 
 interface SetupStepProps {
@@ -10,6 +10,7 @@ interface SetupStepProps {
   handleTaskFileSelect: (files: FileList) => void;
   handleGenerateRubric: () => void;
   handleCandidateFileSelect: (files: FileList) => void;
+  handleRetryPage: (page: Page) => void;
   updateActiveProject: (updates: Partial<Project>) => void;
 }
 
@@ -20,6 +21,7 @@ export const SetupStep: React.FC<SetupStepProps> = ({
   handleTaskFileSelect,
   handleGenerateRubric,
   handleCandidateFileSelect,
+  handleRetryPage,
   updateActiveProject
 }) => {
   return (
@@ -39,7 +41,6 @@ export const SetupStep: React.FC<SetupStepProps> = ({
           </div>
 
           <div className="p-8 flex-1 flex flex-col gap-6 overflow-hidden">
-            {/* Dropzone - Låst høyde for symmetri */}
             <div className="relative group h-32 shrink-0">
               <input type="file" multiple accept=".pdf,.docx,.jpg,.jpeg,.png" onChange={e => e.target.files && handleTaskFileSelect(e.target.files)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
               <div className="border-2 border-dashed border-slate-100 rounded-[25px] h-full flex flex-col items-center justify-center p-4 text-center group-hover:border-indigo-200 transition-colors bg-slate-50/50">
@@ -48,7 +49,6 @@ export const SetupStep: React.FC<SetupStepProps> = ({
               </div>
             </div>
 
-            {/* Filliste - Skrollbar uten å påvirke layout */}
             <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-2">
               {(activeProject?.taskFiles || []).length === 0 && (
                 <div className="h-full flex items-center justify-center text-slate-300 text-[10px] font-bold uppercase tracking-widest opacity-50">
@@ -64,7 +64,7 @@ export const SetupStep: React.FC<SetupStepProps> = ({
                       <Spinner size="w-3 h-3" />
                     </div>
                   ) : (
-                    <span className="text-[8px] bg-slate-100 text-slate-400 px-2 py-0.5 rounded shrink-0">KLAR</span>
+                    <span className="text-[8px] bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded font-black shrink-0">KLAR</span>
                   )}
                 </div>
               ))}
@@ -85,7 +85,6 @@ export const SetupStep: React.FC<SetupStepProps> = ({
           </div>
 
           <div className="p-8 flex-1 flex flex-col gap-6 overflow-hidden">
-            {/* Dropzone - Samme høyde for symmetri */}
             <div className="relative group h-32 shrink-0">
               <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png" onChange={e => e.target.files && handleCandidateFileSelect(e.target.files)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
               <div className="border-2 border-dashed border-slate-100 rounded-[25px] h-full flex flex-col items-center justify-center p-4 text-center group-hover:border-emerald-200 transition-colors bg-slate-50/50">
@@ -94,7 +93,6 @@ export const SetupStep: React.FC<SetupStepProps> = ({
               </div>
             </div>
 
-            {/* List area - Skrollbar */}
             <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-3">
               {(activeProject?.unprocessedPages || []).length === 0 && (activeProject?.candidates || []).length === 0 && (
                 <div className="h-full flex items-center justify-center text-slate-300 text-[10px] font-bold uppercase tracking-widest opacity-50">
@@ -102,17 +100,23 @@ export const SetupStep: React.FC<SetupStepProps> = ({
                 </div>
               )}
               
-              {/* Kø (Under behandling) */}
+              {/* Kø (Under behandling eller feilet) */}
               {(activeProject?.unprocessedPages || []).map(p => (
-                <div key={p.id} className="text-[10px] font-bold bg-slate-50 p-4 rounded-2xl border border-dashed border-slate-200 flex gap-4 items-center animate-in fade-in">
+                <div key={p.id} className={`text-[10px] font-bold p-4 rounded-2xl border flex gap-4 items-center animate-in fade-in ${p.status === 'error' ? 'bg-rose-50 border-rose-100 cursor-pointer hover:bg-rose-100' : 'bg-slate-50 border-dashed border-slate-200'}`} onClick={() => p.status === 'error' && handleRetryPage(p)}>
                   <div className="shrink-0">
-                    {p.status === 'processing' || !p.status || p.status === 'pending' ? <Spinner size="w-3 h-3" /> : '•'}
+                    {p.status === 'error' ? (
+                      <span className="text-rose-500 font-black">↻</span>
+                    ) : (
+                      <Spinner size="w-3 h-3" />
+                    )}
                   </div>
-                  <span className="truncate text-slate-400">{p.fileName}</span>
+                  <span className={`truncate flex-1 ${p.status === 'error' ? 'text-rose-600' : 'text-slate-400'}`}>
+                    {p.fileName} {p.status === 'error' && '(Feilet - Klikk for å prøve igjen)'}
+                  </span>
                 </div>
               ))}
 
-              {/* Ferdige kandidater (Gruppert) */}
+              {/* Ferdige kandidater */}
               {(activeProject?.candidates || []).map(c => (
                 <div key={c.id} className="text-[11px] font-black bg-emerald-50 p-5 rounded-[25px] border border-emerald-100 text-emerald-700 flex justify-between items-center shadow-sm animate-in zoom-in-95">
                   <div className="flex items-center gap-3">
