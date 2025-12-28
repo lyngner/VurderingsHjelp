@@ -63,16 +63,17 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<any[]> => {
 
   return limiter.schedule(async () => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    // Bruker Pro for maksimal nøyaktighet på beskjæring og header-deteksjon
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-3-pro-preview',
       contents: {
         parts: [
           { inlineData: { mimeType: page.mimeType, data: page.base64Data } }, 
-          { text: "Analyser bildet. Identifiser KandidatID, PageNumber og FullText. Bruk ALLTID LaTeX-delimitere for matematikk: \\( ... \\) for inline og \\[ ... \\] for blokker. Dette er ekstremt viktig for korrekt visning." }
+          { text: "Analyser bildet grundig. Identifiser: 1. KandidatID (let spesielt i topptekst/header). 2. Sidetall. 3. Full tekst (bruk LaTeX \\( ... \\)). 4. Liste over oppgaver besvart på denne siden (f.eks. '1A', '2'). 5. box_2d for hele det skrevne området inkludert header. Svar KUN JSON." }
         ],
       },
       config: { 
-        systemInstruction: "OCR-analytiker. Svar KUN JSON. Pakk ALL matematikk i LaTeX-delimitere \\( ... \\) eller \\[ ... \\].",
+        systemInstruction: "Ekspert på OCR og eksamensanalyse. Svar KUN JSON. Pakk ALL matematikk i LaTeX-delimitere \\( ... \\) eller \\[ ... \\].",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.ARRAY,
@@ -84,6 +85,7 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<any[]> => {
               pageNumber: { type: Type.INTEGER },
               fullText: { type: Type.STRING },
               rotation: { type: Type.INTEGER },
+              identifiedTasks: { type: Type.ARRAY, items: { type: Type.STRING } },
               box_2d: { type: Type.ARRAY, items: { type: Type.INTEGER } }
             },
             required: ["fullText", "candidateId", "box_2d"]
@@ -104,17 +106,18 @@ export const analyzeTextContent = async (text: string): Promise<any> => {
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: {
-        parts: [{ text: `Analyser metadata for denne digitale besvarelsen. Finn kandidatnummer. Pakk matematikk i \\( ... \\). Tekst:\n${text.substring(0, 5000)}` }],
+        parts: [{ text: `Analyser metadata for denne digitale besvarelsen. Finn kandidatnummer og oppgaver som er besvart. Tekst:\n${text.substring(0, 5000)}` }],
       },
       config: { 
-        systemInstruction: "Dokumentanalytiker. Svar KUN JSON. Bruk LaTeX \\( ... \\).",
+        systemInstruction: "Dokumentanalytiker. Svar KUN JSON.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
             candidateId: { type: Type.STRING },
             fullText: { type: Type.STRING },
-            pageNumber: { type: Type.INTEGER }
+            pageNumber: { type: Type.INTEGER },
+            identifiedTasks: { type: Type.ARRAY, items: { type: Type.STRING } }
           },
           required: ["candidateId", "fullText"]
         }
@@ -134,11 +137,11 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promi
       contents: { 
         parts: [
           ...parts, 
-          { text: "Lag en fullstendig rettemanual. Inkluder alle detaljer fra fasit. Pakk ALL matematikk (formler, variabler, brøker) i LaTeX-delimitere: \\( ... \\) for inline matte og \\[ ... \\] for store formler på egen linje. Ikke bruk $ alene hvis du kan unngå det." }
+          { text: "Lag en fullstendig rettemanual. Inkluder alle detaljer fra fasit. Pakk ALL matematikk i LaTeX-delimitere: \\( ... \\) for inline matte og \\[ ... \\] for store formler." }
         ] 
       },
       config: { 
-        systemInstruction: "Ekspert på matematikkvurdering. Svar KUN JSON. Det er livsviktig at all matematikk er pakket i \\( ... \\) eller \\[ ... \\].",
+        systemInstruction: "Ekspert på matematikkvurdering. Svar KUN JSON. Bruk LaTeX \\( ... \\) eller \\[ ... \\].",
         thinkingConfig: { thinkingBudget: 16000 },
         responseMimeType: "application/json",
         responseSchema: {

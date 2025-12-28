@@ -2,8 +2,8 @@
 export interface Page {
   id: string;
   fileName: string;
-  imagePreview: string;
-  base64Data: string;
+  imagePreview?: string; // Brukes nå som thumbnail (lav oppløsning)
+  base64Data?: string;   // Full oppløsning, lastes kun ved behov
   contentHash: string;
   mimeType: string;
   transcription?: string;

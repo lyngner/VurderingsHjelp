@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { Project, Page } from '../types';
 import { processFileToImages, cropImageFromBase64 } from '../services/fileService';
+import { getMedia, saveMedia } from '../services/storageService';
 import { 
   transcribeAndAnalyzeImage, 
   analyzeTextContent, 
@@ -37,7 +38,11 @@ export const useProjectProcessor = (
     if (!proj || (proj.taskFiles?.length || 0) === 0) return;
     setRubricStatus({ loading: true, text: 'KI-analyse av oppgaver...' });
     try {
-      const rubric = await generateRubricFromTaskAndSamples(proj.taskFiles);
+      const taskFilesWithMedia = await Promise.all((proj.taskFiles || []).map(async f => {
+        const media = await getMedia(f.id);
+        return { ...f, base64Data: media?.split(',')[1] || "" };
+      }));
+      const rubric = await generateRubricFromTaskAndSamples(taskFilesWithMedia);
       updateActiveProject({ rubric });
     } catch (e) {
       console.error("Rubric generation failed:", e);
@@ -48,32 +53,38 @@ export const useProjectProcessor = (
 
   const integratePageResults = async (originalPage: Page, results: any[]) => {
     const processedPages: Page[] = [];
+    const originalMedia = await getMedia(originalPage.id);
     
     for (let i = 0; i < results.length; i++) {
       const res = results[i];
-      if (res.box_2d && originalPage.imagePreview) {
+      const newId = `${originalPage.id}_split_${i}`;
+      
+      if (res.box_2d && originalMedia) {
         try {
-          const cropped = await cropImageFromBase64(originalPage.imagePreview, res.box_2d);
+          const cropped = await cropImageFromBase64(originalMedia, res.box_2d);
+          await saveMedia(newId, cropped.preview);
+          
           processedPages.push({
             ...originalPage,
-            id: `${originalPage.id}_split_${i}`,
+            id: newId,
             imagePreview: cropped.preview,
-            base64Data: cropped.data,
             candidateId: String(res.candidateId || "Ukjent"),
             part: res.part,
             pageNumber: res.pageNumber,
             transcription: res.fullText,
+            identifiedTasks: res.identifiedTasks || [], // Lagrer oppgaver funnet på siden
             rotation: res.rotation || 0,
             status: 'completed'
           });
         } catch (e) {
           processedPages.push({
             ...originalPage,
-            id: `${originalPage.id}_split_${i}`,
+            id: newId,
             candidateId: String(res.candidateId || "Ukjent"),
             part: res.part,
             pageNumber: res.pageNumber,
             transcription: res.fullText,
+            identifiedTasks: res.identifiedTasks || [],
             rotation: res.rotation || 0,
             status: 'completed'
           });
@@ -81,11 +92,12 @@ export const useProjectProcessor = (
       } else {
         processedPages.push({
           ...originalPage,
-          id: `${originalPage.id}_split_${i}`,
+          id: newId,
           candidateId: String(res.candidateId || "Ukjent"),
           part: res.part,
           pageNumber: res.pageNumber,
           transcription: res.fullText,
+          identifiedTasks: res.identifiedTasks || [],
           rotation: res.rotation || 0,
           status: 'completed'
         });
@@ -125,7 +137,9 @@ export const useProjectProcessor = (
         const res = await analyzeTextContent(page.transcription!);
         await integratePageResults(page, [res]);
       } else {
-        const results = await transcribeAndAnalyzeImage(page);
+        const media = await getMedia(page.id);
+        const pageWithMedia = { ...page, base64Data: media?.split(',')[1] || "" };
+        const results = await transcribeAndAnalyzeImage(pageWithMedia);
         await integratePageResults(page, results);
       }
       setBatchCompleted(prev => prev + 1);

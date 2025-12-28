@@ -1,10 +1,8 @@
 
 import { Page } from '../types';
 import mammoth from 'mammoth';
+import { saveMedia } from './storageService';
 
-/**
- * Genererer en unik hash basert på innholdet i en streng/bilde.
- */
 export const generateHash = (str: string): string => {
   if (!str) return Math.random().toString(36).substring(7);
   const sample = str.length > 2000 
@@ -19,57 +17,63 @@ export const generateHash = (str: string): string => {
 };
 
 /**
- * Oppretter et visuelt bilde av tekst (for DOCX-filer)
+ * Genererer en liten thumbnail for å spare RAM
  */
+const createThumbnail = async (base64: string): Promise<string> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const maxDim = 300;
+      let w = img.width;
+      let h = img.height;
+      if (w > h) {
+        if (w > maxDim) { h *= maxDim / w; w = maxDim; }
+      } else {
+        if (h > maxDim) { w *= maxDim / h; h = maxDim; }
+      }
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx?.drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/jpeg', 0.6));
+    };
+    img.src = base64;
+  });
+};
+
 const createTextPlaceholderImage = (text: string, fileName: string): string => {
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
   if (!ctx) return "";
-
-  // A4 proporsjoner (ca 800x1131)
   canvas.width = 800;
   canvas.height = 1131;
-
-  // Bakgrunn
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  // Header-stripe
   ctx.fillStyle = '#f8fafc';
   ctx.fillRect(0, 0, canvas.width, 100);
   ctx.strokeStyle = '#e2e8f0';
   ctx.strokeRect(0, 0, canvas.width, 100);
-
-  // Tittel
   ctx.fillStyle = '#64748b';
   ctx.font = 'bold 14px Inter, sans-serif';
   ctx.fillText(`DIGITAL BESVARELSE: ${fileName.toUpperCase()}`, 40, 55);
-
-  // Innhold
   ctx.fillStyle = '#1e293b';
   ctx.font = '16px Inter, sans-serif';
-  const lines = text.split('\n').slice(0, 40); // Vis de første 40 linjene
+  const lines = text.split('\n').slice(0, 40);
   let y = 160;
   lines.forEach(line => {
     if (y < canvas.height - 40) {
-      // Enkel tekstbryting (truncate)
       const cleanLine = line.length > 80 ? line.substring(0, 80) + "..." : line;
       ctx.fillText(cleanLine, 60, y);
       y += 24;
     }
   });
-
-  // Footer
   ctx.fillStyle = '#94a3b8';
   ctx.font = 'italic 12px Inter, sans-serif';
   ctx.fillText("Generert bilde for kontroll-visning", 40, canvas.height - 40);
-
   return canvas.toDataURL('image/jpeg', 0.8);
 };
 
-/**
- * Beskjærer et bilde basert på normaliserte koordinater [ymin, xmin, ymax, xmax] (0-1000).
- */
 export const cropImageFromBase64 = async (base64: string, box: number[]): Promise<{ preview: string, data: string }> => {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -77,20 +81,15 @@ export const cropImageFromBase64 = async (base64: string, box: number[]): Promis
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       if (!ctx) return reject("Kunne ikke opprette canvas context");
-
-      // Utvid boksen litt for å unngå at vi klipper akkurat på kanten av tekst/tabeller
       const padding = 20; 
       const [ymin, xmin, ymax, xmax] = box;
-      
       const left = Math.max(0, ((xmin - padding) / 1000) * img.width);
       const top = Math.max(0, ((ymin - padding) / 1000) * img.height);
       const width = Math.min(img.width - left, ((xmax - xmin + padding * 2) / 1000) * img.width);
       const height = Math.min(img.height - top, ((ymax - ymin + padding * 2) / 1000) * img.height);
-
       canvas.width = width;
       canvas.height = height;
       ctx.drawImage(img, left, top, width, height, 0, 0, width, height);
-      
       const croppedBase64 = canvas.toDataURL('image/jpeg', 0.8);
       resolve({
         preview: croppedBase64,
@@ -110,12 +109,14 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
         const result = await mammoth.extractRawText({ arrayBuffer: buffer });
         const text = result.value;
         const visualPreview = createTextPlaceholderImage(text, file.name);
+        const id = Math.random().toString(36).substring(7);
+        await saveMedia(id, visualPreview);
+        const thumb = await createThumbnail(visualPreview);
         
         resolve([{ 
-          id: Math.random().toString(36).substring(7), 
+          id, 
           fileName: file.name, 
-          imagePreview: visualPreview, 
-          base64Data: visualPreview.split(',')[1], 
+          imagePreview: thumb, 
           contentHash: generateHash(text), 
           mimeType: 'text/plain', 
           status: 'pending', 
@@ -141,11 +142,14 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
           canvas.width = viewport.width;
           await page.render({ canvasContext: context, viewport }).promise;
           const b64 = canvas.toDataURL('image/jpeg', 0.7);
+          const id = Math.random().toString(36).substring(7);
+          await saveMedia(id, b64);
+          const thumb = await createThumbnail(b64);
+          
           pages.push({ 
-            id: Math.random().toString(36).substring(7), 
+            id, 
             fileName: `${file.name} (S${i})`, 
-            imagePreview: b64, 
-            base64Data: b64.split(',')[1], 
+            imagePreview: thumb, 
             contentHash: generateHash(b64), 
             mimeType: 'image/jpeg', 
             status: 'pending', 
@@ -161,7 +165,7 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
       const reader = new FileReader();
       reader.onload = (e) => {
         const img = new Image();
-        img.onload = () => {
+        img.onload = async () => {
           const canvas = document.createElement('canvas');
           const ctx = canvas.getContext('2d');
           if (!ctx) { resolve([]); return; }
@@ -169,11 +173,14 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
           canvas.height = img.height;
           ctx.drawImage(img, 0, 0);
           const b64 = canvas.toDataURL('image/jpeg', 0.7);
+          const id = Math.random().toString(36).substring(7);
+          await saveMedia(id, b64);
+          const thumb = await createThumbnail(b64);
+          
           resolve([{ 
-            id: Math.random().toString(36).substring(7), 
+            id, 
             fileName: file.name, 
-            imagePreview: b64, 
-            base64Data: b64.split(',')[1], 
+            imagePreview: thumb, 
             contentHash: generateHash(b64), 
             mimeType: 'image/jpeg', 
             status: 'pending', 

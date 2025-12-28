@@ -82,7 +82,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       </div>
 
       <footer className="max-w-6xl mx-auto mt-20 pt-8 border-t border-slate-100 flex justify-between items-center opacity-40">
-        <span className="text-[10px] font-black uppercase tracking-[0.2em]">Versjon 3.14.8</span>
+        <span className="text-[10px] font-black uppercase tracking-[0.2em]">Versjon 3.16.0</span>
         <span className="text-[9px] font-bold text-slate-400 uppercase italic">Digitalisering av vurderingsarbeid</span>
       </footer>
 
@@ -103,11 +103,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                      <ul className="space-y-3">
                        <li className="flex gap-3">
                          <span className="text-indigo-600 font-bold">✓</span>
-                         <span><strong>Lokal lagring:</strong> Alt lagres i din nettlesers IndexedDB.</span>
+                         <span><strong>Pro-modell:</strong> OCR kjøres nå med Gemini 3 Pro for maksimal nøyaktighet.</span>
                        </li>
                        <li className="flex gap-3">
                          <span className="text-indigo-600 font-bold">✓</span>
-                         <span><strong>KI-behandling:</strong> Bilder analyseres kryptert via Google Gemini API.</span>
+                         <span><strong>Alignment:</strong> Side-ved-side layout sikrer visuell korrespondanse.</span>
                        </li>
                      </ul>
                    </div>
@@ -119,7 +119,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                  </section>
               </div>
               <div className="mt-12 pt-8 border-t border-slate-50 flex justify-between items-center text-[10px] font-bold text-slate-300 uppercase tracking-widest">
-                <span>Versjon 3.14.8</span>
+                <span>Versjon 3.16.0</span>
                 <span className="text-indigo-400">Digitalisering av vurderingsarbeid</span>
               </div>
            </div>
