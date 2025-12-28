@@ -20,9 +20,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
   return (
     <div className="min-h-screen bg-[#F8FAFC] p-12">
       <header className="max-w-6xl mx-auto flex justify-between mb-16 items-end">
-        <div>
-          <h1 className="text-5xl font-black text-slate-800 tracking-tighter">ElevVurdering <span className="text-indigo-600">PRO</span></h1>
-          <p className="text-slate-400 font-bold uppercase text-[10px] tracking-widest mt-4">Profesjonell vurdering av besvarelser</p>
+        <div className="max-w-2xl">
+          <h1 className="text-5xl font-black text-slate-800 tracking-tighter">Vurderingshjelp</h1>
+          <p className="text-slate-500 font-medium text-sm mt-4 leading-relaxed">
+            Et verktøy for lærere som forenkler rettingen ved å digitalisere, gruppere og analysere elevbesvarelser ved hjelp av kunstig intelligens.
+          </p>
         </div>
         <div className="flex gap-4">
            <button 
@@ -79,10 +81,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
         )}
       </div>
 
-      {/* Versjonsindikator nederst på siden */}
       <footer className="max-w-6xl mx-auto mt-20 pt-8 border-t border-slate-100 flex justify-between items-center opacity-40">
-        <span className="text-[10px] font-black uppercase tracking-[0.2em]">Versjon 3.8.0 (Siste oppdatering)</span>
-        <span className="text-[9px] font-bold text-slate-400 uppercase italic">Tips: Bruk Ctrl + F5 hvis du ikke ser endringer</span>
+        <span className="text-[10px] font-black uppercase tracking-[0.2em]">Versjon 3.14.1</span>
+        <span className="text-[9px] font-bold text-slate-400 uppercase italic">Digitalisering av vurderingsarbeid</span>
       </footer>
 
       {showSettings && (
@@ -97,43 +98,29 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <h2 className="text-3xl font-black text-slate-800 mb-8">Teknisk info & GDPR</h2>
               <div className="space-y-8 text-sm text-slate-600 leading-relaxed overflow-y-auto max-h-[60vh] pr-4 custom-scrollbar">
                  <section>
-                   <h4 className="font-black uppercase text-[10px] tracking-widest text-indigo-600 mb-3">Hva er ElevVurdering PRO?</h4>
-                   <p>Dette er et spesialisert verktøy for lærere som ønsker å automatisere rettingen av store mengder papirbaserte eller digitale besvarelser. Appen bruker avansert maskinsyn (OCR) og resonnerende KI for å vurdere innholdet mot en rettemanual.</p>
-                 </section>
-
-                 <section>
                    <h4 className="font-black uppercase text-[10px] tracking-widest text-indigo-600 mb-3">Datasikkerhet og Lagring</h4>
                    <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
                      <ul className="space-y-3">
                        <li className="flex gap-3">
                          <span className="text-indigo-600 font-bold">✓</span>
-                         <span><strong>Lokal lagring:</strong> Alle bilder og elevdata lagres <u>kun</u> i din nettlesers IndexedDB. Dataene forlater aldri din maskin utenom analysen.</span>
+                         <span><strong>Lokal lagring:</strong> Alt lagres i din nettlesers IndexedDB.</span>
                        </li>
                        <li className="flex gap-3">
                          <span className="text-indigo-600 font-bold">✓</span>
-                         <span><strong>KI-behandling:</strong> Bilder sendes kryptert til Google Gemini API for analyse. Ved bruk av Enterprise-nøkkel brukes ikke dataene til trening av modeller.</span>
+                         <span><strong>KI-behandling:</strong> Bilder analyseres kryptert via Google Gemini API.</span>
                        </li>
                      </ul>
                    </div>
                  </section>
 
                  <section>
-                   <h4 className="font-black uppercase text-[10px] tracking-widest text-indigo-600 mb-3">Personvern (GDPR)</h4>
-                   <p>Som behandlingsansvarlig er det skolens/lærerens ansvar å sikre at databehandleravtaler er på plass dersom personidentifiserbare data (navn/ansikt) lastes opp. Vi anbefaler å anonymisere elevbesvarelser ved kun å bruke kandidatnummer.</p>
-                 </section>
-
-                 <section>
-                   <h4 className="font-black uppercase text-[10px] tracking-widest text-indigo-600 mb-3">Teknisk Stakk</h4>
-                   <ul className="list-disc ml-5 space-y-1 opacity-70">
-                     <li>Frontend: React 19 + Tailwind CSS</li>
-                     <li>KI-Modell: Gemini 3 Flash / 3 Pro</li>
-                     <li>Database: Klient-side IndexedDB</li>
-                   </ul>
+                   <h4 className="font-black uppercase text-[10px] tracking-widest text-indigo-600 mb-3">GDPR</h4>
+                   <p>Skolen/læreren er behandlingsansvarlig. Vi anbefaler anonymisering ved bruk av kandidatnummer.</p>
                  </section>
               </div>
               <div className="mt-12 pt-8 border-t border-slate-50 flex justify-between items-center text-[10px] font-bold text-slate-300 uppercase tracking-widest">
-                <span>Versjon 3.8.0</span>
-                <span className="text-indigo-400">Utviklet for pedagogisk effektivitet</span>
+                <span>Versjon 3.14.1</span>
+                <span className="text-indigo-400">Digitalisering av vurderingsarbeid</span>
               </div>
            </div>
         </div>

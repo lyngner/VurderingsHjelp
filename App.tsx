@@ -30,6 +30,8 @@ const App: React.FC = () => {
   
   const {
     processingCount,
+    batchTotal,
+    batchCompleted,
     rubricStatus,
     handleTaskFileSelect,
     handleCandidateFileSelect,
@@ -76,6 +78,49 @@ const App: React.FC = () => {
     setProjects(prev => prev.filter(p => p.id !== id));
   };
 
+  const handleRotatePage = (pageId: string) => {
+    setActiveProject(prev => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        candidates: prev.candidates.map(c => ({
+          ...c,
+          pages: c.pages.map(p => p.id === pageId ? { ...p, rotation: ((p.rotation || 0) + 90) % 360 } : p)
+        }))
+      };
+    });
+  };
+
+  const handleDeletePage = (candidateId: string, pageId: string) => {
+    setActiveProject(prev => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        candidates: prev.candidates.map(c => {
+          if (c.id !== candidateId) return c;
+          const remainingPages = c.pages.filter(p => p.id !== pageId);
+          return { ...c, pages: remainingPages };
+        }).filter(c => c.pages.length > 0) // Fjern kandidat hvis alle sider slettes
+      };
+    });
+  };
+
+  const handleUpdatePageNumber = (candidateId: string, pageId: string, newNum: number) => {
+    setActiveProject(prev => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        candidates: prev.candidates.map(c => {
+          if (c.id !== candidateId) return c;
+          return {
+            ...c,
+            pages: c.pages.map(p => p.id === pageId ? { ...p, pageNumber: newNum } : p)
+          };
+        })
+      };
+    });
+  };
+
   const filteredCandidates = useMemo(() => {
     if (!activeProject?.candidates) return [];
     return activeProject.candidates.filter(c => !reviewFilter || c.name.toLowerCase().includes(reviewFilter.toLowerCase()));
@@ -102,15 +147,42 @@ const App: React.FC = () => {
 
       {(rubricStatus.loading || processingCount > 0) && (
         <div className="bg-indigo-600 text-white py-2 text-center text-[10px] font-black uppercase tracking-widest animate-pulse">
-          {processingCount > 0 ? `Prosesserer ${processingCount} sider...` : rubricStatus.text}
+          {processingCount > 0 ? `Prosesserer ${processingCount} filer...` : rubricStatus.text}
         </div>
       )}
 
       <main className="flex-1 overflow-hidden">
         {activeProject && (
           <>
-            {currentStep === 'setup' && <SetupStep activeProject={activeProject} isProcessing={processingCount > 0} rubricStatus={rubricStatus} handleTaskFileSelect={handleTaskFileSelect} handleGenerateRubric={() => handleGenerateRubric()} handleCandidateFileSelect={handleCandidateFileSelect} handleRetryPage={handleRetryPage} updateActiveProject={updateActiveProject} />}
-            {currentStep === 'review' && <ReviewStep activeProject={activeProject} selectedReviewCandidateId={selectedReviewCandidateId} setSelectedReviewCandidateId={(id) => setSelectedReviewCandidateId(id)} reviewFilter={reviewFilter} setReviewFilter={setReviewFilter} filteredCandidates={filteredCandidates} currentReviewCandidate={activeProject.candidates.find(c => c.id === selectedReviewCandidateId) || null} rotatePage={(id) => {}} setActiveProject={setActiveProject} />}
+            {currentStep === 'setup' && (
+              <SetupStep 
+                activeProject={activeProject} 
+                isProcessing={processingCount > 0} 
+                batchTotal={batchTotal}
+                batchCompleted={batchCompleted}
+                rubricStatus={rubricStatus} 
+                handleTaskFileSelect={handleTaskFileSelect} 
+                handleGenerateRubric={() => handleGenerateRubric()} 
+                handleCandidateFileSelect={handleCandidateFileSelect} 
+                handleRetryPage={handleRetryPage} 
+                updateActiveProject={updateActiveProject} 
+              />
+            )}
+            {currentStep === 'review' && (
+              <ReviewStep 
+                activeProject={activeProject} 
+                selectedReviewCandidateId={selectedReviewCandidateId} 
+                setSelectedReviewCandidateId={(id) => setSelectedReviewCandidateId(id)} 
+                reviewFilter={reviewFilter} 
+                setReviewFilter={setReviewFilter} 
+                filteredCandidates={filteredCandidates} 
+                currentReviewCandidate={activeProject.candidates.find(c => c.id === selectedReviewCandidateId) || null} 
+                rotatePage={handleRotatePage} 
+                deletePage={handleDeletePage}
+                updatePageNumber={handleUpdatePageNumber}
+                setActiveProject={setActiveProject} 
+              />
+            )}
             {currentStep === 'rubric' && <RubricStep activeProject={activeProject} handleGenerateRubric={() => handleGenerateRubric()} rubricStatus={rubricStatus} updateActiveProject={updateActiveProject} />}
             {currentStep === 'results' && <ResultsStep activeProject={activeProject} selectedResultCandidateId={selectedResultCandidateId} setSelectedResultCandidateId={setSelectedResultCandidateId} handleEvaluateAll={handleEvaluateAll} handleGenerateRubric={() => handleGenerateRubric()} rubricStatus={rubricStatus} />}
           </>

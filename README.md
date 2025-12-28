@@ -1,70 +1,36 @@
-# ElevVurdering PRO - Brukermanual & Teknisk Dokumentasjon
 
-## 🚀 Versjon 3.8 - Optimalisert for Sky-distribusjon
+# Vurderingshjelp - Brukermanual & Teknisk Dokumentasjon
 
-Denne versjonen inkluderer "cache-busting" mekanismer for å sikre at brukere på Google Cloud alltid ser den nyeste koden.
+## 🚀 Versjon 3.14.1 - Standardisert Poengsum
+
+Denne versjonen introduserer en standardisert poengsum for deloppgaver for å gjøre rettingen mer konsistent.
+
+---
+
+## 📋 Rettemanual (Rubrikk)
+
+### 1. Standard Poengsum: 2.0 poeng
+For å sikre rettferdig og konsistent vurdering, setter systemet nå automatisk **2.0 poeng** som standard maks poeng for alle deloppgaver (a, b, c, d...). 
+*   Læreren kan selvfølgelig justere dette manuelt i rettemanualen dersom en oppgave er mer eller mindre omfattende.
+*   Systemet støtter nå desimalpoeng (f.eks. 0.5 eller 1.5).
+
+### 2. Gemini 3 Pro - Motoren bak manualen
+Vi bruker den kraftigste tilgjengelige modellen for å generere rettemanualen. Dette sikrer at selv små deloppgaver blir identifisert og dekomponert korrekt med riktig poengstandard.
+
+### 3. Forbedret Layout og Visning
+*   **Header-optimalisering**: Overskriften på rettemanualen er fleksibel og takler lange prosjektnavn uten å kutte tekst.
+*   **Stabil LaTeX**: Matematikk-visningen er herdet for å sikre at formler alltid rendres korrekt i både løsningsforslag og retteveiledning.
 
 ---
 
 ## 🏗 Innlastingsprosessen
 
-### 1. Filtyper som støttes
-*   **Word (.docx)**: Tekst trekkes ut lokalt.
-*   **PDF (.pdf)**: Splittes automatisk i sider.
-*   **Bilder (.jpg, .png)**: Skannede besvarelser analyseres med OCR.
-*   **Google Drive**: Du kan lime inn en mappe-link for å hente alle JPG-filer direkte.
-
-### 2. Slik fungerer "Smart Side-splitting" (A3 til A4)
-Mange skannere tar to A4-sider i én operasjon (A3). Appen håndterer nå dette automatisk ved å bruke KI til å finne sidene og fysisk "klippe" dem i to bilder lokalt i nettleseren din.
-
-### 3. Del 1 og Del 2 Inndeling
-Prøver er ofte delt i to (f.eks. med og uten hjelpemidler). Appen støtter nå dette fullt ut i både rettemanual og filtrering.
-
----
-
-## ☁️ Distribusjon til Google Cloud (Viktig!)
-
-Hvis du distribuerer appen til Google Cloud Storage (GCS) eller Firebase, kan brukere oppleve å se en gammel versjon på grunn av caching.
-
-### Slik fikser du caching:
-Når du laster opp filene (f.eks. med `gsutil` eller i konsollen), må `index.html` ha en `Cache-Control` header som sier "ikke cache".
-
-**Kommando for GCS:**
-```bash
-gsutil cp -z html,js,css -h "Cache-Control:no-cache,max-age=0" index.html gs://din-mappe/
-gsutil cp -z html,js,css -h "Cache-Control:public,max-age=3600" * gs://din-mappe/
-```
-
-**Kommando for Firebase (firebase.json):**
-```json
-{
-  "hosting": {
-    "headers": [
-      {
-        "source": "/**",
-        "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
-      }
-    ]
-  }
-}
-```
-
-### Problemer med CORS på Google Cloud?
-Vi har endret `index.html` til å bruke en relativ bane `./index.tsx`. Dette fjerner behovet for kompliserte CORS-oppsett på selve script-kilden.
-
----
-
-## 💰 Kostnadsestimat (Gemini API)
-Siden appen kjører lokalt, betaler du kun for faktiske API-kall til Google.
-
-| Oppgave | Modell | Estimert pris (30 elever) |
-| :--- | :--- | :--- |
-| **OCR / Side-splitting** | Gemini 3 Flash | ~0.50 NOK |
-| **Generere Manual** | Gemini 3 Flash | ~0.10 NOK |
-| **Vurdering & Feedback** | Gemini 3 Pro | ~30.00 - 50.00 NOK |
+*   **A3-splitting**: Appen splitter automatisk oppslag til to A4-sider.
+*   **Automatisk rotering**: KI analyserer tekstretningen og roterer bildene for deg.
+*   **Kandidat-ID**: Appen forsøker å kjenne igjen kandidatnummer øverst på arkene.
 
 ---
 
 ## 🔒 GDPR & Sikkerhet
-*   **Fullstendig lokal**: PDF-splitting, Word-parsing og bildebeskjæring skjer 100% i nettleseren.
-*   **Ingen permanent lagring**: Appen lagrer kun data i din lokale `IndexedDB`.
+*   **Fullstendig lokal**: Alt lagres i din lokale nettleser (IndexedDB).
+*   **Ingen trening**: Dataene brukes ikke til trening av Google-modeller ved bruk av standard API-oppsett.

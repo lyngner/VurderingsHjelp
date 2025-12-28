@@ -43,7 +43,7 @@ export interface RubricCriterion {
   part?: string;
   description: string;
   suggestedSolution: string;
-  commonErrors?: string; // Lagt til for vanlige feil og poenggiving
+  commonErrors?: string; 
   maxPoints: number;
   tema?: string;
 }

@@ -11,52 +11,39 @@ export const Spinner: React.FC<{ size?: string; color?: string }> = ({ size = "w
 export const LatexRenderer: React.FC<{ content: string; className?: string }> = ({ content, className = "" }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   
-  const processedHtml = useMemo(() => {
+  const processedContent = useMemo(() => {
     if (!content) return "";
-    
-    return content.split('\n').map(line => {
-      const trimmedLine = line.trim();
-      if (!trimmedLine) return "<div class='h-3'></div>"; // Mer kontrollert linjeavstand
-      
-      // En linje regnes som matematikk hvis den inneholder spesifikke tegn
-      const hasMath = /[=^+\-*/]|ln|lg|log|lim|sin|cos|tan|\\|\[|\]|root|int|[0-9][a-z]/i.test(trimmedLine);
-      
-      if (hasMath) {
-        // Rens teksten for eventuelle eksisterende dollartegn og legg til nye for blokkvisning
-        let cleanLine = trimmedLine.replace(/\$/g, "");
-        // Standardiser vanlige tegn
-        cleanLine = cleanLine
-          .replace(/=>/g, '\\Rightarrow ')
-          .replace(/->/g, '\\to ')
-          .replace(/\*/g, '\\cdot ')
-          .replace(/\^(\d+)/g, '^{$1}');
-          
-        return `<div class="my-2 py-1"><span class="math-display">$$${cleanLine}$$</span></div>`;
-      }
-      
-      return `<div class="mb-1">${trimmedLine}</div>`;
-    }).join('');
+    return content
+      .split('\n')
+      .map(line => line.trim() ? `<p class="mb-2 last:mb-0">${line}</p>` : '<div class="h-4"></div>')
+      .join('');
   }, [content]);
 
   useEffect(() => {
-    if (containerRef.current && (window as any).MathJax) {
-      // Bruk en liten delay for å sikre at DOM er klar før MathJax prosesserer
-      const timer = setTimeout(() => { 
-        if (containerRef.current) {
-          (window as any).MathJax.typesetPromise([containerRef.current]).catch((err: any) => {
-            console.warn("MathJax typeset failed:", err);
-          }); 
+    const mathjax = (window as any).MathJax;
+    if (containerRef.current && mathjax && mathjax.typesetPromise) {
+      // Vi bruker en timeout eller requestAnimationFrame for å sikre at React 
+      // har skrevet til DOM-en før MathJax prøver å finne formlene.
+      requestAnimationFrame(() => {
+        try {
+          // Viktig: Fjern gammel "prosessert" status for denne containeren
+          mathjax.typesetClear([containerRef.current]);
+          // Kjør ny rendring
+          mathjax.typesetPromise([containerRef.current]).catch((err: any) => {
+            console.debug("MathJax error (expected during fast switching):", err);
+          });
+        } catch (e) {
+          console.warn("MathJax failed to clear or typeset:", e);
         }
-      }, 100);
-      return () => clearTimeout(timer);
+      });
     }
-  }, [processedHtml]);
+  }, [processedContent]);
 
   return (
     <div 
       ref={containerRef} 
-      className={`leading-relaxed prose prose-slate max-w-none break-words overflow-x-auto ${className}`} 
-      dangerouslySetInnerHTML={{ __html: processedHtml }} 
+      className={`math-container leading-relaxed break-words overflow-x-auto custom-scrollbar tex2jax_process ${className}`}
+      dangerouslySetInnerHTML={{ __html: processedContent }} 
     />
   );
 };

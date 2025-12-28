@@ -12,6 +12,8 @@ interface ReviewStepProps {
   filteredCandidates: Candidate[];
   currentReviewCandidate: Candidate | null;
   rotatePage: (pageId: string) => void;
+  deletePage: (candidateId: string, pageId: string) => void;
+  updatePageNumber: (candidateId: string, pageId: string, newNum: number) => void;
   setActiveProject: React.Dispatch<React.SetStateAction<Project | null>>;
 }
 
@@ -24,6 +26,8 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
   filteredCandidates,
   currentReviewCandidate,
   rotatePage,
+  deletePage,
+  updatePageNumber,
   setActiveProject
 }) => {
   const [editorWidth, setEditorWidth] = useState(500);
@@ -70,19 +74,42 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
         {/* Midten: Bildevisning */}
         <section className="flex-1 bg-slate-50 overflow-y-auto p-6 custom-scrollbar relative">
           <div className="max-w-4xl mx-auto space-y-8 pb-20">
-            {currentReviewCandidate ? currentReviewCandidate.pages.map((p, idx) => (
+            {currentReviewCandidate ? currentReviewCandidate.pages.sort((a,b) => (a.pageNumber || 0) - (b.pageNumber || 0)).map((p, idx) => (
               <div key={p.id} className="bg-white rounded-[40px] shadow-sm border border-slate-100 overflow-hidden relative group transition-all hover:shadow-md">
                 <div className="px-10 py-6 bg-white flex justify-between items-center sticky top-0 z-10 bg-white/90 backdrop-blur-sm">
-                  <div className="flex flex-col">
-                     <span className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Side</span>
-                     <span className="text-3xl font-black text-slate-800 leading-none">{idx + 1}</span>
+                  <div className="flex items-center gap-4">
+                     <div className="flex flex-col">
+                        <span className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Side</span>
+                        <input 
+                          type="number"
+                          value={p.pageNumber || idx + 1}
+                          onChange={(e) => updatePageNumber(currentReviewCandidate.id, p.id, parseInt(e.target.value) || 0)}
+                          className="text-3xl font-black text-slate-800 leading-none w-16 bg-transparent focus:ring-2 focus:ring-indigo-100 rounded-lg outline-none"
+                        />
+                     </div>
                   </div>
-                  <button onClick={() => rotatePage(p.id)} className="bg-indigo-50 text-indigo-600 px-6 py-3 rounded-full font-black text-[11px] uppercase tracking-widest shadow-sm hover:bg-indigo-600 hover:text-white transition-all active:scale-95">Roter 90° ↻</button>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => {
+                        if(confirm('Er du sikker på at du vil slette denne siden?')) {
+                          deletePage(currentReviewCandidate.id, p.id);
+                        }
+                      }} 
+                      className="bg-rose-50 text-rose-500 px-4 py-3 rounded-full font-black text-[11px] uppercase tracking-widest shadow-sm hover:bg-rose-500 hover:text-white transition-all active:scale-95"
+                    >
+                      Slett Side ✕
+                    </button>
+                    <button onClick={() => rotatePage(p.id)} className="bg-indigo-50 text-indigo-600 px-6 py-3 rounded-full font-black text-[11px] uppercase tracking-widest shadow-sm hover:bg-indigo-600 hover:text-white transition-all active:scale-95">Roter 90° ↻</button>
+                  </div>
                 </div>
                 <div className="px-10 pb-10 flex items-center justify-center bg-white min-h-[500px]">
                   {p.imagePreview ? (
                     <div className="relative w-full flex justify-center">
-                      <img src={p.imagePreview} style={{ transform: `rotate(${p.rotation || 0}deg)`, maxHeight: '80vh' }} className="max-w-full rounded-2xl shadow-xl border border-slate-100 transition-transform duration-300" />
+                      <img 
+                        src={p.imagePreview} 
+                        style={{ transform: `rotate(${p.rotation || 0}deg)`, maxHeight: '80vh' }} 
+                        className="max-w-full rounded-2xl shadow-xl border border-slate-100 transition-transform duration-300" 
+                      />
                     </div>
                   ) : <div className="text-slate-300 font-black uppercase tracking-widest text-[11px] py-40 border-4 border-dashed rounded-3xl w-full text-center">Digitalt dokument</div>}
                 </div>
@@ -111,11 +138,11 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                 </div>
                 <span className="bg-emerald-50 text-emerald-600 px-4 py-2 rounded-full font-black text-[10px] uppercase">Lese-modus</span>
               </div>
-              {currentReviewCandidate.pages.map((p, idx) => (
+              {currentReviewCandidate.pages.sort((a,b) => (a.pageNumber || 0) - (b.pageNumber || 0)).map((p, idx) => (
                 <div key={p.id} className="space-y-6 animate-in fade-in duration-500">
                    <div className="flex items-center gap-3">
-                     <div className="w-8 h-8 rounded-full bg-slate-800 text-white flex items-center justify-center font-black text-[11px]">{idx + 1}</div>
-                     <span className="text-[11px] font-black uppercase text-slate-500 tracking-widest">Side {idx + 1}</span>
+                     <div className="w-8 h-8 rounded-full bg-slate-800 text-white flex items-center justify-center font-black text-[11px]">{p.pageNumber || idx + 1}</div>
+                     <span className="text-[11px] font-black uppercase text-slate-500 tracking-widest">Side {p.pageNumber || idx + 1}</span>
                    </div>
                    <textarea 
                      value={p.transcription} 

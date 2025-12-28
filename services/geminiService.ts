@@ -68,11 +68,11 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<any[]> => {
       contents: {
         parts: [
           { inlineData: { mimeType: page.mimeType, data: page.base64Data } }, 
-          { text: "Analyser bildet. Finn alle elevsider i bildet. Hvis bildet inneholder to sider ved siden av hverandre (f.eks. A3-skann), returner to objekter med box_2d koordinater for hver side. Finn KandidatID, Part (Del 1 eller 2), PageNumber og FullText for hver side." }
+          { text: "Analyser bildet. Finn alle A4-sider i bildet. Identifiser KandidatID, PageNumber og FullText. Bruk ALLTID LaTeX-delimitere ($...$ for inline og $$...$$ for blokker). Detekter rotasjon (0, 90, 180, 270) slik at teksten er rett." }
         ],
       },
       config: { 
-        systemInstruction: "OCR- og segmenteringsekspert. Din oppgave er å finne sider i skannede dokumenter. Hvis bildet inneholder to sider ved siden av hverandre, returner TO objekter i listen. Finn KandidatID, Part, PageNumber, FullText og box_2d for hver side. Svar KUN JSON som en liste av objekter.",
+        systemInstruction: "OCR-analytiker. Svar KUN JSON.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.ARRAY,
@@ -83,13 +83,10 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<any[]> => {
               part: { type: Type.STRING },
               pageNumber: { type: Type.INTEGER },
               fullText: { type: Type.STRING },
-              box_2d: { 
-                type: Type.ARRAY, 
-                items: { type: Type.INTEGER },
-                description: "[ymin, xmin, ymax, xmax] normalisert til 1000"
-              }
+              rotation: { type: Type.INTEGER },
+              box_2d: { type: Type.ARRAY, items: { type: Type.INTEGER } }
             },
-            required: ["fullText", "candidateId"]
+            required: ["fullText", "candidateId", "box_2d"]
           }
         }
       }
@@ -107,29 +104,22 @@ export const analyzeTextContent = async (text: string): Promise<any> => {
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: {
-        parts: [
-          { text: `Analyser følgende tekst fra et elevdokument og finn kandidat-ID, navn eller referansenummer. Dette står ofte øverst i dokumentet eller i en 'topptekst' (header).\n\nVIKTIG: Prioriter de første 10 linjene med tekst.\n\nTEKST:\n${text.substring(0, 5000)}` }
-        ],
+        parts: [{ text: `Analyser metadata. Tekst:\n${text.substring(0, 5000)}` }],
       },
       config: { 
-        systemInstruction: "Dokumentanalytiker. Din oppgave er å identifisere hvem som har skrevet dokumentet. Se etter 'Kandidatnr', 'Navn', 'Elev-ID', 'Navn:' eller bare tallrekker som ligner på kandidatnumre, spesielt i starten av dokumentet. Svar KUN JSON.",
+        systemInstruction: "Dokumentanalytiker. Svar KUN JSON.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            candidateId: { type: Type.STRING, description: "Kandidatnummer eller ID. Bruk 'Ukjent' hvis ikke funnet." },
-            name: { type: Type.STRING, description: "Fullt navn hvis det finnes i teksten." },
-            part: { type: Type.STRING },
-            pageNumber: { type: Type.INTEGER },
+            candidateId: { type: Type.STRING },
             fullText: { type: Type.STRING }
           },
           required: ["candidateId", "fullText"]
         }
       }
     });
-    
-    const res = JSON.parse(cleanJson(response.text));
-    return { ...res, fullText: text };
+    return JSON.parse(cleanJson(response.text));
   });
 };
 
@@ -139,10 +129,16 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promi
     const parts: any[] = taskFiles.map(f => ({ inlineData: { mimeType: f.mimeType, data: f.base64Data } }));
     
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: { parts: [...parts, { text: "Lag en detaljert rettemanual basert på disse oppgavearkene. Separer oppgaver i 'Del 1' (uten hjelpemidler) og 'Del 2' (med hjelpemidler) hvis aktuelt." }] },
+      model: 'gemini-3-pro-preview',
+      contents: { 
+        parts: [
+          ...parts, 
+          { text: "LES NØYE: Lag en fullstendig rettemanual basert på disse oppgavearkene. Det er KRITISK at du finner og lister hver eneste deloppgave (f.eks. 1a, 1b, 1c, 1d, 2a, 2b osv.). Ikke utelat noe. Sett ALLTID standard maks poeng til 2.0 for hver deloppgave. For hver deloppgave, beskriv nøyaktig hva som kreves for full poengsum, og list vanlige feil med estimerte poengtrekk (f.eks. -1p for slurvefeil). Bruk konsekvent $...$ for ALL matematikk." }
+        ] 
+      },
       config: { 
-        systemInstruction: "Du skal lage en profesjonell rettemanual. Finn alle oppgaver, deres poengsum (standard 2 poeng hvis ikke oppgitt) og lag et løsningsforslag med LaTeX ($...$). Separer oppgavene i Del 1 og Del 2. Svar KUN JSON.",
+        systemInstruction: "Du er en nøyaktig sensor. Din oppgave er å dekomponere oppgavesettet til hver minste deloppgave. Standard poengsum for hver deloppgave SKAL være 2.0. All matematikk SKAL være i LaTeX ($...$).",
+        thinkingConfig: { thinkingBudget: 16000 },
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -153,12 +149,12 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promi
               items: {
                 type: Type.OBJECT,
                 properties: {
-                  name: { type: Type.STRING, description: "F.eks. 1a, 1b, 2a..." },
-                  part: { type: Type.STRING, description: "F.eks. Del 1 eller Del 2" },
+                  name: { type: Type.STRING },
+                  part: { type: Type.STRING },
                   description: { type: Type.STRING },
                   suggestedSolution: { type: Type.STRING },
                   commonErrors: { type: Type.STRING },
-                  maxPoints: { type: Type.INTEGER },
+                  maxPoints: { type: Type.NUMBER },
                   tema: { type: Type.STRING }
                 },
                 required: ["name", "part", "description", "suggestedSolution", "maxPoints"]
@@ -179,13 +175,13 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promi
 export const evaluateCandidate = async (candidate: Candidate, rubric: Rubric): Promise<any> => {
   return limiter.schedule(async () => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const content = candidate.pages.map(p => `SIDE ${p.pageNumber} (${p.part || "Ukjent del"}): ${p.transcription}`).join("\n\n");
+    const content = candidate.pages.map(p => `SIDE ${p.pageNumber}: ${p.transcription}`).join("\n\n");
 
     const response = await ai.models.generateContent({
       model: 'gemini-3-pro-preview',
       contents: `Vurder besvarelsen:\n\n${content}\n\nMot manualen:\n${JSON.stringify(rubric)}`,
       config: { 
-        systemInstruction: "Sensor-modus. Gi karakter og detaljert poengsum per oppgave. Bruk rettemanualens beskrivelser av vanlige feil for å trekke poeng korrekt. Svar KUN JSON.",
+        systemInstruction: "Sensor-modus. Gi tilbakemelding der du pakker all matematikk i $...$. Svar KUN JSON.",
         thinkingConfig: { thinkingBudget: 16000 }, 
         responseMimeType: "application/json",
         responseSchema: {

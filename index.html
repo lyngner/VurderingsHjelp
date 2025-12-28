@@ -7,7 +7,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
-    <title>ElevVurdering PRO</title>
+    <title>Vurderingshjelp</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <style>
@@ -18,6 +18,10 @@
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
+        
+        /* Spesifikke stiler for matematikk-containere */
+        .math-container p { margin-bottom: 0.5rem; }
+        .math-container .mjx-chtml { font-size: 110% !important; }
         
         @media print {
             @page { size: A4; margin: 20mm; }
@@ -36,8 +40,18 @@
     </style>
     <script>
       window.MathJax = {
-        tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']], processEscapes: true },
-        options: { enableMenu: false }
+        tex: {
+          inlineMath: [['$', '$'], ['\\(', '\\)']],
+          displayMath: [['$$', '$$'], ['\\[', '\\]']],
+          processEscapes: true,
+          packages: {'[+]': ['base', 'ams', 'noerrors', 'noundefined']}
+        },
+        options: {
+          enableMenu: false,
+          ignoreHtmlClass: 'tex2jax_ignore',
+          processHtmlClass: 'tex2jax_process'
+        },
+        loader: {load: ['[tex]/ams']}
       };
     </script>
     <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
@@ -59,7 +73,6 @@
 </head>
 <body class="bg-[#F8FAFC] text-slate-900 min-h-screen">
     <div id="root"></div>
-    <!-- Lagt til versjonsparameter for å tvinge gjennom oppdatering på Google Cloud -->
-    <script type="module" src="./index.tsx?v=3.8.0"></script>
+    <script type="module" src="./index.tsx?v=3.11.0"></script>
 </body>
 </html>
