@@ -1,33 +1,56 @@
 # ElevVurdering PRO - Brukermanual & Teknisk Dokumentasjon
 
-## 🚀 Versjon 3.7 - Strukturert Rettemanual & Del-inndeling
+## 🚀 Versjon 3.8 - Optimalisert for Sky-distribusjon
 
-Denne versjonen fokuserer på bedre organisering av prøver med flere deler og en mer intuitiv navigasjon i rettemanualen.
+Denne versjonen inkluderer "cache-busting" mekanismer for å sikre at brukere på Google Cloud alltid ser den nyeste koden.
 
 ---
 
 ## 🏗 Innlastingsprosessen
 
 ### 1. Filtyper som støttes
-Appen aksepterer følgende formater:
-*   **Word (.docx)**: Tekst trekkes ut lokalt. Appen ser nå spesifikt etter navn og kandidatnummer i de første 10 linjene (topptekst).
-*   **PDF (.pdf)**: Splittes automatisk i sider lokalt.
+*   **Word (.docx)**: Tekst trekkes ut lokalt.
+*   **PDF (.pdf)**: Splittes automatisk i sider.
 *   **Bilder (.jpg, .png)**: Skannede besvarelser analyseres med OCR.
+*   **Google Drive**: Du kan lime inn en mappe-link for å hente alle JPG-filer direkte.
 
 ### 2. Slik fungerer "Smart Side-splitting" (A3 til A4)
-Mange skannere tar to A4-sider i én operasjon (A3). Appen håndterer nå dette automatisk:
-*   **KI-deteksjon**: Gemini analyserer bildet for å se om det inneholder flere fysiske ark.
-*   **Automatisk beskjæring**: Hvis to sider oppdages, vil appen automatisk "klippe" bildet i to og opprette separate sider for hver del. Dette sikrer at du i "Kontroll"-steget ser ett og ett ark av gangen.
+Mange skannere tar to A4-sider i én operasjon (A3). Appen håndterer nå dette automatisk ved å bruke KI til å finne sidene og fysisk "klippe" dem i to bilder lokalt i nettleseren din.
 
 ### 3. Del 1 og Del 2 Inndeling
-Prøver er ofte delt i to (f.eks. med og uten hjelpemidler). Appen støtter nå dette fullt ut:
-*   **Automatisk kategorisering**: KI-en forsøker å plassere oppgaver i riktig del basert på oppgavearkene.
-*   **Filtrering i manuelt**: Sidemenyen i rettemanualen lar deg raskt bytte mellom å se alle oppgaver, bare Del 1, bare Del 2, eller gå direkte til en spesifikk hovedoppgave (f.eks. Oppgave 2).
+Prøver er ofte delt i to (f.eks. med og uten hjelpemidler). Appen støtter nå dette fullt ut i både rettemanual og filtrering.
 
-### 4. Smart Rettemanual (Oppdatert)
-Manualen er nå organisert for maksimal oversikt:
-*   **Hovedoppgave-fokus**: Sidemenyen viser nå hovedoppgaver (1, 2, 3...) i stedet for hver enkelt deloppgave (1a, 1b). Dette reduserer støy i grensesnittet.
-*   **Vertikal struktur**: Matematikk og tekst stables vertikalt slik at komplekse utregninger får den plassen de trenger.
+---
+
+## ☁️ Distribusjon til Google Cloud (Viktig!)
+
+Hvis du distribuerer appen til Google Cloud Storage (GCS) eller Firebase, kan brukere oppleve å se en gammel versjon på grunn av caching.
+
+### Slik fikser du caching:
+Når du laster opp filene (f.eks. med `gsutil` eller i konsollen), må `index.html` ha en `Cache-Control` header som sier "ikke cache".
+
+**Kommando for GCS:**
+```bash
+gsutil cp -z html,js,css -h "Cache-Control:no-cache,max-age=0" index.html gs://din-mappe/
+gsutil cp -z html,js,css -h "Cache-Control:public,max-age=3600" * gs://din-mappe/
+```
+
+**Kommando for Firebase (firebase.json):**
+```json
+{
+  "hosting": {
+    "headers": [
+      {
+        "source": "/**",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
+      }
+    ]
+  }
+}
+```
+
+### Problemer med CORS på Google Cloud?
+Vi har endret `index.html` til å bruke en relativ bane `./index.tsx`. Dette fjerner behovet for kompliserte CORS-oppsett på selve script-kilden.
 
 ---
 

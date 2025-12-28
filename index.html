@@ -4,6 +4,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
     <title>ElevVurdering PRO</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -56,6 +59,7 @@
 </head>
 <body class="bg-[#F8FAFC] text-slate-900 min-h-screen">
     <div id="root"></div>
-    <script type="module" src="./index.tsx"></script>
+    <!-- Lagt til versjonsparameter for å tvinge gjennom oppdatering på Google Cloud -->
+    <script type="module" src="./index.tsx?v=3.8.0"></script>
 </body>
 </html>

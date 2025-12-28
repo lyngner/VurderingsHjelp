@@ -79,6 +79,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
         )}
       </div>
 
+      {/* Versjonsindikator nederst på siden */}
+      <footer className="max-w-6xl mx-auto mt-20 pt-8 border-t border-slate-100 flex justify-between items-center opacity-40">
+        <span className="text-[10px] font-black uppercase tracking-[0.2em]">Versjon 3.8.0 (Siste oppdatering)</span>
+        <span className="text-[9px] font-bold text-slate-400 uppercase italic">Tips: Bruk Ctrl + F5 hvis du ikke ser endringer</span>
+      </footer>
+
       {showSettings && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100] flex items-center justify-center p-8 animate-in fade-in duration-300">
            <div className="bg-white max-w-2xl w-full rounded-[50px] shadow-2xl overflow-hidden p-12 relative animate-in zoom-in-95 duration-300">
@@ -126,7 +132,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                  </section>
               </div>
               <div className="mt-12 pt-8 border-t border-slate-50 flex justify-between items-center text-[10px] font-bold text-slate-300 uppercase tracking-widest">
-                <span>Versjon 3.1.2</span>
+                <span>Versjon 3.8.0</span>
                 <span className="text-indigo-400">Utviklet for pedagogisk effektivitet</span>
               </div>
            </div>
