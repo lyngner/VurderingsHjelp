@@ -1,5 +1,5 @@
 
-import React, { useEffect, useRef, useMemo } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 export const Spinner: React.FC<{ size?: string; color?: string }> = ({ size = "w-4 h-4", color = "text-indigo-600" }) => (
   <svg className={`animate-spin ${size} ${color}`} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -8,42 +8,46 @@ export const Spinner: React.FC<{ size?: string; color?: string }> = ({ size = "w
   </svg>
 );
 
+/**
+ * LatexRenderer v2: Bruker en enkelt container med pre-wrap for å unngå
+ * at React-noder splitter opp LaTeX-delimitere.
+ */
 export const LatexRenderer: React.FC<{ content: string; className?: string }> = ({ content, className = "" }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [isRendered, setIsRendered] = useState(false);
   
-  const processedContent = useMemo(() => {
-    if (!content) return "";
-    return content
-      .split('\n')
-      .map(line => line.trim() ? `<p class="mb-2 last:mb-0">${line}</p>` : '<div class="h-4"></div>')
-      .join('');
-  }, [content]);
-
+  // Vi trigger rendring hver gang innholdet endres
   useEffect(() => {
     const mathjax = (window as any).MathJax;
+    
     if (containerRef.current && mathjax && mathjax.typesetPromise) {
-      // Vi bruker en timeout eller requestAnimationFrame for å sikre at React 
-      // har skrevet til DOM-en før MathJax prøver å finne formlene.
-      requestAnimationFrame(() => {
-        try {
-          // Viktig: Fjern gammel "prosessert" status for denne containeren
-          mathjax.typesetClear([containerRef.current]);
-          // Kjør ny rendring
-          mathjax.typesetPromise([containerRef.current]).catch((err: any) => {
-            console.debug("MathJax error (expected during fast switching):", err);
+      setIsRendered(false);
+      
+      // Vi bruker en liten timeout for å sikre at React har oppdatert DOM-en ferdig
+      const timer = setTimeout(() => {
+        mathjax.typesetClear([containerRef.current]);
+        mathjax.typesetPromise([containerRef.current])
+          .then(() => {
+            setIsRendered(true);
+          })
+          .catch((err: any) => {
+            console.warn("MathJax error:", err);
+            setIsRendered(true);
           });
-        } catch (e) {
-          console.warn("MathJax failed to clear or typeset:", e);
-        }
-      });
+      }, 50);
+      
+      return () => clearTimeout(timer);
+    } else {
+      setIsRendered(true);
     }
-  }, [processedContent]);
+  }, [content]);
 
   return (
     <div 
       ref={containerRef} 
-      className={`math-container leading-relaxed break-words overflow-x-auto custom-scrollbar tex2jax_process ${className}`}
-      dangerouslySetInnerHTML={{ __html: processedContent }} 
-    />
+      className={`math-content tex2jax_process transition-opacity duration-300 ${isRendered ? 'opacity-100' : 'opacity-0'} ${className}`}
+    >
+      {content}
+    </div>
   );
 };

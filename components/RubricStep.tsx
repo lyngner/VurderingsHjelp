@@ -18,15 +18,14 @@ export const RubricStep: React.FC<RubricStepProps> = ({
 }) => {
   const [selectedFilter, setSelectedFilter] = useState<{ part: string | null; taskNum: string | null }>({ part: null, taskNum: null });
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingHeaderId, setEditingHeaderId] = useState<string | null>(null);
   const [editingErrorsId, setEditingErrorsId] = useState<string | null>(null);
 
   const criteria = activeProject.rubric?.criteria || [];
 
-  // Grupperer kun etter hovedoppgaver (f.eks. "1", "2") forsidemenyen
   const groupedByPartAndMainTask = useMemo(() => {
     const parts: Record<string, string[]> = {};
     criteria.forEach(c => {
-      // Normaliser partKey til "Del 1", "Del 2" etc.
       const partKey = c.part?.trim() || "Uspesifisert";
       const match = c.name.match(/(\d+)/);
       const mainTaskNum = match ? match[1] : c.name;
@@ -35,7 +34,6 @@ export const RubricStep: React.FC<RubricStepProps> = ({
       if (!parts[partKey].includes(mainTaskNum)) parts[partKey].push(mainTaskNum);
     });
 
-    // Sorterer hovedoppgaver numerisk
     Object.keys(parts).forEach(pk => {
       parts[pk].sort((a, b) => (parseInt(a) || 0) - (parseInt(b) || 0));
     });
@@ -136,7 +134,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
             <div className="flex flex-col md:flex-row justify-between items-start gap-6">
               <div className="min-w-0 flex-1">
                 <h2 className="text-2xl md:text-3xl font-black text-slate-800 leading-tight">
-                  {activeProject.rubric.title}
+                  <LatexRenderer content={activeProject.rubric.title} />
                 </h2>
                 <div className="flex gap-2 mt-3">
                    <span className="text-[10px] font-black text-indigo-500 uppercase tracking-[0.2em] bg-indigo-50 px-3 py-1 rounded-full whitespace-nowrap">
@@ -170,7 +168,8 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                   
                   <div className="space-y-10">
                     {partCriteria.map((crit) => {
-                      const isEditing = editingId === crit.name;
+                      const isEditingHeader = editingHeaderId === crit.name;
+                      const isEditingSolution = editingId === crit.name;
                       const isEditingErrors = editingErrorsId === crit.name;
                       const taskDisplay = crit.name.toUpperCase();
 
@@ -181,11 +180,29 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                             <div className="flex items-center gap-6 min-w-0 flex-1">
                               <div className="w-16 h-14 md:w-20 md:h-16 rounded-[20px] bg-slate-800 text-white flex flex-col items-center justify-center shadow-lg shrink-0 overflow-hidden">
                                 <span className="text-[8px] font-black opacity-40 uppercase tracking-tighter mb-0.5">{crit.part}</span>
-                                <span className="text-base md:text-lg font-black leading-none">{taskDisplay}</span>
+                                <div className="text-base md:text-lg font-black leading-none">
+                                  <LatexRenderer content={taskDisplay} />
+                                </div>
                               </div>
-                              <div className="min-w-0 flex-1">
-                                <input value={crit.tema || ""} placeholder="Tema..." onChange={e => handleFieldChange(crit.name, 'tema', e.target.value)} className="text-[10px] font-black text-indigo-500 uppercase tracking-widest bg-transparent outline-none w-full mb-1" />
-                                <input value={crit.description} onChange={e => handleFieldChange(crit.name, 'description', e.target.value)} className="text-lg md:text-xl font-bold text-slate-700 bg-transparent outline-none w-full focus:bg-white focus:ring-4 focus:ring-indigo-50 rounded-xl transition-all" />
+                              <div className="min-w-0 flex-1 group">
+                                <div className="flex items-center justify-between mb-1">
+                                   <input value={crit.tema || ""} placeholder="Tema..." onChange={e => handleFieldChange(crit.name, 'tema', e.target.value)} className="text-[10px] font-black text-indigo-500 uppercase tracking-widest bg-transparent outline-none w-full" />
+                                   <button onClick={() => setEditingHeaderId(isEditingHeader ? null : crit.name)} className="opacity-0 group-hover:opacity-100 text-[9px] font-black uppercase text-indigo-400 bg-white px-3 py-1 rounded-full shadow-sm border transition-all">
+                                      {isEditingHeader ? 'Lagre ✓' : 'Rediger Tittel ✎'}
+                                   </button>
+                                </div>
+                                {isEditingHeader ? (
+                                  <input 
+                                    autoFocus
+                                    value={crit.description} 
+                                    onChange={e => handleFieldChange(crit.name, 'description', e.target.value)} 
+                                    className="text-lg md:text-xl font-bold text-slate-700 bg-white ring-4 ring-indigo-50 outline-none w-full rounded-xl p-2 transition-all border border-indigo-100" 
+                                  />
+                                ) : (
+                                  <div className="text-lg md:text-xl font-bold text-slate-700">
+                                    <LatexRenderer content={crit.description} />
+                                  </div>
+                                )}
                               </div>
                             </div>
                             <div className="flex gap-4 items-center shrink-0">
@@ -210,12 +227,12 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                                     <div className="w-2.5 h-2.5 rounded-full bg-emerald-400"></div>
                                     <h4 className="text-[11px] font-black uppercase text-slate-400 tracking-widest">Løsningsforslag</h4>
                                   </div>
-                                  <button onClick={() => setEditingId(isEditing ? null : crit.name)} className={`text-[10px] font-black uppercase px-4 py-1.5 rounded-full border transition-all ${isEditing ? 'bg-indigo-600 text-white shadow-md' : 'text-indigo-600 border-indigo-100 hover:bg-indigo-50'}`}>
-                                    {isEditing ? 'Lagre ✓' : 'Rediger ✎'}
+                                  <button onClick={() => setEditingId(isEditingSolution ? null : crit.name)} className={`text-[10px] font-black uppercase px-4 py-1.5 rounded-full border transition-all ${isEditingSolution ? 'bg-indigo-600 text-white shadow-md' : 'text-indigo-600 border-indigo-100 hover:bg-indigo-50'}`}>
+                                    {isEditingSolution ? 'Lagre ✓' : 'Rediger ✎'}
                                   </button>
                                 </div>
-                                <div className={`rounded-[30px] p-8 md:p-10 border min-h-[180px] transition-all ${isEditing ? 'bg-white border-indigo-200 ring-8 ring-indigo-50/50' : 'bg-slate-50 border-slate-100 shadow-inner'}`}>
-                                  {isEditing ? (
+                                <div className={`rounded-[30px] p-8 md:p-10 border min-h-[180px] transition-all ${isEditingSolution ? 'bg-white border-indigo-200 ring-8 ring-indigo-50/50' : 'bg-slate-50 border-slate-100 shadow-inner'}`}>
+                                  {isEditingSolution ? (
                                     <textarea value={crit.suggestedSolution} autoFocus onChange={e => handleFieldChange(crit.name, 'suggestedSolution', e.target.value)} className="w-full bg-transparent outline-none text-[15px] font-medium text-slate-600 resize-none h-48 leading-relaxed custom-scrollbar" placeholder="Skriv LaTeX her..." />
                                   ) : (
                                     <LatexRenderer content={crit.suggestedSolution} className="text-slate-800 text-[15px] md:text-[16px]" />

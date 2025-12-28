@@ -68,11 +68,11 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<any[]> => {
       contents: {
         parts: [
           { inlineData: { mimeType: page.mimeType, data: page.base64Data } }, 
-          { text: "Analyser bildet. Finn HELE A4-siden i bildet. Identifiser KandidatID, PageNumber og FullText. KRITISK: Inkluder ALLTID tabeller med kandidatnummer og sidetall i box_2d-utsnittet. Ikke klipp bort headeren. Bruk ALLTID LaTeX-delimitere ($...$ for inline og $$...$$ for blokker). Detekter rotasjon (0, 90, 180, 270) slik at teksten er rett." }
+          { text: "Analyser bildet. Identifiser KandidatID, PageNumber og FullText. Bruk ALLTID LaTeX-delimitere for matematikk: \\( ... \\) for inline og \\[ ... \\] for blokker. Dette er ekstremt viktig for korrekt visning." }
         ],
       },
       config: { 
-        systemInstruction: "OCR-analytiker. Svar KUN JSON. Du er ekspert på å finne kandidatnummer i tabeller øverst på siden.",
+        systemInstruction: "OCR-analytiker. Svar KUN JSON. Pakk ALL matematikk i LaTeX-delimitere \\( ... \\) eller \\[ ... \\].",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.ARRAY,
@@ -104,10 +104,10 @@ export const analyzeTextContent = async (text: string): Promise<any> => {
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: {
-        parts: [{ text: `Analyser metadata for denne digitale besvarelsen. Finn kandidatnummer og eventuelt sidetall hvis det finnes. Tekst:\n${text.substring(0, 5000)}` }],
+        parts: [{ text: `Analyser metadata for denne digitale besvarelsen. Finn kandidatnummer. Pakk matematikk i \\( ... \\). Tekst:\n${text.substring(0, 5000)}` }],
       },
       config: { 
-        systemInstruction: "Dokumentanalytiker for digitale dokumenter. Svar KUN JSON.",
+        systemInstruction: "Dokumentanalytiker. Svar KUN JSON. Bruk LaTeX \\( ... \\).",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -134,11 +134,11 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promi
       contents: { 
         parts: [
           ...parts, 
-          { text: "LES NØYE: Lag en fullstendig rettemanual basert på disse oppgavearkene. Det er KRITISK at du skiller mellom 'Del 1' og 'Del 2' (hvis begge finnes). Finn hver eneste deloppgave (f.eks. 1a, 1b, 2a, 2b osv.). Inkluder alle detaljer fra fasit/løsningsforslag. Sett ALLTID standard maks poeng til 2.0 for hver deloppgave. For hver deloppgave, beskriv nøyaktig hva som kreves for full poengsum, og list vanlige feil med poengtrekk. Bruk konsekvent $...$ for ALL matematikk." }
+          { text: "Lag en fullstendig rettemanual. Inkluder alle detaljer fra fasit. Pakk ALL matematikk (formler, variabler, brøker) i LaTeX-delimitere: \\( ... \\) for inline matte og \\[ ... \\] for store formler på egen linje. Ikke bruk $ alene hvis du kan unngå det." }
         ] 
       },
       config: { 
-        systemInstruction: "Du er en nøyaktig sensor. Skill alltid mellom 'Del 1' og 'Del 2' i feltet 'part'. Dekomponer til minste deloppgave. Standard poengsum per deloppgave: 2.0. All matematikk SKAL være i LaTeX ($...$).",
+        systemInstruction: "Ekspert på matematikkvurdering. Svar KUN JSON. Det er livsviktig at all matematikk er pakket i \\( ... \\) eller \\[ ... \\].",
         thinkingConfig: { thinkingBudget: 16000 },
         responseMimeType: "application/json",
         responseSchema: {
@@ -151,7 +151,7 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promi
                 type: Type.OBJECT,
                 properties: {
                   name: { type: Type.STRING },
-                  part: { type: Type.STRING, description: "Nøyaktig 'Del 1' eller 'Del 2'" },
+                  part: { type: Type.STRING },
                   description: { type: Type.STRING },
                   suggestedSolution: { type: Type.STRING },
                   commonErrors: { type: Type.STRING },
@@ -180,9 +180,9 @@ export const evaluateCandidate = async (candidate: Candidate, rubric: Rubric): P
 
     const response = await ai.models.generateContent({
       model: 'gemini-3-pro-preview',
-      contents: `Vurder besvarelsen:\n\n${content}\n\nMot manualen:\n${JSON.stringify(rubric)}`,
+      contents: `Vurder besvarelsen mot manualen. Bruk LaTeX \\( ... \\) for all matte i begrunnelsen.\n\nBesvarelse:\n${content}\n\nManual:\n${JSON.stringify(rubric)}`,
       config: { 
-        systemInstruction: "Sensor-modus. Gi tilbakemelding der du pakker all matematikk i $...$. Svar KUN JSON.",
+        systemInstruction: "Sensor. Svar KUN JSON. Pakk all matte i \\( ... \\).",
         thinkingConfig: { thinkingBudget: 16000 }, 
         responseMimeType: "application/json",
         responseSchema: {

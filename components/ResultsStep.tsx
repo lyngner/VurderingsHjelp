@@ -121,7 +121,9 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
         <header className="bg-white p-10 rounded-[50px] shadow-sm border border-slate-100 flex justify-between items-center relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-1.5 bg-indigo-600"></div>
           <div>
-            <h2 className="text-3xl font-black text-slate-800">{currentCandidate?.name}</h2>
+            <h2 className="text-3xl font-black text-slate-800">
+               <LatexRenderer content={currentCandidate?.name || ""} />
+            </h2>
             <p className="text-slate-400 font-bold uppercase text-[10px] mt-2 tracking-widest">Individuell vurderingsrapport</p>
           </div>
           <div className="text-center bg-indigo-50 text-indigo-600 px-8 py-4 rounded-[30px] border border-indigo-100/50">
@@ -139,7 +141,9 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
           <>
             <section className="bg-white p-10 rounded-[50px] shadow-sm border border-slate-100 space-y-6">
                <h3 className="font-black text-[11px] uppercase text-indigo-600 tracking-widest">Begrunnelse</h3>
-               <p className="text-slate-700 leading-relaxed font-medium">{currentCandidate.evaluation?.feedback}</p>
+               <div className="text-slate-700 leading-relaxed font-medium">
+                  <LatexRenderer content={currentCandidate.evaluation?.feedback || ""} />
+               </div>
             </section>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -147,8 +151,9 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
                 <h3 className="font-black text-[11px] uppercase text-emerald-700 tracking-widest mb-6">Mestring</h3>
                 <ul className="space-y-3">
                   {currentCandidate.evaluation?.vekstpunkter?.map((v, i) => (
-                    <li key={i} className="flex gap-3 text-sm font-bold text-emerald-800">
-                      <span>✓</span> {v}
+                    <li key={i} className="flex gap-3 text-sm font-bold text-emerald-800 items-start">
+                      <span className="shrink-0 mt-0.5">✓</span> 
+                      <LatexRenderer content={v} />
                     </li>
                   ))}
                 </ul>
@@ -170,11 +175,15 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
                 <tbody className="divide-y">
                   {currentCandidate.evaluation?.taskBreakdown.map((t, i) => (
                     <tr key={i}>
-                      <td className="p-8 w-32 font-black text-slate-400">{t.taskName}</td>
-                      <td className="p-8">
-                        <p className="font-bold text-slate-700 mb-1">{t.comment}</p>
+                      <td className="p-8 w-32 font-black text-slate-400">
+                        <LatexRenderer content={t.taskName} />
                       </td>
-                      <td className="p-8 text-right font-black text-indigo-600">{t.score} / {t.max}</td>
+                      <td className="p-8">
+                        <div className="font-bold text-slate-700 mb-1">
+                           <LatexRenderer content={t.comment} />
+                        </div>
+                      </td>
+                      <td className="p-8 text-right font-black text-indigo-600 shrink-0 whitespace-nowrap">{t.score} / {t.max}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -184,7 +193,7 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
         )}
 
         <div className="flex justify-center pt-10 no-print">
-          <button onClick={() => setSelectedResultCandidateId(null)} className="text-[10px] font-black uppercase text-slate-400 hover:text-indigo-600 transition-colors tracking-widest">← Tilbake til oversikt</button>
+          <button onClick={() => setSelectedResultCandidateId(null)} className="text-[10px] font-black uppercase text-slate-400 hover:text-indigo-600 transition-all tracking-widest">← Tilbake til oversikt</button>
         </div>
       </div>
     </div>
