@@ -1,7 +1,7 @@
 
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { Project, Page } from '../types';
-import { processFileToImages } from '../services/fileService';
+import { processFileToImages, cropImageFromBase64 } from '../services/fileService';
 import { 
   transcribeAndAnalyzeImage, 
   analyzeTextContent, 
@@ -34,48 +34,74 @@ export const useProjectProcessor = (
     }
   };
 
-  const integratePageResult = (page: Page, results: any, isError = false) => {
+  const integratePageResults = async (originalPage: Page, results: any[]) => {
+    const splitPages: Page[] = [];
+    
+    // Hvis vi har flere segmenter, må vi beskjære originalbildet
+    if (results.length > 1 && originalPage.imagePreview) {
+      for (let i = 0; i < results.length; i++) {
+        const res = results[i];
+        if (res.box_2d) {
+          try {
+            const cropped = await cropImageFromBase64(originalPage.imagePreview, res.box_2d);
+            splitPages.push({
+              ...originalPage,
+              id: `${originalPage.id}_${i}`,
+              imagePreview: cropped.preview,
+              base64Data: cropped.data,
+              candidateId: String(res.candidateId || "Ukjent"),
+              part: res.part,
+              pageNumber: res.pageNumber,
+              transcription: res.fullText,
+              status: 'completed'
+            });
+          } catch (e) {
+            console.error("Feil ved beskjæring:", e);
+          }
+        }
+      }
+    }
+
     setActiveProject(prev => {
       if (!prev) return null;
-      if (isError) {
-        return {
-          ...prev,
-          unprocessedPages: (prev.unprocessedPages || []).map(p => p.id === page.id ? { ...p, status: 'error' as const } : p)
-        };
-      }
       let cands = [...(prev.candidates || [])];
-      const resArr = Array.isArray(results) ? results : [results];
-      resArr.forEach((res: any) => {
-        const cId = String(res.candidateId || "Ukjent");
-        const cName = res.name || `Kandidat ${cId}`;
-        
+      
+      const finalResults = splitPages.length > 0 ? splitPages : results.map((r, i) => ({
+        ...originalPage,
+        candidateId: String(r.candidateId || "Ukjent"),
+        part: r.part,
+        pageNumber: r.pageNumber,
+        transcription: r.fullText,
+        status: 'completed'
+      }));
+
+      finalResults.forEach((resPage: any) => {
+        const cId = String(resPage.candidateId || "Ukjent");
         let candIndex = cands.findIndex(c => c.id === cId);
-        const newPage: Page = { 
-          ...page, 
-          candidateId: cId, 
-          part: res.part, 
-          pageNumber: res.pageNumber, 
-          transcription: res.fullText || page.transcription, 
-          status: 'completed' 
-        };
         
+        const newPage: Page = splitPages.length > 0 ? resPage : {
+          ...originalPage,
+          candidateId: cId,
+          part: resPage.part,
+          pageNumber: resPage.pageNumber,
+          transcription: resPage.transcription || originalPage.transcription,
+          status: 'completed'
+        };
+
         if (candIndex === -1) {
-          cands.push({ id: cId, name: cName, status: 'completed', pages: [newPage] });
+          cands.push({ id: cId, name: `Kandidat ${cId}`, status: 'completed', pages: [newPage] });
         } else {
-          // Oppdater navn hvis vi fant et mer spesifikt ett i dette dokumentet
-          if (res.name && cands[candIndex].name === `Kandidat ${cId}`) {
-            cands[candIndex].name = res.name;
-          }
-          const pageExists = cands[candIndex].pages.some(p => p.contentHash === page.contentHash);
+          const pageExists = cands[candIndex].pages.some(p => p.id === newPage.id);
           if (!pageExists) {
             cands[candIndex] = { ...cands[candIndex], pages: [...cands[candIndex].pages, newPage] };
           }
         }
       });
+
       return { 
         ...prev, 
         candidates: cands, 
-        unprocessedPages: (prev.unprocessedPages || []).filter(p => p.id !== page.id) 
+        unprocessedPages: (prev.unprocessedPages || []).filter(p => p.id !== originalPage.id) 
       };
     });
   };
@@ -83,10 +109,16 @@ export const useProjectProcessor = (
   const processSinglePage = async (page: Page) => {
     try {
       setActiveProject(prev => prev ? ({ ...prev, unprocessedPages: (prev.unprocessedPages || []).map(p => p.id === page.id ? { ...p, status: 'pending' as const } : p) }) : null);
-      const res = page.mimeType === 'text/plain' ? await analyzeTextContent(page.transcription!) : await transcribeAndAnalyzeImage(page);
-      integratePageResult(page, res);
+      
+      if (page.mimeType === 'text/plain') {
+        const res = await analyzeTextContent(page.transcription!);
+        await integratePageResults(page, [res]);
+      } else {
+        const results = await transcribeAndAnalyzeImage(page);
+        await integratePageResults(page, results);
+      }
     } catch (e) {
-      integratePageResult(page, null, true);
+      setActiveProject(prev => prev ? ({ ...prev, unprocessedPages: (prev.unprocessedPages || []).map(p => p.id === page.id ? { ...p, status: 'error' as const } : p) }) : null);
     } finally {
       setProcessingCount(prev => Math.max(0, prev - 1));
     }

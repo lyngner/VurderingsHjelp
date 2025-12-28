@@ -1,9 +1,10 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { Page, Candidate, Rubric } from "../types";
 import { getFromGlobalCache, saveToGlobalCache } from "./storageService";
 
 const cleanJson = (text: string | undefined): string => {
-  if (!text) return "{}";
+  if (!text) return "[]";
   let cleaned = text.trim();
   if (cleaned.startsWith("```")) {
     cleaned = cleaned.replace(/^```(?:json)?\n?/, "").replace(/```$/, "").trim();
@@ -56,9 +57,9 @@ class RateLimiter {
 
 const limiter = new RateLimiter();
 
-export const transcribeAndAnalyzeImage = async (page: Page): Promise<any> => {
+export const transcribeAndAnalyzeImage = async (page: Page): Promise<any[]> => {
   const cachedData = await getFromGlobalCache(page.contentHash);
-  if (cachedData) return cachedData;
+  if (cachedData) return Array.isArray(cachedData) ? cachedData : [cachedData];
 
   return limiter.schedule(async () => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -67,21 +68,29 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<any> => {
       contents: {
         parts: [
           { inlineData: { mimeType: page.mimeType, data: page.base64Data } }, 
-          { text: "Transkriber alt innhold og finn kandidat-ID." }
+          { text: "Analyser bildet. Finn alle elevsider i bildet. Hvis bildet inneholder to sider ved siden av hverandre (f.eks. A3-skann), returner to objekter med box_2d koordinater for hver side. Finn KandidatID, Part (Del 1 eller 2), PageNumber og FullText for hver side." }
         ],
       },
       config: { 
-        systemInstruction: "OCR-ekspert. Finn KandidatID, Part, PageNumber og FullText. Svar KUN JSON.",
+        systemInstruction: "OCR- og segmenteringsekspert. Din oppgave er å finne sider i skannede dokumenter. Hvis bildet inneholder to sider ved siden av hverandre, returner TO objekter i listen. Finn KandidatID, Part, PageNumber, FullText og box_2d for hver side. Svar KUN JSON som en liste av objekter.",
         responseMimeType: "application/json",
         responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            candidateId: { type: Type.STRING },
-            part: { type: Type.STRING },
-            pageNumber: { type: Type.INTEGER },
-            fullText: { type: Type.STRING }
-          },
-          required: ["fullText", "candidateId"]
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              candidateId: { type: Type.STRING },
+              part: { type: Type.STRING },
+              pageNumber: { type: Type.INTEGER },
+              fullText: { type: Type.STRING },
+              box_2d: { 
+                type: Type.ARRAY, 
+                items: { type: Type.INTEGER },
+                description: "[ymin, xmin, ymax, xmax] normalisert til 1000"
+              }
+            },
+            required: ["fullText", "candidateId"]
+          }
         }
       }
     });
@@ -92,9 +101,6 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<any> => {
   });
 };
 
-/**
- * Analyserer ren tekst (f.eks. fra Word) for å finne kandidat-ID og metadata.
- */
 export const analyzeTextContent = async (text: string): Promise<any> => {
   return limiter.schedule(async () => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -134,9 +140,9 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promi
     
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: { parts: [...parts, { text: "Lag en detaljert rettemanual basert på disse oppgavearkene." }] },
+      contents: { parts: [...parts, { text: "Lag en detaljert rettemanual basert på disse oppgavearkene. Separer oppgaver i 'Del 1' (uten hjelpemidler) og 'Del 2' (med hjelpemidler) hvis aktuelt." }] },
       config: { 
-        systemInstruction: "Du skal lage en profesjonell rettemanual. Finn alle oppgaver, deres poengsum (standard 2 poeng hvis ikke oppgitt) og lag et løsningsforslag med LaTeX ($...$). Inkluder også en beskrivelse av 'vanlige feil' og hvordan disse skal poenggis for hver deloppgave. Svar KUN JSON.",
+        systemInstruction: "Du skal lage en profesjonell rettemanual. Finn alle oppgaver, deres poengsum (standard 2 poeng hvis ikke oppgitt) og lag et løsningsforslag med LaTeX ($...$). Separer oppgavene i Del 1 og Del 2. Svar KUN JSON.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -147,14 +153,15 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promi
               items: {
                 type: Type.OBJECT,
                 properties: {
-                  name: { type: Type.STRING },
+                  name: { type: Type.STRING, description: "F.eks. 1a, 1b, 2a..." },
+                  part: { type: Type.STRING, description: "F.eks. Del 1 eller Del 2" },
                   description: { type: Type.STRING },
                   suggestedSolution: { type: Type.STRING },
                   commonErrors: { type: Type.STRING },
                   maxPoints: { type: Type.INTEGER },
                   tema: { type: Type.STRING }
                 },
-                required: ["name", "description", "suggestedSolution", "maxPoints"]
+                required: ["name", "part", "description", "suggestedSolution", "maxPoints"]
               }
             }
           },
@@ -172,7 +179,7 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promi
 export const evaluateCandidate = async (candidate: Candidate, rubric: Rubric): Promise<any> => {
   return limiter.schedule(async () => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const content = candidate.pages.map(p => `SIDE ${p.pageNumber}: ${p.transcription}`).join("\n\n");
+    const content = candidate.pages.map(p => `SIDE ${p.pageNumber} (${p.part || "Ukjent del"}): ${p.transcription}`).join("\n\n");
 
     const response = await ai.models.generateContent({
       model: 'gemini-3-pro-preview',

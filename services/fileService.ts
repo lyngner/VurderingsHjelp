@@ -1,13 +1,12 @@
+
 import { Page } from '../types';
 import mammoth from 'mammoth';
 
 /**
  * Genererer en unik hash basert på innholdet i en streng/bilde.
- * Brukes for caching i IndexedDB.
  */
 export const generateHash = (str: string): string => {
   if (!str) return Math.random().toString(36).substring(7);
-  // Ta en sample av teksten for raskere hashing
   const sample = str.length > 2000 
     ? str.substring(500, 1000) + str.substring(str.length / 2, str.length / 2 + 500) + str.substring(str.length - 1000, str.length - 500)
     : str;
@@ -20,20 +19,43 @@ export const generateHash = (str: string): string => {
 };
 
 /**
- * Konverterer filer (PDF, DOCX, JPG) til et format appen kan jobbe med (Page-objekter).
+ * Beskjærer et bilde basert på normaliserte koordinater [ymin, xmin, ymax, xmax] (0-1000).
  */
+export const cropImageFromBase64 = async (base64: string, box: number[]): Promise<{ preview: string, data: string }> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return reject("Kunne ikke opprette canvas context");
+
+      const [ymin, xmin, ymax, xmax] = box;
+      const left = (xmin / 1000) * img.width;
+      const top = (ymin / 1000) * img.height;
+      const width = ((xmax - xmin) / 1000) * img.width;
+      const height = ((ymax - ymin) / 1000) * img.height;
+
+      canvas.width = width;
+      canvas.height = height;
+      ctx.drawImage(img, left, top, width, height, 0, 0, width, height);
+      
+      const croppedBase64 = canvas.toDataURL('image/jpeg', 0.8);
+      resolve({
+        preview: croppedBase64,
+        data: croppedBase64.split(',')[1]
+      });
+    };
+    img.onerror = reject;
+    img.src = base64;
+  });
+};
+
 export const processFileToImages = async (file: File): Promise<Page[]> => {
   return new Promise(async (resolve) => {
-    // DOCX-håndtering
     if (file.name.endsWith('.docx') || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
       try {
         const buffer = await file.arrayBuffer();
         const result = await mammoth.extractRawText({ arrayBuffer: buffer });
-        if (!result.value) {
-          console.warn("Mammoth fant ingen tekst i Word-filen.");
-          resolve([]);
-          return;
-        }
         resolve([{ 
           id: Math.random().toString(36).substring(7), 
           fileName: file.name, 
@@ -45,14 +67,10 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
           transcription: result.value, 
           rotation: 0 
         }]);
-      } catch (e) { 
-        console.error("Feil ved lesing av Word-fil:", e);
-        resolve([]); 
-      }
+      } catch (e) { resolve([]); }
       return;
     }
     
-    // PDF-håndtering (bruker pdf.js fra index.html)
     if (file.type === 'application/pdf') {
       try {
         const buffer = await file.arrayBuffer();
@@ -64,12 +82,10 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
           const canvas = document.createElement('canvas');
           const context = canvas.getContext('2d');
           if (!context) continue;
-          
           canvas.height = viewport.height; 
           canvas.width = viewport.width;
-          
           await page.render({ canvasContext: context, viewport }).promise;
-          const b64 = canvas.toDataURL('image/jpeg', 0.6);
+          const b64 = canvas.toDataURL('image/jpeg', 0.7);
           pages.push({ 
             id: Math.random().toString(36).substring(7), 
             fileName: `${file.name} (S${i})`, 
@@ -82,14 +98,10 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
           });
         }
         resolve(pages);
-      } catch (e) { 
-        console.error("Feil ved lesing av PDF-fil:", e);
-        resolve([]); 
-      }
+      } catch (e) { resolve([]); }
       return;
     }
 
-    // Bildefiler (JPG, PNG)
     if (file.type.startsWith('image/')) {
       const reader = new FileReader();
       reader.onload = (e) => {
@@ -101,7 +113,7 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
           canvas.width = img.width; 
           canvas.height = img.height;
           ctx.drawImage(img, 0, 0);
-          const b64 = canvas.toDataURL('image/jpeg', 0.6);
+          const b64 = canvas.toDataURL('image/jpeg', 0.7);
           resolve([{ 
             id: Math.random().toString(36).substring(7), 
             fileName: file.name, 
@@ -119,7 +131,6 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
       reader.readAsDataURL(file);
       return;
     }
-
     resolve([]);
   });
 };

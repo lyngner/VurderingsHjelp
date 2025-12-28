@@ -1,44 +1,47 @@
-
 # ElevVurdering PRO - Brukermanual & Teknisk Dokumentasjon
 
-## 🚀 Versjon 3.4 - Spesifikasjon for Rettemanual & Vurdering
+## 🚀 Versjon 3.7 - Strukturert Rettemanual & Del-inndeling
 
-Denne versjonen gir læreren full kontroll over vurderingsgrunnlaget, med mulighet for å finjustere poeng og retningslinjer før den endelige vurderingen kjøres.
+Denne versjonen fokuserer på bedre organisering av prøver med flere deler og en mer intuitiv navigasjon i rettemanualen.
 
 ---
 
-## 🏗 Innlastingsprosessen (Spesifikasjon)
+## 🏗 Innlastingsprosessen
 
 ### 1. Filtyper som støttes
-Appen aksepterer følgende formater i begge innlastingskolonner:
-*   **Word (.docx)**: Brukes ofte til oppgaveark eller digitale elevbesvarelser. Teksten trekkes ut lokalt ved hjelp av `mammoth.js`.
-*   **PDF (.pdf)**: Skannede dokumenter eller lagrede filer. Appen splitter PDF-en automatisk i enkeltbilder (sider) lokalt i nettleseren.
-*   **Bilder (.jpg, .jpeg, .png)**: Skannede bilder av håndskrevne ark.
+Appen aksepterer følgende formater:
+*   **Word (.docx)**: Tekst trekkes ut lokalt. Appen ser nå spesifikt etter navn og kandidatnummer i de første 10 linjene (topptekst).
+*   **PDF (.pdf)**: Splittes automatisk i sider lokalt.
+*   **Bilder (.jpg, .png)**: Skannede besvarelser analyseres med OCR.
 
-### 2. Slik fungerer "Oppgave / Fasit"
-*   **Mål**: Skape et grunnlag for rettemanualen.
-*   **Prosess**: Når du laster opp filer her, analyserer Gemini innholdet for å identifisere oppgavenummer, deloppgaver (f.eks. 1a, 1b), poenggrenser og faglig tema. 
-*   **Standardpoeng**: Dersom ingen poengsum er oppgitt på arket, settes standarden til **2 poeng** per deloppgave.
+### 2. Slik fungerer "Smart Side-splitting" (A3 til A4)
+Mange skannere tar to A4-sider i én operasjon (A3). Appen håndterer nå dette automatisk:
+*   **KI-deteksjon**: Gemini analyserer bildet for å se om det inneholder flere fysiske ark.
+*   **Automatisk beskjæring**: Hvis to sider oppdages, vil appen automatisk "klippe" bildet i to og opprette separate sider for hver del. Dette sikrer at du i "Kontroll"-steget ser ett og ett ark av gangen.
 
-### 3. Redigering av Rettemanual
-Du kan nå manuelt overstyre KI-ens forslag i "Rettemanual"-steget:
-*   **Poengsum**: Klikk på tallet i kolonnen "Maks Poeng" for å endre verdien. Totalen oppdateres automatisk.
-*   **Vanlige feil**: Hver deloppgave har et eget felt for "Vanlige feil & Poengtrekk". Her kan du definere nøyaktig hva som skal gi trekk (f.eks. "Trekk 0.5p ved slurvefeil i fortegn"). Gemini vil bruke disse instruksjonene når den vurderer elevene.
-*   **Løsningsforslag**: Du kan endre teksten og LaTeX-formlene direkte.
+### 3. Del 1 og Del 2 Inndeling
+Prøver er ofte delt i to (f.eks. med og uten hjelpemidler). Appen støtter nå dette fullt ut:
+*   **Automatisk kategorisering**: KI-en forsøker å plassere oppgaver i riktig del basert på oppgavearkene.
+*   **Filtrering i manuelt**: Sidemenyen i rettemanualen lar deg raskt bytte mellom å se alle oppgaver, bare Del 1, bare Del 2, eller gå direkte til en spesifikk hovedoppgave (f.eks. Oppgave 2).
 
-### 4. Automatisk gruppering av besvarelser
-*   **OCR-analyse**: Hver side analyseres for å finne **Kandidat-ID**, **Sidenummer** og transkribere innholdet.
-*   **Resultat**: Sider som tilhører samme kandidat blir automatisk lagt i samme mappe i oversikten.
+### 4. Smart Rettemanual (Oppdatert)
+Manualen er nå organisert for maksimal oversikt:
+*   **Hovedoppgave-fokus**: Sidemenyen viser nå hovedoppgaver (1, 2, 3...) i stedet for hver enkelt deloppgave (1a, 1b). Dette reduserer støy i grensesnittet.
+*   **Vertikal struktur**: Matematikk og tekst stables vertikalt slik at komplekse utregninger får den plassen de trenger.
+
+---
+
+## 💰 Kostnadsestimat (Gemini API)
+Siden appen kjører lokalt, betaler du kun for faktiske API-kall til Google.
+
+| Oppgave | Modell | Estimert pris (30 elever) |
+| :--- | :--- | :--- |
+| **OCR / Side-splitting** | Gemini 3 Flash | ~0.50 NOK |
+| **Generere Manual** | Gemini 3 Flash | ~0.10 NOK |
+| **Vurdering & Feedback** | Gemini 3 Pro | ~30.00 - 50.00 NOK |
 
 ---
 
 ## 🔒 GDPR & Sikkerhet
-*   **Lokal prosessering**: PDF-splitting og uthenting av tekst fra Word skjer 100% i din egen nettleser. Ingen filer lagres på en ekstern server.
-*   **Kryptering**: Data som sendes til Gemini API for analyse sendes over krypterte linjer (HTTPS).
-*   **Ingen trening**: Ved bruk av din egen API-nøkkel i et profesjonelt oppsett, brukes ikke dataene til å trene Googles modeller.
-
----
-
-## 🛠 Brukstips
-*   **Korrektur**: Bruk "Kontroll"-steget til å sjekke at transkripsjonen av håndskrift er korrekt før du trykker "Start Vurdering".
-*   **LaTeX**: Bruk `$` for inline matematikk og `$$` for blokker. Dette rendres vakkert i både manual og rapport.
+*   **Fullstendig lokal**: PDF-splitting, Word-parsing og bildebeskjæring skjer 100% i nettleseren.
+*   **Ingen permanent lagring**: Appen lagrer kun data i din lokale `IndexedDB`.
