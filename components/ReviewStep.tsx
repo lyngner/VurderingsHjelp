@@ -62,18 +62,28 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
   setActiveProject
 }) => {
   
-  // Hjelpefunksjon for å finne alle unike oppgaver en kandidat har besvart
-  const getIdentifiedTasks = (candidate: Candidate) => {
-    const tasks = new Set<string>();
+  // Hjelpefunksjon for å gruppere oppgaver etter Del 1 og Del 2
+  const getGroupedTasks = (candidate: Candidate) => {
+    const groups: Record<string, Set<string>> = {
+      "Del 1": new Set<string>(),
+      "Del 2": new Set<string>()
+    };
+    
     candidate.pages.forEach(p => {
-      p.identifiedTasks?.forEach(t => tasks.add(t));
+      const part = p.part || "Del 1";
+      const groupKey = part.toLowerCase().includes("2") ? "Del 2" : "Del 1";
+      p.identifiedTasks?.forEach(t => groups[groupKey].add(t));
     });
-    return Array.from(tasks).sort();
+    
+    return {
+      del1: Array.from(groups["Del 1"]).sort((a,b) => a.localeCompare(b, undefined, {numeric: true})),
+      del2: Array.from(groups["Del 2"]).sort((a,b) => a.localeCompare(b, undefined, {numeric: true}))
+    };
   };
 
   return (
     <div className="flex h-full overflow-hidden bg-[#F1F5F9]">
-      {/* Sidebar: Kandidatliste - NÅ MED UAVHENGIG SKROLLING */}
+      {/* Sidebar: Kandidatliste */}
       <aside className="w-80 bg-white border-r flex flex-col shrink-0 no-print shadow-sm">
          <div className="p-6 border-b shrink-0 bg-white/80 backdrop-blur-md">
             <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em] mb-4">Besvarelser</h3>
@@ -88,29 +98,51 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
             </div>
          </div>
          
-         <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+         <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
            {filteredCandidates.map(c => {
-             const tasks = getIdentifiedTasks(c);
+             const { del1, del2 } = getGroupedTasks(c);
+             const isSelected = selectedReviewCandidateId === c.id;
+             
              return (
                <button 
                  key={c.id} 
                  onClick={() => setSelectedReviewCandidateId(c.id)} 
-                 className={`w-full text-left p-5 rounded-[25px] border transition-all relative overflow-hidden group ${selectedReviewCandidateId === c.id ? 'bg-indigo-600 text-white border-indigo-600 shadow-xl scale-[1.02]' : 'bg-white hover:border-indigo-200'}`}
+                 className={`w-full text-left p-5 rounded-[30px] border transition-all relative overflow-hidden group ${isSelected ? 'bg-slate-900 text-white border-slate-900 shadow-xl scale-[1.02]' : 'bg-white hover:border-indigo-200'}`}
                >
-                 <div className="flex justify-between items-start mb-2">
-                   <div className="font-black text-[12px] truncate max-w-[150px]">{c.name}</div>
-                   <div className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full ${selectedReviewCandidateId === c.id ? 'bg-white/20' : 'bg-slate-100 text-slate-400'}`}>
+                 <div className="flex justify-between items-start mb-3">
+                   <div className="font-black text-[13px] truncate max-w-[150px]">{c.name}</div>
+                   <div className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full ${isSelected ? 'bg-white/20' : 'bg-slate-100 text-slate-400'}`}>
                      {c.pages.length} s
                    </div>
                  </div>
                  
-                 {/* OPPGAVEOVERSIKT I SIDEBAR */}
-                 <div className="flex flex-wrap gap-1 mt-3">
-                   {tasks.length > 0 ? tasks.map(t => (
-                     <span key={t} className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${selectedReviewCandidateId === c.id ? 'bg-white/10 text-white' : 'bg-indigo-50 text-indigo-400'}`}>
-                       {t}
-                     </span>
-                   )) : (
+                 {/* GRUPPERT OPPGAVEOVERSIKT I SIDEBAR */}
+                 <div className="space-y-3 mt-4">
+                   {del1.length > 0 && (
+                     <div className="space-y-1.5">
+                       <div className={`text-[8px] font-black uppercase tracking-widest ${isSelected ? 'text-indigo-300' : 'text-slate-400'}`}>Del 1</div>
+                       <div className="flex flex-wrap gap-1">
+                         {del1.map(t => (
+                           <span key={t} className={`text-[8px] font-black uppercase px-2 py-1 rounded-lg ${isSelected ? 'bg-white/10 text-white' : 'bg-indigo-50 text-indigo-500 border border-indigo-100'}`}>
+                             {t}
+                           </span>
+                         ))}
+                       </div>
+                     </div>
+                   )}
+                   {del2.length > 0 && (
+                     <div className="space-y-1.5">
+                       <div className={`text-[8px] font-black uppercase tracking-widest ${isSelected ? 'text-emerald-300' : 'text-slate-400'}`}>Del 2</div>
+                       <div className="flex flex-wrap gap-1">
+                         {del2.map(t => (
+                           <span key={t} className={`text-[8px] font-black uppercase px-2 py-1 rounded-lg ${isSelected ? 'bg-white/10 text-white' : 'bg-emerald-50 text-emerald-600 border border-emerald-100'}`}>
+                             {t}
+                           </span>
+                         ))}
+                       </div>
+                     </div>
+                   )}
+                   {del1.length === 0 && del2.length === 0 && (
                      <span className="text-[8px] font-bold opacity-40 uppercase">Ingen oppgaver detektert</span>
                    )}
                  </div>
@@ -120,7 +152,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
          </div>
       </aside>
 
-      {/* HOVEDOMRÅDE: SIDE-VED-SIDE VISNING PER SIDE */}
+      {/* HOVEDOMRÅDE */}
       <main className="flex-1 overflow-y-auto custom-scrollbar p-8">
         <div className="max-w-[1600px] mx-auto space-y-12 pb-40">
           {!currentReviewCandidate ? (
@@ -153,7 +185,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                            <div className="w-10 h-10 rounded-2xl bg-slate-800 text-white flex items-center justify-center font-black text-xs shadow-lg">
                              {p.pageNumber || idx + 1}
                            </div>
-                           <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Sidevisning</span>
+                           <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Sidevisning - {p.part || "Ukjent del"}</span>
                          </div>
                          <div className="flex gap-2">
                            <button onClick={() => rotatePage(p.id)} className="p-3 bg-white border rounded-xl hover:bg-slate-50 transition-all shadow-sm" title="Roter 90 grader">
@@ -167,7 +199,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                        <LazyImage page={p} />
                     </div>
 
-                    {/* HØYRE: EDITOR & RENDERING (Side-ved-side med bildet) */}
+                    {/* HØYRE: EDITOR & RENDERING */}
                     <div className="space-y-6">
                        <div className="flex items-center gap-3 px-4 h-10">
                           <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Transkripsjon & Korrektur</span>
@@ -188,7 +220,6 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                           />
                        </div>
 
-                       {/* RENDERING UNDER EDITOREN FOR SAMME SIDE */}
                        <div className="bg-indigo-600 rounded-[35px] p-10 shadow-xl shadow-indigo-100">
                           <div className="flex justify-between items-center mb-6 border-b border-indigo-400/30 pb-4">
                             <span className="text-[9px] font-black uppercase text-indigo-100 tracking-widest">Matematisk forhåndsvisning (LaTeX)</span>

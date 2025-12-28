@@ -1,53 +1,44 @@
 
-# Vurderingshjelp - Brukermanual & Teknisk Dokumentasjon
+# Vurderingshjelp - Master-manual & Systemlogikk
 
-Vurderingshjelp er et profesjonelt verktøy utviklet for lærere som ønsker å effektivisere arbeidet med vurdering av skriftlige besvarelser. Ved å kombinere avansert bildebehandling med de nyeste modellene fra Google Gemini, automatiserer systemet tidkrevende oppgaver som transkribering, kandidat-identifisering og poenggivning.
+Vurderingshjelp er et profesjonelt verktøy for lærere som automatiserer transkribering og vurdering av store mengder elevbesvarelser ved bruk av Google Gemini.
 
 ---
 
-## 🏗️ Systemarkitektur
+## 🏛️ Kjernefilosofi & Systemregler
 
-Applikasjonen er bygget som en moderne **Progressive Web App (PWA)** med fokus på hastighet, brukervennlighet og personvern.
+Denne dokumentasjonen fungerer som systemets "hukommelse". Ved enhver regenerering eller feilsøking skal disse reglene følges:
 
-### Kjernekomponenter:
-1.  **Frontend (React 19)**: Et responsivt grensesnitt med fokus på estetikk og flyt.
-2.  **KI-motor (Google Gemini 3)**:
-    *   **Flash-modellen**: Brukes til OCR (optisk tegngjenkjenning), kandidat-identifisering og rask bildebeskjæring.
-    *   **Pro-modellen**: Brukes til dyp analyse av oppgavesett, generering av rettemanualer og selve vurderingsarbeidet.
-3.  **Lagring (IndexedDB)**: Alle data lagres lokalt i brukerens nettleser. Ingenting lagres på våre servere permanent.
-4.  **Bildebehandling**: Systemet håndterer JPG, PNG, PDF og konverterer Word-dokumenter (DOCX) til visuelle ark for sømløs kontroll.
+### 1. Poengstandarder (v3.19.0)
+*   **Standard poengsum**: Hver deloppgave/kriterium i rettemanualen skal som standard settes til **2.0 poeng**. Dette er et ufravikelig krav fra brukeren.
+*   **KI-instruks**: Gemini 3 Pro er tvingende instruert til å bruke 2.0 som basispoengsum i systeminstruksjonen.
+
+### 2. Matematisk Rendring ($LaTeX$)
+*   **Delimitere**: Bruk ALLTID `\( ... \)` for inline matematikk og `\[ ... \]` for blokker.
+*   **Visuell stabilitet**: Appen bruker en "fade-in" arkitektur (`LatexRenderer`) som hindrer visning av råkode.
+
+### 3. Skalerbarhet og Minnehåndtering (v3.15.0)
+*   **Lazy Loading**: Bilder med høy oppløsning lagres i IndexedDB og lastes kun ved behov for å spare RAM.
+*   **Thin State**: React-tilstanden for et prosjekt inneholder kun metadata og tekst.
+
+### 4. Kontroll og Verifisering (v3.19.0)
+*   **Deloppdeling**: Oppgaver i kandidatlisten i sidebar er nå tydelig gruppert under overskriftene **Del 1** og **Del 2**. Dette gir læreren rask oversikt over eksamensstrukturen.
+*   **Alignment**: I kontroll-steget vises bilde og tekst side-ved-side per side for enkel korrekturlesing.
+*   **Pro OCR**: Bruker Gemini 3 Pro for maksimal nøyaktighet på koordinater og tekstgjenkjenning.
 
 ---
 
 ## 🛠️ Arbeidsflyt
 
-### 1. Innlasting (Setup)
-*   Læreren laster opp oppgaveark/fasit fra egen maskin.
-*   Elevbesvarelser (bilder, PDF eller Word) lastes opp lokalt.
-*   Systemet grupperer automatisk sidene basert på detektert kandidatnummer.
-
-### 2. Kontroll (Review)
-*   Læreren verifiserer at kandidatene er korrekt identifisert.
-*   Her kan man rotere sider, slette feilaktige ark og redigere KI-transkripsjonen side-om-side med det originale bildet.
-
-### 3. Rettemanual (Rubric)
-*   KI genererer en detaljert rettemanual basert på oppgavearkene.
-*   Manualen skiller strengt mellom **Del 1** og **Del 2**.
-*   Standard poengsum er satt til 2.0 per deloppgave, men kan enkelt endres manuelt av brukeren.
-
-### 4. Resultater (Results)
-*   Systemet vurderer hver kandidat mot manualen.
-*   Det genereres en individuell rapport med karakterforslag, begrunnelse, mestringspunkter og poengoversikt.
+1.  **Innlasting**: Opplasting av oppgaveark og elevbesvarelser.
+2.  **Kontroll**: Verifisering av transkripsjon mot originalbilde. Sidebar viser detekterte oppgaver gruppert på Del 1/2.
+3.  **Rettemanual**: Generering av manual med default 2.0 poeng per del.
+4.  **Resultater**: Automatisk vurdering, karakterforslag og detaljert tilbakemelding.
 
 ---
 
-## 🔒 Personvern og Sikkerhet
-*   **GDPR**: Systemet er designet for å etterleve GDPR. Ved å bruke kandidatnummer istedenfor navn, sikres elevens anonymitet.
-*   **Databehandling**: Bilder sendes kryptert til Google Gemini for analyse, men brukes **ikke** til trening av KI-modeller.
-*   **Lokal lagring**: Ved å slette prosjektet eller tømme nettleserdata, forsvinner all informasjon permanent.
-
----
-
-## 📅 Historikk og Versjoner
-For detaljert informasjon om tekniske oppdateringer, se filene i mappen `/versions`.
-Gjeldende versjon: **3.14.6**
+## 📅 Historikk (Sammendrag)
+*   **v3.19.0**: Forbedret Del 1/2 gruppering i sidebar, forsterket 2.0 poeng default-regel.
+*   **v3.18.0**: Gruppering av oppgaver i Del 1 og Del 2 i kandidatoversikten.
+*   **v3.17.0**: Låst sidebar i rettemanual, filtrering på hovedoppgaver, tvinger 2.0 poeng som default.
+*   **v3.16.0**: Redesignet Kontroll-modul med side-ved-side visning og Pro-OCR.

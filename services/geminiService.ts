@@ -63,17 +63,16 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<any[]> => {
 
   return limiter.schedule(async () => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    // Bruker Pro for maksimal nøyaktighet på beskjæring og header-deteksjon
     const response = await ai.models.generateContent({
       model: 'gemini-3-pro-preview',
       contents: {
         parts: [
           { inlineData: { mimeType: page.mimeType, data: page.base64Data } }, 
-          { text: "Analyser bildet grundig. Identifiser: 1. KandidatID (let spesielt i topptekst/header). 2. Sidetall. 3. Full tekst (bruk LaTeX \\( ... \\)). 4. Liste over oppgaver besvart på denne siden (f.eks. '1A', '2'). 5. box_2d for hele det skrevne området inkludert header. Svar KUN JSON." }
+          { text: "Analyser bildet grundig. Identifiser: 1. KandidatID (let spesielt i topptekst/header). 2. Sidetall. 3. Full tekst (bruk LaTeX \\( ... \\)). 4. Liste over oppgaver besvart på denne siden (f.eks. ['1A', '2']). 5. Hvilken del av prøven dette er ('Del 1' eller 'Del 2'). 6. box_2d for hele det skrevne området inkludert header. Svar KUN JSON." }
         ],
       },
       config: { 
-        systemInstruction: "Ekspert på OCR og eksamensanalyse. Svar KUN JSON. Pakk ALL matematikk i LaTeX-delimitere \\( ... \\) eller \\[ ... \\].",
+        systemInstruction: "Ekspert på OCR og eksamensanalyse. Svar KUN JSON. Pakk ALL matematikk i LaTeX-delimitere \\( ... \\) eller \\[ ... \\]. Identifiser ALLTID om det er Del 1 eller Del 2.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.ARRAY,
@@ -88,7 +87,7 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<any[]> => {
               identifiedTasks: { type: Type.ARRAY, items: { type: Type.STRING } },
               box_2d: { type: Type.ARRAY, items: { type: Type.INTEGER } }
             },
-            required: ["fullText", "candidateId", "box_2d"]
+            required: ["fullText", "candidateId", "box_2d", "part"]
           }
         }
       }
@@ -106,7 +105,7 @@ export const analyzeTextContent = async (text: string): Promise<any> => {
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: {
-        parts: [{ text: `Analyser metadata for denne digitale besvarelsen. Finn kandidatnummer og oppgaver som er besvart. Tekst:\n${text.substring(0, 5000)}` }],
+        parts: [{ text: `Analyser metadata for denne digitale besvarelsen. Finn kandidatnummer, hvilken del (Del 1 eller Del 2) og oppgaver som er besvart. Tekst:\n${text.substring(0, 5000)}` }],
       },
       config: { 
         systemInstruction: "Dokumentanalytiker. Svar KUN JSON.",
@@ -115,11 +114,12 @@ export const analyzeTextContent = async (text: string): Promise<any> => {
           type: Type.OBJECT,
           properties: {
             candidateId: { type: Type.STRING },
+            part: { type: Type.STRING },
             fullText: { type: Type.STRING },
             pageNumber: { type: Type.INTEGER },
             identifiedTasks: { type: Type.ARRAY, items: { type: Type.STRING } }
           },
-          required: ["candidateId", "fullText"]
+          required: ["candidateId", "fullText", "part"]
         }
       }
     });
@@ -137,11 +137,11 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promi
       contents: { 
         parts: [
           ...parts, 
-          { text: "Lag en fullstendig rettemanual. Inkluder alle detaljer fra fasit. Pakk ALL matematikk i LaTeX-delimitere: \\( ... \\) for inline matte og \\[ ... \\] for store formler." }
+          { text: "Lag en fullstendig rettemanual. VIKTIG: Sett ALLTID 2.0 poeng som default for hver eneste deloppgave/kriterium, med mindre oppgaveteksten eksplisitt krever noe annet. Inkluder alle detaljer fra fasit. Pakk ALL matematikk i LaTeX-delimitere: \\( ... \\) for inline matte og \\[ ... \\] for store formler." }
         ] 
       },
       config: { 
-        systemInstruction: "Ekspert på matematikkvurdering. Svar KUN JSON. Bruk LaTeX \\( ... \\) eller \\[ ... \\].",
+        systemInstruction: "Ekspert på matematikkvurdering. Svar KUN JSON. Bruk LaTeX \\( ... \\) eller \\[ ... \\]. VIKTIG: Maksimal poengsum per deloppgave skal være 2.0 poeng som standard.",
         thinkingConfig: { thinkingBudget: 16000 },
         responseMimeType: "application/json",
         responseSchema: {
