@@ -22,15 +22,20 @@ export const RubricStep: React.FC<RubricStepProps> = ({
 
   const criteria = activeProject.rubric?.criteria || [];
 
+  // Grupperer kun etter hovedoppgaver (f.eks. "1", "2") forsidemenyen
   const groupedByPartAndMainTask = useMemo(() => {
     const parts: Record<string, string[]> = {};
     criteria.forEach(c => {
-      const partKey = c.part || "Del";
+      // Normaliser partKey til "Del 1", "Del 2" etc.
+      const partKey = c.part?.trim() || "Uspesifisert";
       const match = c.name.match(/(\d+)/);
       const mainTaskNum = match ? match[1] : c.name;
+      
       if (!parts[partKey]) parts[partKey] = [];
       if (!parts[partKey].includes(mainTaskNum)) parts[partKey].push(mainTaskNum);
     });
+
+    // Sorterer hovedoppgaver numerisk
     Object.keys(parts).forEach(pk => {
       parts[pk].sort((a, b) => (parseInt(a) || 0) - (parseInt(b) || 0));
     });
@@ -41,12 +46,13 @@ export const RubricStep: React.FC<RubricStepProps> = ({
 
   const filteredCriteria = useMemo(() => {
     let result = criteria;
-    if (selectedFilter.part) result = result.filter(c => (c.part || "Del") === selectedFilter.part);
+    if (selectedFilter.part) {
+      result = result.filter(c => (c.part?.trim() || "Uspesifisert") === selectedFilter.part);
+    }
     if (selectedFilter.taskNum) {
       result = result.filter(c => {
-        const nameClean = c.name.toLowerCase().trim();
-        const filterNum = selectedFilter.taskNum!.toLowerCase();
-        return nameClean.startsWith(filterNum) || (c.name.match(/(\d+)/)?.[1] === filterNum);
+        const match = c.name.match(/(\d+)/);
+        return match ? match[1] === selectedFilter.taskNum : c.name === selectedFilter.taskNum;
       });
     }
     return result;
@@ -97,9 +103,10 @@ export const RubricStep: React.FC<RubricStepProps> = ({
           >
             Alle oppgaver
           </button>
+          
           {sortedPartKeys.map(partKey => (
             <div key={partKey} className="space-y-2">
-              <div className="px-4 text-[9px] font-black text-indigo-400 uppercase tracking-widest border-b border-indigo-50 pb-1">{partKey}</div>
+              <div className="px-4 text-[9px] font-black text-indigo-400 uppercase tracking-widest border-b border-indigo-50 pb-1 mt-4">{partKey}</div>
               <div className="grid grid-cols-4 gap-1.5 px-1">
                 {groupedByPartAndMainTask[partKey].map(num => (
                   <button 
@@ -133,8 +140,13 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                 </h2>
                 <div className="flex gap-2 mt-3">
                    <span className="text-[10px] font-black text-indigo-500 uppercase tracking-[0.2em] bg-indigo-50 px-3 py-1 rounded-full whitespace-nowrap">
-                      {selectedFilter.taskNum ? `Oppgave ${selectedFilter.taskNum}` : selectedFilter.part || 'Full oversikt'}
+                      {selectedFilter.taskNum ? `Hovedoppgave ${selectedFilter.taskNum}` : selectedFilter.part || 'Full oversikt'}
                    </span>
+                   {selectedFilter.part && (
+                     <span className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] bg-emerald-50 px-3 py-1 rounded-full whitespace-nowrap">
+                        {selectedFilter.part}
+                     </span>
+                   )}
                 </div>
               </div>
               <div className="shrink-0 bg-slate-50 px-6 py-4 rounded-[25px] border border-slate-100 min-w-[120px] text-center">
@@ -146,7 +158,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
 
           <div className="space-y-12">
             {sortedPartKeys.filter(pk => !selectedFilter.part || pk === selectedFilter.part).map(partKey => {
-              const partCriteria = filteredCriteria.filter(c => (c.part || "Del") === partKey);
+              const partCriteria = filteredCriteria.filter(c => (c.part?.trim() || "Uspesifisert") === partKey);
               if (partCriteria.length === 0) return null;
               
               return (
@@ -160,15 +172,16 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                     {partCriteria.map((crit) => {
                       const isEditing = editingId === crit.name;
                       const isEditingErrors = editingErrorsId === crit.name;
-                      const taskDisplay = crit.name.replace(/oppgave/gi, '').trim();
+                      const taskDisplay = crit.name.toUpperCase();
 
                       return (
                         <div key={crit.name} className="bg-white rounded-[40px] shadow-sm border border-slate-100 overflow-hidden animate-in fade-in slide-in-from-bottom-3 duration-500">
                           
                           <div className="px-8 md:px-10 py-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/20 flex-wrap gap-6">
                             <div className="flex items-center gap-6 min-w-0 flex-1">
-                              <div className="w-14 h-14 md:w-16 md:h-16 rounded-[20px] bg-slate-800 text-white flex items-center justify-center text-base md:text-lg font-black shadow-lg shrink-0 uppercase">
-                                {taskDisplay}
+                              <div className="w-16 h-14 md:w-20 md:h-16 rounded-[20px] bg-slate-800 text-white flex flex-col items-center justify-center shadow-lg shrink-0 overflow-hidden">
+                                <span className="text-[8px] font-black opacity-40 uppercase tracking-tighter mb-0.5">{crit.part}</span>
+                                <span className="text-base md:text-lg font-black leading-none">{taskDisplay}</span>
                               </div>
                               <div className="min-w-0 flex-1">
                                 <input value={crit.tema || ""} placeholder="Tema..." onChange={e => handleFieldChange(crit.name, 'tema', e.target.value)} className="text-[10px] font-black text-indigo-500 uppercase tracking-widest bg-transparent outline-none w-full mb-1" />
@@ -191,7 +204,6 @@ export const RubricStep: React.FC<RubricStepProps> = ({
 
                           <div className="p-8 md:p-10">
                             <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
-                              {/* Venstre: Løsningsforslag */}
                               <div className="space-y-4">
                                 <div className="flex justify-between items-center">
                                   <div className="flex items-center gap-2">
@@ -211,12 +223,11 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                                 </div>
                               </div>
 
-                              {/* Høyre: Retteveiledning */}
                               <div className="space-y-4">
                                 <div className="flex justify-between items-center">
                                   <div className="flex items-center gap-2">
                                     <div className="w-2.5 h-2.5 rounded-full bg-rose-400"></div>
-                                    <h4 className="text-[11px] font-black uppercase text-slate-400 tracking-widest">Retteveiledning og vanlige feil</h4>
+                                    <h4 className="text-[11px] font-black uppercase text-slate-400 tracking-widest">Retteveiledning</h4>
                                   </div>
                                   <button onClick={() => setEditingErrorsId(isEditingErrors ? null : crit.name)} className={`text-[10px] font-black uppercase px-4 py-1.5 rounded-full border transition-all ${isEditingErrors ? 'bg-rose-600 text-white shadow-md' : 'text-rose-600 border-rose-100 hover:bg-rose-50'}`}>
                                     {isEditingErrors ? 'Lagre ✓' : 'Rediger ✎'}

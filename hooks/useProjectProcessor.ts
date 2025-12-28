@@ -18,7 +18,6 @@ export const useProjectProcessor = (
   const [batchCompleted, setBatchCompleted] = useState(0);
   const [rubricStatus, setRubricStatus] = useState<{ loading: boolean; text: string }>({ loading: false, text: '' });
 
-  // Nullstill batch-fremdrift når alt er helt ferdig
   useEffect(() => {
     if (processingCount === 0 && !rubricStatus.loading && batchTotal > 0) {
       const timer = setTimeout(() => {
@@ -141,33 +140,18 @@ export const useProjectProcessor = (
   const handleTaskFileSelect = async (files: FileList) => {
     if (!activeProject) return;
     const fileList = Array.from(files);
-    
-    // Sett initial telling basert på antall filer valgt
     setBatchTotal(prev => prev + fileList.length);
     setProcessingCount(prev => prev + fileList.length);
-
     try {
       const allNewTaskPages: Page[] = [];
       for (const file of fileList) {
         const pages = await processFileToImages(file);
         allNewTaskPages.push(...pages);
-        
-        // Juster tellingen hvis en PDF ble til mange bilder
-        if (pages.length > 1) {
-          const extra = pages.length - 1;
-          setBatchTotal(prev => prev + extra);
-          setProcessingCount(prev => prev + extra);
-        }
       }
-      
       const updatedProject = { ...activeProject, taskFiles: [...(activeProject.taskFiles || []), ...allNewTaskPages] };
       setActiveProject(updatedProject);
-      
-      // Marker lokal filinnlasting som ferdig for disse
       setBatchCompleted(prev => prev + allNewTaskPages.length);
       setProcessingCount(prev => Math.max(0, prev - allNewTaskPages.length));
-      
-      // Start KI-delen
       await handleGenerateRubric(updatedProject);
     } catch (err) {
       console.error(err);
@@ -178,19 +162,20 @@ export const useProjectProcessor = (
   const handleCandidateFileSelect = async (files: FileList) => {
     if (!activeProject) return;
     const fileList = Array.from(files);
-    
     let allNewPages: Page[] = [];
     for (const file of fileList) {
       const pages = await processFileToImages(file);
       allNewPages = [...allNewPages, ...pages];
     }
-    
-    updateActiveProject({ unprocessedPages: [...(activeProject.unprocessedPages || []), ...allNewPages] });
-    setBatchTotal(prev => prev + allNewPages.length);
-    setProcessingCount(prev => prev + allNewPages.length);
-    
-    // Start asynkron prosessering av hver side
-    allNewPages.forEach(page => processSinglePage(page));
+    startProcessingPages(allNewPages);
+  };
+
+  const startProcessingPages = (newPages: Page[]) => {
+    if (!activeProject) return;
+    updateActiveProject({ unprocessedPages: [...(activeProject.unprocessedPages || []), ...newPages] });
+    setBatchTotal(prev => prev + newPages.length);
+    setProcessingCount(prev => prev + newPages.length);
+    newPages.forEach(page => processSinglePage(page));
   };
 
   const handleRetryPage = (page: Page) => {

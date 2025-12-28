@@ -19,6 +19,55 @@ export const generateHash = (str: string): string => {
 };
 
 /**
+ * Oppretter et visuelt bilde av tekst (for DOCX-filer)
+ */
+const createTextPlaceholderImage = (text: string, fileName: string): string => {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return "";
+
+  // A4 proporsjoner (ca 800x1131)
+  canvas.width = 800;
+  canvas.height = 1131;
+
+  // Bakgrunn
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Header-stripe
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(0, 0, canvas.width, 100);
+  ctx.strokeStyle = '#e2e8f0';
+  ctx.strokeRect(0, 0, canvas.width, 100);
+
+  // Tittel
+  ctx.fillStyle = '#64748b';
+  ctx.font = 'bold 14px Inter, sans-serif';
+  ctx.fillText(`DIGITAL BESVARELSE: ${fileName.toUpperCase()}`, 40, 55);
+
+  // Innhold
+  ctx.fillStyle = '#1e293b';
+  ctx.font = '16px Inter, sans-serif';
+  const lines = text.split('\n').slice(0, 40); // Vis de første 40 linjene
+  let y = 160;
+  lines.forEach(line => {
+    if (y < canvas.height - 40) {
+      // Enkel tekstbryting (truncate)
+      const cleanLine = line.length > 80 ? line.substring(0, 80) + "..." : line;
+      ctx.fillText(cleanLine, 60, y);
+      y += 24;
+    }
+  });
+
+  // Footer
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = 'italic 12px Inter, sans-serif';
+  ctx.fillText("Generert bilde for kontroll-visning", 40, canvas.height - 40);
+
+  return canvas.toDataURL('image/jpeg', 0.8);
+};
+
+/**
  * Beskjærer et bilde basert på normaliserte koordinater [ymin, xmin, ymax, xmax] (0-1000).
  */
 export const cropImageFromBase64 = async (base64: string, box: number[]): Promise<{ preview: string, data: string }> => {
@@ -29,11 +78,14 @@ export const cropImageFromBase64 = async (base64: string, box: number[]): Promis
       const ctx = canvas.getContext('2d');
       if (!ctx) return reject("Kunne ikke opprette canvas context");
 
+      // Utvid boksen litt for å unngå at vi klipper akkurat på kanten av tekst/tabeller
+      const padding = 20; 
       const [ymin, xmin, ymax, xmax] = box;
-      const left = (xmin / 1000) * img.width;
-      const top = (ymin / 1000) * img.height;
-      const width = ((xmax - xmin) / 1000) * img.width;
-      const height = ((ymax - ymin) / 1000) * img.height;
+      
+      const left = Math.max(0, ((xmin - padding) / 1000) * img.width);
+      const top = Math.max(0, ((ymin - padding) / 1000) * img.height);
+      const width = Math.min(img.width - left, ((xmax - xmin + padding * 2) / 1000) * img.width);
+      const height = Math.min(img.height - top, ((ymax - ymin + padding * 2) / 1000) * img.height);
 
       canvas.width = width;
       canvas.height = height;
@@ -56,15 +108,18 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
       try {
         const buffer = await file.arrayBuffer();
         const result = await mammoth.extractRawText({ arrayBuffer: buffer });
+        const text = result.value;
+        const visualPreview = createTextPlaceholderImage(text, file.name);
+        
         resolve([{ 
           id: Math.random().toString(36).substring(7), 
           fileName: file.name, 
-          imagePreview: "", 
-          base64Data: "", 
-          contentHash: generateHash(result.value), 
+          imagePreview: visualPreview, 
+          base64Data: visualPreview.split(',')[1], 
+          contentHash: generateHash(text), 
           mimeType: 'text/plain', 
           status: 'pending', 
-          transcription: result.value, 
+          transcription: text, 
           rotation: 0 
         }]);
       } catch (e) { resolve([]); }

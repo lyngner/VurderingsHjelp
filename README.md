@@ -1,36 +1,53 @@
 
 # Vurderingshjelp - Brukermanual & Teknisk Dokumentasjon
 
-## 🚀 Versjon 3.14.1 - Standardisert Poengsum
-
-Denne versjonen introduserer en standardisert poengsum for deloppgaver for å gjøre rettingen mer konsistent.
+Vurderingshjelp er et profesjonelt verktøy utviklet for lærere som ønsker å effektivisere arbeidet med vurdering av skriftlige besvarelser. Ved å kombinere avansert bildebehandling med de nyeste modellene fra Google Gemini, automatiserer systemet tidkrevende oppgaver som transkribering, kandidat-identifisering og poenggivning.
 
 ---
 
-## 📋 Rettemanual (Rubrikk)
+## 🏗️ Systemarkitektur
 
-### 1. Standard Poengsum: 2.0 poeng
-For å sikre rettferdig og konsistent vurdering, setter systemet nå automatisk **2.0 poeng** som standard maks poeng for alle deloppgaver (a, b, c, d...). 
-*   Læreren kan selvfølgelig justere dette manuelt i rettemanualen dersom en oppgave er mer eller mindre omfattende.
-*   Systemet støtter nå desimalpoeng (f.eks. 0.5 eller 1.5).
+Applikasjonen er bygget som en moderne **Progressive Web App (PWA)** med fokus på hastighet, brukervennlighet og personvern.
 
-### 2. Gemini 3 Pro - Motoren bak manualen
-Vi bruker den kraftigste tilgjengelige modellen for å generere rettemanualen. Dette sikrer at selv små deloppgaver blir identifisert og dekomponert korrekt med riktig poengstandard.
-
-### 3. Forbedret Layout og Visning
-*   **Header-optimalisering**: Overskriften på rettemanualen er fleksibel og takler lange prosjektnavn uten å kutte tekst.
-*   **Stabil LaTeX**: Matematikk-visningen er herdet for å sikre at formler alltid rendres korrekt i både løsningsforslag og retteveiledning.
+### Kjernekomponenter:
+1.  **Frontend (React 19)**: Et responsivt grensesnitt med fokus på estetikk og flyt.
+2.  **KI-motor (Google Gemini 3)**:
+    *   **Flash-modellen**: Brukes til OCR (optisk tegngjenkjenning), kandidat-identifisering og rask bildebeskjæring.
+    *   **Pro-modellen**: Brukes til dyp analyse av oppgavesett, generering av rettemanualer og selve vurderingsarbeidet.
+3.  **Lagring (IndexedDB)**: Alle data lagres lokalt i brukerens nettleser. Ingenting lagres på våre servere permanent.
+4.  **Bildebehandling**: Systemet håndterer JPG, PNG, PDF og konverterer Word-dokumenter (DOCX) til visuelle ark for sømløs kontroll.
 
 ---
 
-## 🏗 Innlastingsprosessen
+## 🛠️ Arbeidsflyt
 
-*   **A3-splitting**: Appen splitter automatisk oppslag til to A4-sider.
-*   **Automatisk rotering**: KI analyserer tekstretningen og roterer bildene for deg.
-*   **Kandidat-ID**: Appen forsøker å kjenne igjen kandidatnummer øverst på arkene.
+### 1. Innlasting (Setup)
+*   Læreren laster opp oppgaveark/fasit fra egen maskin.
+*   Elevbesvarelser (bilder, PDF eller Word) lastes opp lokalt.
+*   Systemet grupperer automatisk sidene basert på detektert kandidatnummer.
+
+### 2. Kontroll (Review)
+*   Læreren verifiserer at kandidatene er korrekt identifisert.
+*   Her kan man rotere sider, slette feilaktige ark og redigere KI-transkripsjonen side-om-side med det originale bildet.
+
+### 3. Rettemanual (Rubric)
+*   KI genererer en detaljert rettemanual basert på oppgavearkene.
+*   Manualen skiller strengt mellom **Del 1** og **Del 2**.
+*   Standard poengsum er satt til 2.0 per deloppgave, men kan enkelt endres manuelt av brukeren.
+
+### 4. Resultater (Results)
+*   Systemet vurderer hver kandidat mot manualen.
+*   Det genereres en individuell rapport med karakterforslag, begrunnelse, mestringspunkter og poengoversikt.
 
 ---
 
-## 🔒 GDPR & Sikkerhet
-*   **Fullstendig lokal**: Alt lagres i din lokale nettleser (IndexedDB).
-*   **Ingen trening**: Dataene brukes ikke til trening av Google-modeller ved bruk av standard API-oppsett.
+## 🔒 Personvern og Sikkerhet
+*   **GDPR**: Systemet er designet for å etterleve GDPR. Ved å bruke kandidatnummer istedenfor navn, sikres elevens anonymitet.
+*   **Databehandling**: Bilder sendes kryptert til Google Gemini for analyse, men brukes **ikke** til trening av KI-modeller.
+*   **Lokal lagring**: Ved å slette prosjektet eller tømme nettleserdata, forsvinner all informasjon permanent.
+
+---
+
+## 📅 Historikk og Versjoner
+For detaljert informasjon om tekniske oppdateringer, se filene i mappen `/versions`.
+Gjeldende versjon: **3.14.6**

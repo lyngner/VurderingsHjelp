@@ -1,5 +1,5 @@
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Project, Page } from '../types';
 import { Spinner } from './SharedUI';
 
@@ -28,39 +28,46 @@ export const SetupStep: React.FC<SetupStepProps> = ({
   updateActiveProject
 }) => {
   const progressPercent = batchTotal > 0 ? Math.round((batchCompleted / batchTotal) * 100) : 0;
-  const isEverythingDone = batchCompleted >= batchTotal && !isProcessing && !rubricStatus.loading;
   const isAiWorking = rubricStatus.loading;
 
+  const stats = useMemo(() => {
+    const candidates = activeProject?.candidates || [];
+    const unprocessed = activeProject?.unprocessedPages || [];
+    return {
+      totalCandidates: candidates.length,
+      totalSider: candidates.reduce((acc, c) => acc + (c.pages?.length || 0), 0),
+      processing: unprocessed.filter(p => p.status === 'processing').length,
+      pending: unprocessed.filter(p => p.status === 'pending').length,
+      errors: unprocessed.filter(p => p.status === 'error').length
+    };
+  }, [activeProject]);
+
   return (
-    <div className="p-8 max-w-[1200px] mx-auto h-full flex flex-col overflow-hidden">
+    <div className="p-6 max-w-[1400px] mx-auto h-full flex flex-col overflow-hidden">
       
-      {/* Fremdriftsvisning når filer prosesseres */}
+      {/* Global fremdriftsvisning */}
       {(batchTotal > 0 || isAiWorking) && (
-        <div className="mb-8 animate-in fade-in slide-in-from-top-4 duration-500">
-          <div className="bg-white p-6 rounded-[35px] border border-slate-100 shadow-sm flex flex-col gap-4">
-            <div className="flex justify-between items-end">
+        <div className="mb-6 animate-in fade-in slide-in-from-top-4 duration-500">
+          <div className="bg-white p-5 rounded-[30px] border border-slate-100 shadow-sm flex flex-col gap-3">
+            <div className="flex justify-between items-center">
               <div>
-                <h4 className={`text-[11px] font-black uppercase tracking-widest ${isAiWorking ? 'text-indigo-600' : 'text-slate-400'}`}>
-                  {isAiWorking ? 'Steg 2: KI-Analyse' : 'Steg 1: Laster inn filer'}
+                <h4 className={`text-[10px] font-black uppercase tracking-widest ${isAiWorking ? 'text-indigo-600' : 'text-slate-400'}`}>
+                  {isAiWorking ? 'KI-Analyse' : 'Laster inn filer'}
                 </h4>
-                <p className="text-[14px] font-bold text-slate-700 mt-1">
+                <p className="text-[13px] font-bold text-slate-700">
                   {isAiWorking 
                     ? rubricStatus.text 
-                    : `${batchCompleted} av ${batchTotal} filer ferdig (${progressPercent}%)`}
+                    : `${batchCompleted} av ${batchTotal} prosessert (${progressPercent}%)`}
                 </p>
               </div>
-              <div className="flex items-center gap-3">
-                {isEverythingDone ? (
-                  <span className="text-emerald-500 font-black text-sm">✓ FULLFØRT</span>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-black text-slate-300 uppercase animate-pulse">Arbeider...</span>
-                    <Spinner size="w-5 h-5" />
-                  </div>
-                )}
-              </div>
+              {!isAiWorking && batchCompleted < batchTotal && (
+                <div className="flex items-center gap-2">
+                  <span className="text-[9px] font-black text-slate-300 uppercase animate-pulse">Arbeider...</span>
+                  <Spinner size="w-4 h-4" />
+                </div>
+              )}
             </div>
-            <div className="h-3 bg-slate-100 rounded-full overflow-hidden relative">
+            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
               <div 
                 className={`h-full transition-all duration-700 ease-out rounded-full ${isAiWorking ? 'bg-indigo-500 animate-pulse' : 'bg-emerald-500'}`}
                 style={{ width: `${isAiWorking ? 100 : progressPercent}%` }}
@@ -70,54 +77,32 @@ export const SetupStep: React.FC<SetupStepProps> = ({
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 h-full max-h-[85vh]">
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-6 h-full overflow-hidden pb-10">
         
         {/* KOLONNE 1: OPPGAVE / FASIT */}
-        <div className="bg-white rounded-[45px] shadow-sm border border-slate-100 flex flex-col overflow-hidden h-full">
-          <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/30 shrink-0">
-            <div className="flex flex-col">
-              <h3 className="font-black text-[11px] uppercase text-indigo-600 tracking-widest">1. Oppgave / Fasit</h3>
-              <p className="text-[9px] text-slate-400 font-bold">Laster inn PDF, Word eller Bilder</p>
+        <div className="md:col-span-4 bg-white rounded-[40px] shadow-sm border border-slate-100 flex flex-col overflow-hidden h-full">
+          <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/30 shrink-0">
+            <div>
+              <h3 className="font-black text-[10px] uppercase text-indigo-600 tracking-widest">1. Oppgave / Fasit</h3>
             </div>
             {(activeProject?.taskFiles?.length || 0) > 0 && (
-              <button onClick={() => updateActiveProject({ taskFiles: [] })} className="text-[9px] font-black uppercase text-rose-400 hover:text-rose-600 transition-colors">Tøm ✕</button>
+              <button onClick={() => updateActiveProject({ taskFiles: [] })} className="text-[9px] font-black uppercase text-rose-400 hover:text-rose-600">Tøm ✕</button>
             )}
           </div>
 
-          <div className="p-8 flex-1 flex flex-col gap-6 overflow-hidden">
-            <div className="relative group h-40 shrink-0">
+          <div className="p-6 flex-1 flex flex-col gap-4 overflow-hidden">
+            <div className="relative group h-24 shrink-0">
               <input type="file" multiple accept=".pdf,.docx,.jpg,.jpeg,.png" onChange={e => e.target.files && handleTaskFileSelect(e.target.files)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
-              <div className="border-2 border-dashed border-slate-100 rounded-[25px] h-full flex flex-col items-center justify-center p-4 text-center group-hover:border-indigo-200 transition-colors bg-slate-50/50">
-                <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-sm mb-3 text-xl">📄</div>
-                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Last opp oppgaveark</p>
-                <p className="text-[8px] text-slate-400 mt-1 uppercase font-bold tracking-tighter">Word, PDF eller skann</p>
+              <div className="border-2 border-dashed border-slate-100 rounded-2xl h-full flex flex-col items-center justify-center p-2 text-center group-hover:border-indigo-200 transition-colors bg-slate-50/50">
+                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">+ Last opp oppgave</p>
               </div>
             </div>
 
             <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-2">
-              {(activeProject?.taskFiles || []).length === 0 && (
-                <div className="h-full flex items-center justify-center text-slate-300 text-[10px] font-bold uppercase tracking-widest opacity-50 text-center px-8 leading-relaxed">
-                  Ingen oppgaver lastet inn. Dette danner grunnlaget for KI-vurderingen.
-                </div>
-              )}
               {(activeProject?.taskFiles || []).map(f => (
-                <div key={f.id} className="text-[10px] font-bold bg-white p-4 rounded-2xl border border-slate-100 flex justify-between items-center shadow-sm animate-in fade-in slide-in-from-bottom-1">
-                  <div className="flex items-center gap-3 truncate">
-                    <span className="opacity-40">{f.fileName.endsWith('.docx') ? '📘' : '📄'}</span>
-                    <span className="truncate">{f.fileName}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {isAiWorking ? (
-                      <div className="flex items-center gap-2 text-indigo-400">
-                        <span className="text-[8px] font-black uppercase tracking-tighter">Analyserer...</span>
-                        <Spinner size="w-3 h-3" />
-                      </div>
-                    ) : (
-                      <span className="text-[8px] bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded font-black shrink-0 flex items-center gap-1">
-                        <span>✓</span> KLAR
-                      </span>
-                    )}
-                  </div>
+                <div key={f.id} className="text-[10px] font-bold bg-white p-3 rounded-xl border border-slate-100 flex justify-between items-center">
+                  <span className="truncate flex-1 pr-2">📄 {f.fileName}</span>
+                  {isAiWorking ? <Spinner size="w-3 h-3" /> : <span className="text-emerald-500 font-black">✓</span>}
                 </div>
               ))}
             </div>
@@ -125,66 +110,55 @@ export const SetupStep: React.FC<SetupStepProps> = ({
         </div>
         
         {/* KOLONNE 2: ELEVBESVARELSER */}
-        <div className="bg-white rounded-[45px] shadow-sm border border-slate-100 flex flex-col overflow-hidden h-full">
-          <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/30 shrink-0">
+        <div className="md:col-span-8 bg-white rounded-[40px] shadow-sm border border-slate-100 flex flex-col overflow-hidden h-full">
+          <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/30 shrink-0">
             <div className="flex flex-col">
-              <h3 className="font-black text-[11px] uppercase text-emerald-600 tracking-widest">2. Elevbesvarelser</h3>
-              <p className="text-[9px] text-slate-400 font-bold">Laster inn PDF, Word eller skannede JPG</p>
+              <h3 className="font-black text-[10px] uppercase text-emerald-600 tracking-widest">2. Elevbesvarelser</h3>
+            </div>
+            <div className="flex gap-4">
+               <div className="text-center">
+                  <div className="text-[11px] font-black text-slate-700 leading-none">{stats.totalCandidates}</div>
+                  <div className="text-[8px] font-black text-slate-400 uppercase tracking-tighter">Elever</div>
+               </div>
+               <div className="text-center">
+                  <div className="text-[11px] font-black text-emerald-600 leading-none">{stats.totalSider}</div>
+                  <div className="text-[8px] font-black text-slate-400 uppercase tracking-tighter">Sider</div>
+               </div>
             </div>
           </div>
 
-          <div className="p-8 flex-1 flex flex-col gap-6 overflow-hidden">
-            <div className="relative group h-40 shrink-0">
+          <div className="p-6 flex-1 flex flex-col gap-4 overflow-hidden">
+            <div className="relative group flex-1">
               <input type="file" multiple accept=".pdf,.docx,.jpg,.jpeg,.png" onChange={e => e.target.files && handleCandidateFileSelect(e.target.files)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
-              <div className="border-2 border-dashed border-slate-100 rounded-[25px] h-full flex flex-col items-center justify-center p-4 text-center group-hover:border-emerald-200 transition-colors bg-slate-50/50">
-                <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-sm mb-3 text-xl">🎓</div>
-                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Last opp elevsider</p>
-                <p className="text-[8px] text-slate-400 mt-1 uppercase font-bold tracking-tighter">Sider grupperes automatisk</p>
+              <div className="border-2 border-dashed border-slate-100 rounded-3xl h-full flex flex-col items-center justify-center p-10 text-center group-hover:border-emerald-200 transition-colors bg-slate-50/50">
+                <div className="text-4xl mb-4">📥</div>
+                <p className="text-[12px] font-black text-slate-500 uppercase tracking-[0.2em] mb-2">Slipp filer her</p>
+                <p className="text-[10px] font-bold text-slate-400 uppercase">Støtter PDF, Word og Bilder</p>
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-3">
+            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-2">
               {(activeProject?.unprocessedPages || []).map(p => (
-                <div key={p.id} className={`text-[10px] font-bold p-4 rounded-2xl border flex gap-4 items-center animate-in fade-in ${p.status === 'error' ? 'bg-rose-50 border-rose-100 cursor-pointer' : 'bg-slate-50 border-dashed'}`} onClick={() => p.status === 'error' && handleRetryPage(p)}>
-                  <div className="flex-1 truncate flex items-center gap-3">
-                    <span className="opacity-30">📄</span>
-                    <span className="truncate">{p.fileName}</span>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {p.status === 'error' ? (
-                       <span className="text-rose-500 font-black uppercase text-[8px] border border-rose-200 px-2 py-0.5 rounded">Feil - Prøv igjen ↻</span>
-                    ) : (
-                      <div className="flex items-center gap-2 text-indigo-400">
-                        <span className="text-[8px] font-black uppercase tracking-tighter">
-                          {p.status === 'processing' ? 'KI-Analyse...' : 'Venter...'}
-                        </span>
-                        <Spinner size="w-3 h-3" />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
-              {(activeProject?.candidates || []).length === 0 && (activeProject?.unprocessedPages || []).length === 0 && (
-                <div className="h-full flex items-center justify-center text-slate-300 text-[10px] font-bold uppercase tracking-widest opacity-50 text-center px-8 leading-relaxed">
-                  Last inn elevsvar. KI-en vil forsøke å finne Kandidat-ID på hvert ark.
-                </div>
-              )}
-              {(activeProject?.candidates || []).map(c => (
-                <div key={c.id} className="text-[11px] font-black bg-emerald-50 p-5 rounded-[25px] border border-emerald-100 text-emerald-700 flex justify-between items-center animate-in zoom-in-95">
-                  <div className="flex items-center gap-3">
-                    <div className="w-6 h-6 rounded-full bg-emerald-100 flex items-center justify-center text-[10px]">👤</div>
-                    <span>{c.name}</span>
-                  </div>
+                <div key={p.id} className={`text-[10px] font-bold p-3 rounded-xl border flex gap-3 items-center ${p.status === 'error' ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-200 opacity-60'}`}>
+                  <span className="truncate flex-1">{p.fileName}</span>
                   <div className="flex items-center gap-2">
-                    <span className="text-[8px] font-black text-emerald-500 uppercase tracking-widest mr-2">Ferdig analysert</span>
-                    <span className="text-[9px] bg-emerald-500 text-white px-3 py-1 rounded-full uppercase">{(c.pages || []).length} Sider</span>
+                    <span className="text-[8px] font-black uppercase">{p.status === 'processing' ? 'Analyserer...' : 'Venter...'}</span>
+                    <Spinner size="w-3 h-3" />
                   </div>
                 </div>
               ))}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-4">
+                {(activeProject?.candidates || []).map(c => (
+                  <div key={c.id} className="text-[10px] font-black bg-white p-3 rounded-xl border border-slate-100 text-slate-700 flex justify-between items-center shadow-sm">
+                    <span className="truncate">👤 {c.name}</span>
+                    <span className="text-emerald-500 font-black">✓</span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
-
       </div>
     </div>
   );

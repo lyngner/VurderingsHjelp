@@ -82,7 +82,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       </div>
 
       <footer className="max-w-6xl mx-auto mt-20 pt-8 border-t border-slate-100 flex justify-between items-center opacity-40">
-        <span className="text-[10px] font-black uppercase tracking-[0.2em]">Versjon 3.14.1</span>
+        <span className="text-[10px] font-black uppercase tracking-[0.2em]">Versjon 3.14.6</span>
         <span className="text-[9px] font-bold text-slate-400 uppercase italic">Digitalisering av vurderingsarbeid</span>
       </footer>
 
@@ -119,7 +119,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                  </section>
               </div>
               <div className="mt-12 pt-8 border-t border-slate-50 flex justify-between items-center text-[10px] font-bold text-slate-300 uppercase tracking-widest">
-                <span>Versjon 3.14.1</span>
+                <span>Versjon 3.14.6</span>
                 <span className="text-indigo-400">Digitalisering av vurderingsarbeid</span>
               </div>
            </div>

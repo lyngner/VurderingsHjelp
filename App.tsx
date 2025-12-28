@@ -28,6 +28,7 @@ const App: React.FC = () => {
   const [view, setView] = useState<'dashboard' | 'editor'>('dashboard');
   const [currentStep, setCurrentStep] = useState<'setup' | 'review' | 'rubric' | 'results'>('setup');
   
+  // Fix: Removed handleDriveImport from destructuring as it is no longer returned by useProjectProcessor
   const {
     processingCount,
     batchTotal,
@@ -100,7 +101,7 @@ const App: React.FC = () => {
           if (c.id !== candidateId) return c;
           const remainingPages = c.pages.filter(p => p.id !== pageId);
           return { ...c, pages: remainingPages };
-        }).filter(c => c.pages.length > 0) // Fjern kandidat hvis alle sider slettes
+        }).filter(c => c.pages.length > 0)
       };
     });
   };
@@ -166,6 +167,7 @@ const App: React.FC = () => {
                 handleCandidateFileSelect={handleCandidateFileSelect} 
                 handleRetryPage={handleRetryPage} 
                 updateActiveProject={updateActiveProject} 
+                // Fix: Removed handleDriveImport prop which is not defined in SetupStepProps
               />
             )}
             {currentStep === 'review' && (

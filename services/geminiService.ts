@@ -68,11 +68,11 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<any[]> => {
       contents: {
         parts: [
           { inlineData: { mimeType: page.mimeType, data: page.base64Data } }, 
-          { text: "Analyser bildet. Finn alle A4-sider i bildet. Identifiser KandidatID, PageNumber og FullText. Bruk ALLTID LaTeX-delimitere ($...$ for inline og $$...$$ for blokker). Detekter rotasjon (0, 90, 180, 270) slik at teksten er rett." }
+          { text: "Analyser bildet. Finn HELE A4-siden i bildet. Identifiser KandidatID, PageNumber og FullText. KRITISK: Inkluder ALLTID tabeller med kandidatnummer og sidetall i box_2d-utsnittet. Ikke klipp bort headeren. Bruk ALLTID LaTeX-delimitere ($...$ for inline og $$...$$ for blokker). Detekter rotasjon (0, 90, 180, 270) slik at teksten er rett." }
         ],
       },
       config: { 
-        systemInstruction: "OCR-analytiker. Svar KUN JSON.",
+        systemInstruction: "OCR-analytiker. Svar KUN JSON. Du er ekspert på å finne kandidatnummer i tabeller øverst på siden.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.ARRAY,
@@ -104,16 +104,17 @@ export const analyzeTextContent = async (text: string): Promise<any> => {
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: {
-        parts: [{ text: `Analyser metadata. Tekst:\n${text.substring(0, 5000)}` }],
+        parts: [{ text: `Analyser metadata for denne digitale besvarelsen. Finn kandidatnummer og eventuelt sidetall hvis det finnes. Tekst:\n${text.substring(0, 5000)}` }],
       },
       config: { 
-        systemInstruction: "Dokumentanalytiker. Svar KUN JSON.",
+        systemInstruction: "Dokumentanalytiker for digitale dokumenter. Svar KUN JSON.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
             candidateId: { type: Type.STRING },
-            fullText: { type: Type.STRING }
+            fullText: { type: Type.STRING },
+            pageNumber: { type: Type.INTEGER }
           },
           required: ["candidateId", "fullText"]
         }
@@ -133,11 +134,11 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promi
       contents: { 
         parts: [
           ...parts, 
-          { text: "LES NØYE: Lag en fullstendig rettemanual basert på disse oppgavearkene. Det er KRITISK at du finner og lister hver eneste deloppgave (f.eks. 1a, 1b, 1c, 1d, 2a, 2b osv.). Ikke utelat noe. Sett ALLTID standard maks poeng til 2.0 for hver deloppgave. For hver deloppgave, beskriv nøyaktig hva som kreves for full poengsum, og list vanlige feil med estimerte poengtrekk (f.eks. -1p for slurvefeil). Bruk konsekvent $...$ for ALL matematikk." }
+          { text: "LES NØYE: Lag en fullstendig rettemanual basert på disse oppgavearkene. Det er KRITISK at du skiller mellom 'Del 1' og 'Del 2' (hvis begge finnes). Finn hver eneste deloppgave (f.eks. 1a, 1b, 2a, 2b osv.). Inkluder alle detaljer fra fasit/løsningsforslag. Sett ALLTID standard maks poeng til 2.0 for hver deloppgave. For hver deloppgave, beskriv nøyaktig hva som kreves for full poengsum, og list vanlige feil med poengtrekk. Bruk konsekvent $...$ for ALL matematikk." }
         ] 
       },
       config: { 
-        systemInstruction: "Du er en nøyaktig sensor. Din oppgave er å dekomponere oppgavesettet til hver minste deloppgave. Standard poengsum for hver deloppgave SKAL være 2.0. All matematikk SKAL være i LaTeX ($...$).",
+        systemInstruction: "Du er en nøyaktig sensor. Skill alltid mellom 'Del 1' og 'Del 2' i feltet 'part'. Dekomponer til minste deloppgave. Standard poengsum per deloppgave: 2.0. All matematikk SKAL være i LaTeX ($...$).",
         thinkingConfig: { thinkingBudget: 16000 },
         responseMimeType: "application/json",
         responseSchema: {
@@ -150,7 +151,7 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promi
                 type: Type.OBJECT,
                 properties: {
                   name: { type: Type.STRING },
-                  part: { type: Type.STRING },
+                  part: { type: Type.STRING, description: "Nøyaktig 'Del 1' eller 'Del 2'" },
                   description: { type: Type.STRING },
                   suggestedSolution: { type: Type.STRING },
                   commonErrors: { type: Type.STRING },
