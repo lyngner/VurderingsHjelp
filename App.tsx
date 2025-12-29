@@ -1,10 +1,9 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Project } from './types';
+import { Project, Candidate } from './types';
 import { saveProject, getAllProjects, deleteProject as deleteProjectFromStorage } from './services/storageService';
 import { useProjectProcessor } from './hooks/useProjectProcessor';
 
-// Komponenter
 import { Dashboard } from './components/Dashboard';
 import { SetupStep } from './components/SetupStep';
 import { ReviewStep } from './components/ReviewStep';
@@ -28,7 +27,6 @@ const App: React.FC = () => {
   const [view, setView] = useState<'dashboard' | 'editor'>('dashboard');
   const [currentStep, setCurrentStep] = useState<'setup' | 'review' | 'rubric' | 'results'>('setup');
   
-  // Fix: Removed handleDriveImport from destructuring as it is no longer returned by useProjectProcessor
   const {
     processingCount,
     batchTotal,
@@ -39,6 +37,7 @@ const App: React.FC = () => {
     handleEvaluateAll,
     handleGenerateRubric,
     handleRetryPage,
+    handleSmartCleanup,
     updateActiveProject
   } = useProjectProcessor(activeProject, setActiveProject);
 
@@ -113,10 +112,7 @@ const App: React.FC = () => {
         ...prev,
         candidates: prev.candidates.map(c => {
           if (c.id !== candidateId) return c;
-          return {
-            ...c,
-            pages: c.pages.map(p => p.id === pageId ? { ...p, pageNumber: newNum } : p)
-          };
+          return { ...c, pages: c.pages.map(p => p.id === pageId ? { ...p, pageNumber: newNum } : p) };
         })
       };
     });
@@ -124,17 +120,34 @@ const App: React.FC = () => {
 
   const filteredCandidates = useMemo(() => {
     if (!activeProject?.candidates) return [];
-    return activeProject.candidates.filter(c => !reviewFilter || c.name.toLowerCase().includes(reviewFilter.toLowerCase()));
+    
+    // Filtrer basert på søk
+    let list = activeProject.candidates.filter(c => 
+      !reviewFilter || c.name.toLowerCase().includes(reviewFilter.toLowerCase())
+    );
+
+    // Sorteringslogikk
+    return [...list].sort((a, b) => {
+      const aName = a.name.toLowerCase();
+      const bName = b.name.toLowerCase();
+      const aIsUnknown = aName.includes("ukjent");
+      const bIsUnknown = bName.includes("ukjent");
+      
+      const aIsEmpty = a.pages.every(p => !p.transcription || p.transcription.includes("Ingen tekst"));
+      const bIsEmpty = b.pages.every(p => !p.transcription || p.transcription.includes("Ingen tekst"));
+
+      // 1. "Ukjente" og "Tomme" skal nederst
+      if ((aIsUnknown || aIsEmpty) && !(bIsUnknown || bIsEmpty)) return 1;
+      if (!(aIsUnknown || aIsEmpty) && (bIsUnknown || bIsEmpty)) return -1;
+
+      // 2. Alfanumerisk sortering for resten
+      return a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' });
+    });
   }, [activeProject, reviewFilter]);
 
   if (view === 'dashboard') {
     return (
-      <Dashboard 
-        projects={projects} 
-        onSelectProject={(p) => { setActiveProject(p); setView('editor'); }} 
-        onCreateProject={createNewProject}
-        onDeleteProject={handleDeleteProject}
-      />
+      <Dashboard projects={projects} onSelectProject={(p) => { setActiveProject(p); setView('editor'); }} onCreateProject={createNewProject} onDeleteProject={handleDeleteProject} />
     );
   }
 
@@ -156,34 +169,10 @@ const App: React.FC = () => {
         {activeProject && (
           <>
             {currentStep === 'setup' && (
-              <SetupStep 
-                activeProject={activeProject} 
-                isProcessing={processingCount > 0} 
-                batchTotal={batchTotal}
-                batchCompleted={batchCompleted}
-                rubricStatus={rubricStatus} 
-                handleTaskFileSelect={handleTaskFileSelect} 
-                handleGenerateRubric={() => handleGenerateRubric()} 
-                handleCandidateFileSelect={handleCandidateFileSelect} 
-                handleRetryPage={handleRetryPage} 
-                updateActiveProject={updateActiveProject} 
-                // Fix: Removed handleDriveImport prop which is not defined in SetupStepProps
-              />
+              <SetupStep activeProject={activeProject} isProcessing={processingCount > 0} batchTotal={batchTotal} batchCompleted={batchCompleted} rubricStatus={rubricStatus} handleTaskFileSelect={handleTaskFileSelect} handleGenerateRubric={() => handleGenerateRubric()} handleCandidateFileSelect={handleCandidateFileSelect} handleRetryPage={handleRetryPage} updateActiveProject={updateActiveProject} />
             )}
             {currentStep === 'review' && (
-              <ReviewStep 
-                activeProject={activeProject} 
-                selectedReviewCandidateId={selectedReviewCandidateId} 
-                setSelectedReviewCandidateId={(id) => setSelectedReviewCandidateId(id)} 
-                reviewFilter={reviewFilter} 
-                setReviewFilter={setReviewFilter} 
-                filteredCandidates={filteredCandidates} 
-                currentReviewCandidate={activeProject.candidates.find(c => c.id === selectedReviewCandidateId) || null} 
-                rotatePage={handleRotatePage} 
-                deletePage={handleDeletePage}
-                updatePageNumber={handleUpdatePageNumber}
-                setActiveProject={setActiveProject} 
-              />
+              <ReviewStep activeProject={activeProject} selectedReviewCandidateId={selectedReviewCandidateId} setSelectedReviewCandidateId={(id) => setSelectedReviewCandidateId(id)} reviewFilter={reviewFilter} setReviewFilter={setReviewFilter} filteredCandidates={filteredCandidates} currentReviewCandidate={activeProject.candidates.find(c => c.id === selectedReviewCandidateId) || null} rotatePage={handleRotatePage} deletePage={handleDeletePage} updatePageNumber={handleUpdatePageNumber} setActiveProject={setActiveProject} handleSmartCleanup={handleSmartCleanup} isCleaning={rubricStatus.loading} />
             )}
             {currentStep === 'rubric' && <RubricStep activeProject={activeProject} handleGenerateRubric={() => handleGenerateRubric()} rubricStatus={rubricStatus} updateActiveProject={updateActiveProject} />}
             {currentStep === 'results' && <ResultsStep activeProject={activeProject} selectedResultCandidateId={selectedResultCandidateId} setSelectedResultCandidateId={setSelectedResultCandidateId} handleEvaluateAll={handleEvaluateAll} handleGenerateRubric={() => handleGenerateRubric()} rubricStatus={rubricStatus} />}

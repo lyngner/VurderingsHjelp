@@ -82,7 +82,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       </div>
 
       <footer className="max-w-6xl mx-auto mt-20 pt-8 border-t border-slate-100 flex justify-between items-center opacity-40">
-        <span className="text-[10px] font-black uppercase tracking-[0.2em]">Versjon 3.19.0</span>
+        <span className="text-[10px] font-black uppercase tracking-[0.2em]">Versjon 3.30.0</span>
         <span className="text-[9px] font-bold text-slate-400 uppercase italic">Digitalisering av vurderingsarbeid</span>
       </footer>
 
@@ -98,16 +98,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <h2 className="text-3xl font-black text-slate-800 mb-8">Teknisk info & GDPR</h2>
               <div className="space-y-8 text-sm text-slate-600 leading-relaxed overflow-y-auto max-h-[60vh] pr-4 custom-scrollbar">
                  <section>
-                   <h4 className="font-black uppercase text-[10px] tracking-widest text-indigo-600 mb-3">Datasikkerhet og Lagring</h4>
+                   <h4 className="font-black uppercase text-[10px] tracking-widest text-indigo-600 mb-3">Dokumentasjon</h4>
                    <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
                      <ul className="space-y-3">
                        <li className="flex gap-3">
                          <span className="text-indigo-600 font-bold">✓</span>
-                         <span><strong>Deloppdeling:</strong> Oppgaver er nå visuelt skilt mellom Del 1 og Del 2 i alle oversikter.</span>
+                         <span><strong>Full Manual:</strong> Omfattende beskrivelse av alle moduler er lagt til i systemets README.</span>
                        </li>
                        <li className="flex gap-3">
                          <span className="text-indigo-600 font-bold">✓</span>
-                         <span><strong>Poengsystem:</strong> Tvunget default poengsum på 2.0 er ytterligere forsterket i KI-instruksen.</span>
+                         <span><strong>Arbeidsflyt:</strong> Dokumentert rekkefølge for trygg og effektiv vurdering.</span>
                        </li>
                      </ul>
                    </div>
@@ -119,7 +119,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                  </section>
               </div>
               <div className="mt-12 pt-8 border-t border-slate-50 flex justify-between items-center text-[10px] font-bold text-slate-300 uppercase tracking-widest">
-                <span>Versjon 3.19.0</span>
+                <span>Versjon 3.30.0</span>
                 <span className="text-indigo-400">Digitalisering av vurderingsarbeid</span>
               </div>
            </div>
