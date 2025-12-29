@@ -33,10 +33,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
     criteria.forEach(c => {
       const part = c.part || "Del 1";
       const groupKey = part.toLowerCase().includes("2") ? "Del 2" : "Del 1";
-      // Finn det første tallet i navnet for å gruppere etter hovedoppgave
-      const match = c.name.match(/(\d+)/);
-      const num = match ? match[1] : c.name;
-      groups[groupKey].add(num);
+      groups[groupKey].add(c.taskNumber || c.name);
     });
     
     return {
@@ -45,16 +42,12 @@ export const RubricStep: React.FC<RubricStepProps> = ({
     };
   }, [criteria]);
 
-  // Filtrer kriterier basert på om navnet inneholder det valgte hovednummeret
+  // Filtrer kriterier basert på valgt hovedoppgave
   const filteredCriteria = useMemo(() => {
     if (!selectedTask) return criteria;
     return criteria.filter(c => {
-      const match = c.name.match(/(\d+)/);
-      const num = match ? match[1] : c.name;
-      const part = c.part || "Del 1";
-      const groupKey = part.toLowerCase().includes("2") ? "Del 2" : "Del 1";
-      
-      return num === selectedTask.num && groupKey === selectedTask.part;
+      const groupKey = (c.part || "Del 1").toLowerCase().includes("2") ? "Del 2" : "Del 1";
+      return (c.taskNumber || c.name) === selectedTask.num && groupKey === selectedTask.part;
     });
   }, [selectedTask, criteria]);
 
@@ -74,7 +67,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
         <Spinner size="w-12 h-12" />
         <div className="space-y-2">
           <h2 className="text-xl font-black text-slate-800 uppercase tracking-widest">Genererer rettemanual</h2>
-          <p className="text-slate-400 text-xs font-bold uppercase tracking-widest animate-pulse">Analyserer deloppgaver med Gemini 3 Pro...</p>
+          <p className="text-slate-400 text-xs font-bold uppercase tracking-widest animate-pulse">Analyserer oppgaver og løsninger med Gemini 3 Pro...</p>
         </div>
       </div>
     );
@@ -85,6 +78,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
       <div className="h-full flex flex-col items-center justify-center p-20 text-center space-y-6">
         <div className="text-6xl grayscale opacity-30">📋</div>
         <h2 className="text-xl font-black text-slate-800 uppercase tracking-widest">Ingen rettemanual</h2>
+        <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest max-w-xs">Last opp oppgaveark i Innlasting-steget for å generere manual automatisk.</p>
         <button onClick={handleGenerateRubric} className="bg-indigo-600 text-white px-10 py-4 rounded-full font-black text-xs uppercase shadow-lg hover:scale-105 transition-transform">Generer nå</button>
       </div>
     );
@@ -92,7 +86,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-[#F8FAFC]">
-      {/* SIDEBAR - UAVHENGIG SKROLLBAR OG GRUPPERT */}
+      {/* SIDEBAR */}
       <aside className="w-64 bg-white border-r flex flex-col shrink-0 no-print shadow-sm h-full">
         <div className="p-6 border-b bg-white/80 backdrop-blur-md sticky top-0 z-10 shrink-0">
           <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Rettemanual</h3>
@@ -106,7 +100,6 @@ export const RubricStep: React.FC<RubricStepProps> = ({
             Alle Oppgaver
           </button>
           
-          {/* DEL 1 GRUPPE */}
           {groupedTaskNumbers.del1.length > 0 && (
             <div className="space-y-3">
                <h4 className="text-[9px] font-black text-indigo-400 uppercase tracking-[0.2em] px-2">Del 1</h4>
@@ -127,7 +120,6 @@ export const RubricStep: React.FC<RubricStepProps> = ({
             </div>
           )}
 
-          {/* DEL 2 GRUPPE */}
           {groupedTaskNumbers.del2.length > 0 && (
             <div className="space-y-3">
                <h4 className="text-[9px] font-black text-emerald-500 uppercase tracking-[0.2em] px-2">Del 2</h4>
@@ -156,7 +148,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
         </div>
       </aside>
 
-      {/* HOVEDINNHOLD - UAVHENGIG SKROLL */}
+      {/* HOVEDINNHOLD */}
       <main className="flex-1 overflow-y-auto custom-scrollbar p-8 h-full bg-[#F8FAFC]">
         <div className="max-w-5xl mx-auto space-y-8 pb-32">
           
@@ -164,7 +156,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
             <div className="absolute top-0 left-0 w-full h-1.5 bg-indigo-600"></div>
             <div className="flex flex-col md:flex-row justify-between items-start gap-6">
               <div className="min-w-0 flex-1">
-                <h2 className="text-3xl font-black text-slate-800 leading-tight tracking-tighter">
+                <h2 className="text-2xl font-black text-slate-800 leading-tight tracking-tighter">
                   <LatexRenderer content={activeProject.rubric.title} />
                 </h2>
                 <div className="flex gap-2 mt-4">
@@ -184,6 +176,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
             {filteredCriteria.length === 0 ? (
               <div className="p-20 text-center border-2 border-dashed rounded-[45px] opacity-30">
                 <p className="font-black uppercase tracking-widest text-xs">Ingen kriterier funnet for dette valget</p>
+                <button onClick={handleGenerateRubric} className="mt-4 text-[9px] font-black uppercase text-indigo-600 hover:underline">Prøv å regenerere manualen</button>
               </div>
             ) : (
               filteredCriteria.map((crit) => {
@@ -191,6 +184,9 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                 const isEditingSolution = editingId === crit.name;
                 const isEditingErrors = editingErrorsId === crit.name;
                 const isDel2 = crit.part?.toLowerCase().includes('2');
+                
+                // Sikker identifisering av oppgavenavn for ID-merket
+                const badgeLabel = `${crit.taskNumber}${crit.subTask || ''}`.toUpperCase();
 
                 return (
                   <div key={crit.name} className="bg-white rounded-[50px] shadow-sm border border-slate-100 overflow-hidden animate-in fade-in slide-in-from-bottom-6 duration-500">
@@ -200,7 +196,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                         <div className={`w-20 h-20 rounded-[30px] text-white flex flex-col items-center justify-center shadow-2xl shrink-0 ${isDel2 ? 'bg-emerald-600' : 'bg-slate-800'}`}>
                           <span className="text-[9px] font-black opacity-40 uppercase tracking-tighter mb-1">{crit.part}</span>
                           <div className="text-xl font-black leading-none">
-                            <LatexRenderer content={crit.name.toUpperCase()} />
+                            <LatexRenderer content={badgeLabel} />
                           </div>
                         </div>
                         <div className="min-w-0 flex-1 group">
@@ -255,7 +251,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                               {isEditingSolution ? 'Lagre ✓' : 'Rediger ✎'}
                             </button>
                           </div>
-                          <div className={`rounded-[40px] p-10 border min-h-[220px] transition-all ${isEditingSolution ? 'bg-white border-indigo-200 ring-8 ring-indigo-50/30' : 'bg-slate-50 border-slate-100 shadow-inner'}`}>
+                          <div className={`rounded-[40px] p-10 border min-h-[220px] transition-all overflow-x-auto custom-scrollbar ${isEditingSolution ? 'bg-white border-indigo-200 ring-8 ring-indigo-50/30' : 'bg-slate-50 border-slate-100 shadow-inner'}`}>
                             {isEditingSolution ? (
                               <textarea value={crit.suggestedSolution} autoFocus onChange={e => handleFieldChange(crit.name, 'suggestedSolution', e.target.value)} className="w-full bg-transparent outline-none text-[16px] font-medium text-slate-600 resize-none h-64 leading-relaxed custom-scrollbar" placeholder="Skriv LaTeX her..." />
                             ) : (
@@ -274,7 +270,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                               {isEditingErrors ? 'Lagre ✓' : 'Rediger ✎'}
                             </button>
                           </div>
-                          <div className={`rounded-[40px] p-10 border min-h-[220px] transition-all ${isEditingErrors ? 'bg-white border-rose-200 ring-8 ring-rose-50/30' : 'bg-rose-50/5 border-rose-100/30 shadow-inner'}`}>
+                          <div className={`rounded-[40px] p-10 border min-h-[220px] transition-all overflow-x-auto custom-scrollbar ${isEditingErrors ? 'bg-white border-rose-200 ring-8 ring-rose-50/30' : 'bg-rose-50/5 border-rose-100/30 shadow-inner'}`}>
                             {isEditingErrors ? (
                               <textarea value={crit.commonErrors || ""} autoFocus onChange={e => handleFieldChange(crit.name, 'commonErrors', e.target.value)} className="w-full bg-transparent outline-none text-[16px] font-bold text-slate-700 placeholder:text-rose-200/50 resize-none h-64 leading-relaxed custom-scrollbar" placeholder="Beskriv poengtrekk her..." />
                             ) : (

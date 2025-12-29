@@ -40,7 +40,9 @@ class RateLimiter {
 
   async schedule<T>(fn: () => Promise<T>): Promise<T> {
     if (this.activeCount >= this.MAX_CONCURRENCY) {
-      await new Promise<void>(resolve => this.queue.push(resolve));
+      await new Promise<void>((resolve) => {
+        this.queue.push(resolve);
+      });
     }
     this.activeCount++;
     try {
@@ -57,6 +59,42 @@ class RateLimiter {
 
 const limiter = new RateLimiter();
 
+export const analyzeTextContent = async (text: string): Promise<any> => {
+  return limiter.schedule(async () => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-preview',
+      contents: {
+        parts: [{ text: `Analyser denne teksten fra en elevbesvarelse. BRUK LaTeX for all matematikk:\n\n${text}` }],
+      },
+      config: { 
+        systemInstruction: "Ekspert på matematikk. Returner JSON. Inkluder ALDRI resonnering eller forklaringer i JSON-feltene. Bruk LaTeX.",
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            candidateId: { type: Type.STRING },
+            part: { type: Type.STRING },
+            pageNumber: { type: Type.INTEGER },
+            fullText: { type: Type.STRING },
+            identifiedTasks: { 
+              type: Type.ARRAY, 
+              items: { 
+                type: Type.OBJECT, 
+                properties: {
+                  taskNumber: { type: Type.STRING },
+                  subTask: { type: Type.STRING }
+                }
+              } 
+            }
+          }
+        }
+      }
+    });
+    return JSON.parse(cleanJson(response.text));
+  });
+};
+
 export const transcribeAndAnalyzeImage = async (page: Page): Promise<any[]> => {
   const cachedData = await getFromGlobalCache(page.contentHash);
   if (cachedData) return Array.isArray(cachedData) ? cachedData : [cachedData];
@@ -68,30 +106,36 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<any[]> => {
       contents: {
         parts: [
           { inlineData: { mimeType: page.mimeType, data: page.base64Data } }, 
-          { text: "Analyser bildet grundig. Prioriter å finne tabellen merket 'Kandidatnr' og 'sidenummer'. Identifiser: 1. KandidatID (skrevet i ruten). 2. Sidetall. 3. Full tekst (LaTeX). 4. Liste over ALLE oppgaver (f.eks. ['1A', '1B']). 5. Del ('Del 1' eller 'Del 2'). 6. Rotasjon (0, 90, 180, 270) slik at teksten blir lesbar. Svar KUN JSON." }
+          { text: "STRENGE REGLER FOR BILDEANALYSE (v4.5.2):\n1. INGEN BESKJÆRING: Du har ikke lov til å be om cropping eller returnere koordinater. Vi viser alltid 100% av arealet.\n2. DETERMINISTISK A3-SPLIT: Hvis bildet er i LANDSKAP (bredere enn høyt), SKAL du anta at det er et A3-oppslag og returnere TO JSON-objekter (ett for LEFT og ett for RIGHT). Bruk 'A3_SPREAD'.\n3. IDENTIFIKASJON: Prioriter boksene 'Kandidatnr' og 'sidenummer' øverst. De skal styre metadata.\n4. MATEMATIKK: Bruk vertikal oppstilling i aligned-miljøer med dobbel bakslash \\\\." }
         ],
       },
       config: { 
-        systemInstruction: `Du er en ekspert på OCR av eksamensbesvarelser.
-        VIKTIGSTE PRIORITET: Finn den trykte tabellen med 'Kandidatnr' og 'sidenummer'. Selv om IDen er utydelig, prøv å tolke den.
-        ROTASJON: Hvis bildet er opp-ned, sett 'rotation' til 180. Hvis det er sidelengs, sett 90 eller 270. Målet er at teksten skal stå rett vei.
-        OPPGAVELOGIKK: Inkluder sekvensielle oppgaver (hvis 1a er funnet, tolkes 'b' som 1b).
-        Svar KUN JSON i formatet [{ candidateId, pageNumber, part, fullText, rotation, identifiedTasks, box_2d }].`,
+        systemInstruction: "Du er en OCR-motor for eksamensark. Din eneste oppgave er å identifisere sidetype og transkribere tekst. Hvis bildet er landskap, skal du behandle det som to sider (LEFT/RIGHT). Bruk ren JSON.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.ARRAY,
           items: {
             type: Type.OBJECT,
             properties: {
+              layoutType: { type: Type.STRING, description: "Enten 'A3_SPREAD' (for landskap/to sider) eller 'A4_SINGLE'." },
+              sideInSpread: { type: Type.STRING, description: "'LEFT' eller 'RIGHT' hvis A3_SPREAD." },
               candidateId: { type: Type.STRING },
               part: { type: Type.STRING },
               pageNumber: { type: Type.INTEGER },
               fullText: { type: Type.STRING },
               rotation: { type: Type.INTEGER },
-              identifiedTasks: { type: Type.ARRAY, items: { type: Type.STRING } },
-              box_2d: { type: Type.ARRAY, items: { type: Type.INTEGER } }
+              identifiedTasks: { 
+                type: Type.ARRAY, 
+                items: { 
+                  type: Type.OBJECT, 
+                  properties: {
+                    taskNumber: { type: Type.STRING },
+                    subTask: { type: Type.STRING }
+                  }
+                } 
+              }
             },
-            required: ["fullText", "candidateId", "box_2d", "part", "identifiedTasks", "rotation"]
+            required: ["layoutType", "fullText"]
           }
         }
       }
@@ -103,38 +147,7 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<any[]> => {
   });
 };
 
-export const reconcileProjectData = async (project: Project): Promise<any> => {
-  return limiter.schedule(async () => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    
-    const summary = project.candidates.map(c => ({
-      id: c.id,
-      name: c.name,
-      tasks: Array.from(new Set(c.pages.flatMap(p => p.identifiedTasks || []))),
-      parts: Array.from(new Set(c.pages.map(p => p.part)))
-    }));
-
-    const rubricContext = project.rubric ? `RETTEMANUAL: ${project.rubric.criteria.map(c => c.name).join(", ")}` : "";
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-preview',
-      contents: {
-        parts: [{ 
-          text: `Rydd i eksamensdata. Noen IDer er feillest (f.eks 712 vs 112). 
-          DATA: ${JSON.stringify(summary)}
-          ${rubricContext}
-          Svar JSON med merges og corrections.` 
-        }],
-      },
-      config: { 
-        responseMimeType: "application/json"
-      }
-    });
-    return JSON.parse(cleanJson(response.text));
-  });
-};
-
-export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promise<Rubric> => {
+export const generateRubricFromTaskAndSamples = async (taskFiles: Page[], studentSamples?: string): Promise<Rubric> => {
   return limiter.schedule(async () => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const parts: any[] = taskFiles.map(f => ({ inlineData: { mimeType: f.mimeType, data: f.base64Data } }));
@@ -144,35 +157,52 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promi
       contents: { 
         parts: [
           ...parts, 
-          { text: "Lag en fullstendig rettemanual. Maks 2.0 poeng per deloppgave. Bruk LaTeX." }
+          { text: `Generer rettemanual basert på vedlagte oppgaveark. 
+          
+          VIKTIGE REGLER FOR VISUELL STRUKTUR (v4.5.2):
+          1. MATEMATIKK: Alle utregninger over flere trinn SKAL bruke display-math: \\[ \\begin{aligned} ... \\end{aligned} \\]. 
+             Bruk dobbel bakslash \\\\ for å tvinge linjeskift mellom hvert trinn.
+          2. RETTEVEILEDNING: Bruk punktlister (*) eller tydelige linjeskift. Ikke skriv tekstvegger.
+          3. POENG: Maks 2.0 poeng per deloppgave.
+          
+          ELEV-DATA TIL ANALYSE:
+          ${studentSamples || 'Ingen elevdata tilgjengelig.'}` }
         ] 
       },
       config: { 
-        systemInstruction: "Ekspert på matematikkvurdering. Svar KUN JSON. Bruk LaTeX \\( ... \\) eller \\[ ... \\]. Maks poeng 2.0.",
-        thinkingConfig: { thinkingBudget: 16000 },
-        responseMimeType: "application/json"
+        systemInstruction: "Ekspert på matematikkvurdering. Du lager pedagogiske og strengt vertikalt oppstilte løsningsforslag. Bruk LaTeX aligned-miljøer. Returner ren JSON.",
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            title: { type: Type.STRING },
+            criteria: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  taskNumber: { type: Type.STRING },
+                  subTask: { type: Type.STRING },
+                  part: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                  suggestedSolution: { type: Type.STRING },
+                  commonErrors: { type: Type.STRING },
+                  maxPoints: { type: Type.NUMBER },
+                  tema: { type: Type.STRING }
+                },
+                required: ["taskNumber", "subTask", "part", "description", "suggestedSolution", "maxPoints"]
+              }
+            }
+          },
+          required: ["title", "criteria"]
+        }
       }
     });
     
     const rubric = JSON.parse(cleanJson(response.text)) as Rubric;
     rubric.totalMaxPoints = (rubric.criteria || []).reduce((acc, c) => acc + (c.maxPoints || 0), 0);
     return rubric;
-  });
-};
-
-export const analyzeTextContent = async (text: string): Promise<any> => {
-  return limiter.schedule(async () => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: {
-        parts: [{ text: `Analyser metadata. Finn kandidatnummer, del og oppgaver:\n${text.substring(0, 5000)}` }],
-      },
-      config: { 
-        responseMimeType: "application/json"
-      }
-    });
-    return JSON.parse(cleanJson(response.text));
   });
 };
 
@@ -183,11 +213,51 @@ export const evaluateCandidate = async (candidate: Candidate, rubric: Rubric): P
 
     const response = await ai.models.generateContent({
       model: 'gemini-3-pro-preview',
-      contents: `Vurder besvarelsen mot manualen. Bruk LaTeX.\n\nBesvarelse:\n${content}\n\nManual:\n${JSON.stringify(rubric)}`,
+      contents: `Vurder besvarelsen mot rettemanualen. Svar KUN JSON. 
+      BRUK VERTIKALE UTREGNINGER i feedback ved hjelp av \\[ \\begin{aligned} ... \\end{aligned} \\].`,
       config: { 
-        systemInstruction: "Sensor. Svar KUN JSON. Bruk LaTeX.",
+        systemInstruction: "Sensor. Svar KUN JSON. Bruk LaTeX med vertikale aligned-miljøer.",
         thinkingConfig: { thinkingBudget: 16000 }, 
-        responseMimeType: "application/json"
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            grade: { type: Type.STRING },
+            feedback: { type: Type.STRING },
+            score: { type: Type.NUMBER },
+            vekstpunkter: { type: Type.ARRAY, items: { type: Type.STRING } },
+            taskBreakdown: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  taskName: { type: Type.STRING },
+                  taskNumber: { type: Type.STRING },
+                  subTask: { type: Type.STRING },
+                  score: { type: Type.NUMBER },
+                  max: { type: Type.NUMBER },
+                  comment: { type: Type.STRING },
+                  tema: { type: Type.STRING }
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+    return JSON.parse(cleanJson(response.text));
+  });
+};
+
+export const reconcileProjectData = async (project: Project): Promise<any> => {
+  return limiter.schedule(async () => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-preview',
+      contents: { parts: [{ text: `Analyser kandidater og sider. Finn ut om 'Ukjent' sider egentlig tilhører en kandidat. Prosjektdata: ${JSON.stringify(project.candidates.map(c => ({ id: c.id, pages: c.pages.map(p => ({ nr: p.pageNumber, tasks: p.identifiedTasks })) })))}` }] },
+      config: { 
+        systemInstruction: "Ekspert på data-rehabilitering. Slå sammen kandidater som logisk hører sammen.",
+        responseMimeType: "application/json" 
       }
     });
     return JSON.parse(cleanJson(response.text));

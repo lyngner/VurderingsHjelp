@@ -9,21 +9,19 @@ export const Spinner: React.FC<{ size?: string; color?: string }> = ({ size = "w
 );
 
 /**
- * LatexRenderer v2: Bruker en enkelt container med pre-wrap for å unngå
- * at React-noder splitter opp LaTeX-delimitere.
+ * LatexRenderer v2.2: Forsterket håndtering av vertikal oppstilling.
+ * Sikrer at linjeskift fra KI-en (både \n og LaTeX \\) blir respektert.
  */
 export const LatexRenderer: React.FC<{ content: string; className?: string }> = ({ content, className = "" }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isRendered, setIsRendered] = useState(false);
   
-  // Vi trigger rendring hver gang innholdet endres
   useEffect(() => {
     const mathjax = (window as any).MathJax;
     
     if (containerRef.current && mathjax && mathjax.typesetPromise) {
       setIsRendered(false);
       
-      // Vi bruker en liten timeout for å sikre at React har oppdatert DOM-en ferdig
       const timer = setTimeout(() => {
         mathjax.typesetClear([containerRef.current]);
         mathjax.typesetPromise([containerRef.current])
@@ -42,12 +40,19 @@ export const LatexRenderer: React.FC<{ content: string; className?: string }> = 
     }
   }, [content]);
 
+  // Vasker innholdet: 
+  // 1. Erstatter literal "\n" med faktiske linjeskift
+  // 2. Sikrer at dobbel backslash (\\) som brukes i aligned-miljøer bevares
+  const cleanedContent = content
+    .replace(/\\n/g, '\n')
+    .trim();
+
   return (
     <div 
       ref={containerRef} 
       className={`math-content tex2jax_process transition-opacity duration-300 ${isRendered ? 'opacity-100' : 'opacity-0'} ${className}`}
     >
-      {content}
+      {cleanedContent}
     </div>
   );
 };

@@ -1,22 +1,33 @@
 
+export interface IdentifiedTask {
+  taskNumber: string;
+  subTask: string;
+}
+
+export type PageLayout = 'A4_SINGLE' | 'A3_SPREAD';
+
 export interface Page {
   id: string;
   fileName: string;
-  imagePreview?: string; // Brukes nå som thumbnail (lav oppløsning)
-  base64Data?: string;   // Full oppløsning, lastes kun ved behov
+  imagePreview?: string;
+  base64Data?: string;
   contentHash: string;
   mimeType: string;
+  rawText?: string;
   transcription?: string;
   candidateId?: string;
   part?: string;
   pageNumber?: number;
-  identifiedTasks?: string[];
+  layoutType?: PageLayout; // Detektert sideoppsett
+  identifiedTasks?: IdentifiedTask[];
   status: 'pending' | 'processing' | 'completed' | 'error';
   rotation?: number;
 }
 
 export interface TaskEvaluation {
   taskName: string;
+  taskNumber: string;
+  subTask: string;
   part?: string;
   score: number;
   max: number;
@@ -26,6 +37,7 @@ export interface TaskEvaluation {
 
 export interface Candidate {
   id: string;
+  projectId: string;
   name: string; 
   pages: Page[];
   evaluation?: {
@@ -40,6 +52,8 @@ export interface Candidate {
 
 export interface RubricCriterion {
   name: string;
+  taskNumber: string;
+  subTask: string;
   part?: string;
   description: string;
   suggestedSolution: string;
@@ -59,6 +73,7 @@ export interface Project {
   name: string;
   createdAt: number;
   updatedAt: number;
+  candidateCount?: number;
   taskDescription: string;
   taskFiles: Page[];
   candidates: Candidate[];

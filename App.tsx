@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { Project, Candidate } from './types';
-import { saveProject, getAllProjects, deleteProject as deleteProjectFromStorage } from './services/storageService';
+import { saveProject, getAllProjects, deleteProject as deleteProjectFromStorage, loadFullProject } from './services/storageService';
 import { useProjectProcessor } from './hooks/useProjectProcessor';
 
 import { Dashboard } from './components/Dashboard';
@@ -45,6 +45,16 @@ const App: React.FC = () => {
   const [selectedReviewCandidateId, setSelectedReviewCandidateId] = useState<string | null>(null);
   const [reviewFilter, setReviewFilter] = useState('');
 
+  // Sikkerhetsmekanisme: Auto-generer manual hvis filer finnes men manual mangler
+  useEffect(() => {
+    if (activeProject && activeProject.taskFiles.length > 0 && !activeProject.rubric && !rubricStatus.loading && processingCount === 0) {
+      const timer = setTimeout(() => {
+        handleGenerateRubric();
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [activeProject?.taskFiles, activeProject?.rubric, rubricStatus.loading, processingCount]);
+
   useEffect(() => {
     getAllProjects().then(all => {
       setProjects(all.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)));
@@ -71,6 +81,14 @@ const App: React.FC = () => {
     setActiveProject(newProj); 
     setView('editor'); 
     setCurrentStep('setup');
+  };
+
+  const handleSelectProject = async (p: Project) => {
+    const fullProject = await loadFullProject(p.id);
+    if (fullProject) {
+      setActiveProject(fullProject);
+      setView('editor');
+    }
   };
 
   const handleDeleteProject = async (id: string) => {
@@ -120,34 +138,23 @@ const App: React.FC = () => {
 
   const filteredCandidates = useMemo(() => {
     if (!activeProject?.candidates) return [];
-    
-    // Filtrer basert på søk
-    let list = activeProject.candidates.filter(c => 
-      !reviewFilter || c.name.toLowerCase().includes(reviewFilter.toLowerCase())
-    );
-
-    // Sorteringslogikk
+    let list = activeProject.candidates.filter(c => !reviewFilter || c.name.toLowerCase().includes(reviewFilter.toLowerCase()));
     return [...list].sort((a, b) => {
       const aName = a.name.toLowerCase();
       const bName = b.name.toLowerCase();
       const aIsUnknown = aName.includes("ukjent");
       const bIsUnknown = bName.includes("ukjent");
-      
       const aIsEmpty = a.pages.every(p => !p.transcription || p.transcription.includes("Ingen tekst"));
       const bIsEmpty = b.pages.every(p => !p.transcription || p.transcription.includes("Ingen tekst"));
-
-      // 1. "Ukjente" og "Tomme" skal nederst
       if ((aIsUnknown || aIsEmpty) && !(bIsUnknown || bIsEmpty)) return 1;
       if (!(aIsUnknown || aIsEmpty) && (bIsUnknown || bIsEmpty)) return -1;
-
-      // 2. Alfanumerisk sortering for resten
       return a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' });
     });
   }, [activeProject, reviewFilter]);
 
   if (view === 'dashboard') {
     return (
-      <Dashboard projects={projects} onSelectProject={(p) => { setActiveProject(p); setView('editor'); }} onCreateProject={createNewProject} onDeleteProject={handleDeleteProject} />
+      <Dashboard projects={projects} onSelectProject={handleSelectProject} onCreateProject={createNewProject} onDeleteProject={handleDeleteProject} />
     );
   }
 

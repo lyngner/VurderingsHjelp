@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
-import { Project, Page, Candidate } from '../types';
-import { processFileToImages, cropImageFromBase64 } from '../services/fileService';
-import { getMedia, saveMedia } from '../services/storageService';
+import { Project, Page, Candidate, IdentifiedTask } from '../types';
+import { processFileToImages, splitA3Spread } from '../services/fileService';
+import { getMedia, saveMedia, saveCandidate } from '../services/storageService';
 import { 
   transcribeAndAnalyzeImage, 
   analyzeTextContent, 
@@ -11,18 +11,36 @@ import {
   reconcileProjectData
 } from '../services/geminiService';
 
-const extractTasksFallback = (text: string): string[] => {
+const sanitizeTaskPart = (val: string | undefined): string => {
+  if (!val) return "";
+  const v = val.trim().toUpperCase();
+  const noise = ["NULL", "UNKNOWN", "UKJENT", "NONE", "UNDEFINED", "HELE", "ALL", "TOTAL", "EMPTY"];
+  if (noise.some(n => v === n || v.includes(n))) return "UKJENT";
+  // Fjerner tegnsetting på slutten
+  return val.trim().replace(/[\.\)\:\,]+$/, "");
+};
+
+const extractTasksFallback = (text: string): IdentifiedTask[] => {
   if (!text) return [];
   const lines = text.split('\n');
-  const tasks = new Set<string>();
-  const taskPattern = /^\s*(\d+[a-z]?)(?:[\s\)\.\:]|$)/i;
+  const tasks: IdentifiedTask[] = [];
+  const taskPattern = /^\s*(\d+)([a-z]?)(?:[\s\)\.\:]|$)/i;
   lines.forEach(line => {
     const match = line.match(taskPattern);
     if (match && match[1]) {
-      tasks.add(match[1].toUpperCase());
+      tasks.push({
+        taskNumber: sanitizeTaskPart(match[1]),
+        subTask: sanitizeTaskPart(match[2] || "")
+      });
     }
   });
-  return Array.from(tasks);
+  return tasks;
+};
+
+const sanitizeId = (id: string | undefined): string => {
+  if (!id || id.toLowerCase() === "null") return "Ukjent";
+  const match = id.match(/\d+/);
+  return match ? match[0] : id.trim() || "Ukjent";
 };
 
 export const useProjectProcessor = (
@@ -32,6 +50,7 @@ export const useProjectProcessor = (
   const [processingCount, setProcessingCount] = useState(0);
   const [batchTotal, setBatchTotal] = useState(0);
   const [batchCompleted, setBatchCompleted] = useState(0);
+  const [currentAction, setCurrentAction] = useState<string>('');
   const [rubricStatus, setRubricStatus] = useState<{ loading: boolean; text: string }>({ loading: false, text: '' });
 
   const updateActiveProject = (updates: Partial<Project>) => {
@@ -41,18 +60,15 @@ export const useProjectProcessor = (
   const handleSmartCleanup = async () => {
     if (!activeProject) return;
     setRubricStatus({ loading: true, text: 'Kjører smart-opprydding...' });
+    setCurrentAction('Slår sammen kandidater og rydder i IDer...');
     try {
       const reconciliation = await reconcileProjectData(activeProject);
-      
       setActiveProject(prev => {
         if (!prev) return null;
         let newCandidates = [...prev.candidates];
-
-        // Utfør sammenslåinger
         reconciliation.merges?.forEach((m: any) => {
           const fromIdx = newCandidates.findIndex(c => c.id === m.fromId);
           const toIdx = newCandidates.findIndex(c => c.id === m.toId);
-          
           if (fromIdx !== -1 && toIdx !== -1 && fromIdx !== toIdx) {
             const fromCand = newCandidates[fromIdx];
             newCandidates[toIdx] = {
@@ -62,86 +78,86 @@ export const useProjectProcessor = (
             newCandidates.splice(fromIdx, 1);
           }
         });
-
-        // Oppdater oppgavedetektering hvis foreslått
-        reconciliation.taskCorrections?.forEach((corr: any) => {
-          const candIdx = newCandidates.findIndex(c => c.id === corr.candidateId);
-          if (candIdx !== -1) {
-             // Her kan vi logge at vi har funnet forbedringer
-             console.log(`Smart Cleanup: Oppdaterte oppgaver for ${corr.candidateId}`);
-          }
-        });
-
         return { ...prev, candidates: newCandidates };
       });
-    } catch (e) {
-      console.error("Smart cleanup failed:", e);
-    } finally {
-      setRubricStatus({ loading: false, text: '' });
+    } catch (e) { 
+      console.error("Smart Cleanup Error:", e); 
+    } finally { 
+      setRubricStatus({ loading: false, text: '' }); 
+      setCurrentAction('');
     }
   };
 
   const handleGenerateRubric = async (overrideProject?: Project) => {
     const proj = overrideProject || activeProject;
     if (!proj || (proj.taskFiles?.length || 0) === 0) return;
-    setRubricStatus({ loading: true, text: 'KI-analyse av oppgaver...' });
+    setRubricStatus({ loading: true, text: 'Genererer hierarkisk manual...' });
     try {
       const taskFilesWithMedia = await Promise.all((proj.taskFiles || []).map(async f => {
         const media = await getMedia(f.id);
         return { ...f, base64Data: media?.split(',')[1] || "" };
       }));
-      const rubric = await generateRubricFromTaskAndSamples(taskFilesWithMedia);
-      updateActiveProject({ rubric });
-    } catch (e) {
-      console.error("Rubric generation failed:", e);
-    } finally {
-      setRubricStatus({ loading: false, text: '' });
-    }
+      let studentSamples = "";
+      if (proj.candidates.length > 0) {
+        studentSamples = proj.candidates.slice(0, 5).map(c => `ELEV ${c.id}:\n${c.pages.map(p => p.transcription).join("\n")}`).join("\n\n---\n\n");
+      }
+      const rubric = await generateRubricFromTaskAndSamples(taskFilesWithMedia, studentSamples);
+      setActiveProject(prev => prev ? { ...prev, rubric, updatedAt: Date.now() } : null);
+    } catch (e) { console.error(e); } finally { setRubricStatus({ loading: false, text: '' }); }
   };
 
   const integratePageResults = async (originalPage: Page, results: any[]) => {
+    if (!activeProject) return;
     const processedPages: Page[] = [];
     const originalMedia = await getMedia(originalPage.id);
-    
+    const shouldSplit = results.length > 1;
+
     for (let i = 0; i < results.length; i++) {
       const res = results[i];
-      const newId = `${originalPage.id}_split_${i}`;
+      const newId = shouldSplit ? `${originalPage.id}_split_${i}` : originalPage.id;
       
-      let cleanedPart = String(res.part || "Ukjent del");
-      if (cleanedPart.length > 15 || cleanedPart === "null") {
-         if (cleanedPart.toLowerCase().includes("2")) cleanedPart = "Del 2";
-         else if (cleanedPart.toLowerCase().includes("1")) cleanedPart = "Del 1";
-         else cleanedPart = "Ukjent del";
-      }
+      let tasks = (res.identifiedTasks || []).map((t: any) => ({
+        taskNumber: sanitizeTaskPart(t.taskNumber),
+        subTask: sanitizeTaskPart(t.subTask)
+      })).filter((t: any) => t.taskNumber !== "");
 
-      let tasks = res.identifiedTasks || [];
       if (tasks.length === 0 && res.fullText) {
         tasks = extractTasksFallback(res.fullText);
       }
+      const candidateIdStr = sanitizeId(res.candidateId);
       
-      const candidateIdStr = (res.candidateId && res.candidateId !== "null") ? String(res.candidateId) : "Ukjent";
-      
-      if (res.box_2d && originalMedia) {
+      if (shouldSplit && res.layoutType === 'A3_SPREAD' && res.sideInSpread && originalMedia) {
         try {
-          const cropped = await cropImageFromBase64(originalMedia, res.box_2d);
-          await saveMedia(newId, cropped.preview);
-          processedPages.push({
-            ...originalPage,
-            id: newId,
-            imagePreview: cropped.preview,
-            candidateId: candidateIdStr,
-            part: cleanedPart,
-            pageNumber: res.pageNumber,
-            transcription: res.fullText,
-            identifiedTasks: tasks,
+          const side = res.sideInSpread as 'LEFT' | 'RIGHT';
+          const split = await splitA3Spread(originalMedia, side);
+          await saveMedia(newId, split.preview);
+          processedPages.push({ 
+            ...originalPage, 
+            id: newId, 
+            imagePreview: split.preview, 
+            candidateId: candidateIdStr, 
+            part: res.part, 
+            pageNumber: res.pageNumber, 
+            transcription: res.fullText, 
+            identifiedTasks: tasks, 
             rotation: res.rotation || 0,
-            status: 'completed'
+            layoutType: 'A3_SPREAD',
+            status: 'completed' 
           });
         } catch (e) {
-          processedPages.push({ ...originalPage, id: newId, candidateId: candidateIdStr, transcription: res.fullText, status: 'completed' });
+          processedPages.push({ ...originalPage, id: newId, candidateId: candidateIdStr, transcription: res.fullText, status: 'completed', identifiedTasks: tasks });
         }
       } else {
-        processedPages.push({ ...originalPage, id: newId, candidateId: candidateIdStr, transcription: res.fullText, status: 'completed' });
+        processedPages.push({ 
+          ...originalPage, 
+          id: newId, 
+          candidateId: candidateIdStr, 
+          transcription: res.fullText, 
+          status: 'completed', 
+          identifiedTasks: tasks,
+          rotation: res.rotation || 0,
+          layoutType: res.layoutType || 'A4_SINGLE'
+        });
       }
     }
 
@@ -149,14 +165,23 @@ export const useProjectProcessor = (
       if (!prev) return null;
       let cands = [...(prev.candidates || [])];
       processedPages.forEach((newPage: Page) => {
-        const cId = String(newPage.candidateId || "Ukjent");
+        const cId = newPage.candidateId || "Ukjent";
         let candIndex = cands.findIndex(c => c.id === cId);
         if (candIndex === -1) {
-          cands.push({ id: cId, name: `Kandidat ${cId}`, status: 'completed', pages: [newPage] });
+          const newCand: Candidate = { id: cId, projectId: prev.id, name: `Kandidat ${cId}`, status: 'completed', pages: [newPage] };
+          cands.push(newCand);
+          saveCandidate(newCand);
         } else {
           const pageExists = cands[candIndex].pages.some(p => p.id === newPage.id);
           if (!pageExists) {
             cands[candIndex] = { ...cands[candIndex], pages: [...cands[candIndex].pages, newPage] };
+            saveCandidate(cands[candIndex]);
+          } else {
+            cands[candIndex] = { 
+              ...cands[candIndex], 
+              pages: cands[candIndex].pages.map(p => p.id === newPage.id ? newPage : p) 
+            };
+            saveCandidate(cands[candIndex]);
           }
         }
       });
@@ -166,21 +191,23 @@ export const useProjectProcessor = (
 
   const processSinglePage = async (page: Page) => {
     try {
+      setCurrentAction(`Analyserer ${page.fileName}...`);
       setActiveProject(prev => prev ? ({ ...prev, unprocessedPages: (prev.unprocessedPages || []).map(p => p.id === page.id ? { ...p, status: 'processing' as const } : p) }) : null);
+      
       if (page.mimeType === 'text/plain') {
         const res = await analyzeTextContent(page.transcription!);
         await integratePageResults(page, [res]);
       } else {
         const media = await getMedia(page.id);
-        const pageWithMedia = { ...page, base64Data: media?.split(',')[1] || "" };
-        const results = await transcribeAndAnalyzeImage(pageWithMedia);
+        const results = await transcribeAndAnalyzeImage({ ...page, base64Data: media?.split(',')[1] || "" });
         await integratePageResults(page, results);
       }
+      
       setBatchCompleted(prev => prev + 1);
     } catch (e) {
-      console.error("Prosessering feilet:", e);
+      console.error(e);
       setActiveProject(prev => prev ? ({ ...prev, unprocessedPages: (prev.unprocessedPages || []).map(p => p.id === page.id ? { ...p, status: 'error' as const } : p) }) : null);
-    } finally {
+    } finally { 
       setProcessingCount(prev => Math.max(0, prev - 1));
     }
   };
@@ -190,20 +217,25 @@ export const useProjectProcessor = (
     const fileList = Array.from(files);
     setBatchTotal(prev => prev + fileList.length);
     setProcessingCount(prev => prev + fileList.length);
+    
     try {
       const allNewTaskPages: Page[] = [];
       for (const file of fileList) {
+        setCurrentAction(`Laster inn ${file.name}...`);
         const pages = await processFileToImages(file);
         allNewTaskPages.push(...pages);
+        setBatchCompleted(prev => prev + 1);
+        setProcessingCount(prev => Math.max(0, prev - 1));
       }
+      
       const updatedProject = { ...activeProject, taskFiles: [...(activeProject.taskFiles || []), ...allNewTaskPages] };
       setActiveProject(updatedProject);
-      setBatchCompleted(prev => prev + allNewTaskPages.length);
-      setProcessingCount(prev => Math.max(0, prev - allNewTaskPages.length));
       await handleGenerateRubric(updatedProject);
-    } catch (err) {
-      console.error(err);
-      setProcessingCount(0);
+    } catch (err) { 
+      console.error(err); 
+      setProcessingCount(0); 
+    } finally {
+      setCurrentAction('');
     }
   };
 
@@ -211,14 +243,23 @@ export const useProjectProcessor = (
     if (!activeProject) return;
     const fileList = Array.from(files);
     let allNewPages: Page[] = [];
+    
+    setCurrentAction(`Forbereder ${fileList.length} filer...`);
     for (const file of fileList) {
       const pages = await processFileToImages(file);
       allNewPages = [...allNewPages, ...pages];
     }
+    
     updateActiveProject({ unprocessedPages: [...(activeProject.unprocessedPages || []), ...allNewPages] });
     setBatchTotal(prev => prev + allNewPages.length);
     setProcessingCount(prev => prev + allNewPages.length);
-    allNewPages.forEach(page => processSinglePage(page));
+    
+    for (const page of allNewPages) {
+      await processSinglePage(page);
+    }
+
+    setCurrentAction('Ferdig med OCR. Starter autonom opprydding...');
+    await handleSmartCleanup();
   };
 
   const handleRetryPage = (page: Page) => {
@@ -229,29 +270,22 @@ export const useProjectProcessor = (
 
   const handleEvaluateAll = async () => {
     if (!activeProject?.rubric) return;
-    setRubricStatus({ loading: true, text: 'Vurderer besvarelser...' });
+    setRubricStatus({ loading: true, text: 'Vurderer besvarelser hierarkisk...' });
     try {
       const cands = [...(activeProject.candidates || [])];
       for (let i = 0; i < cands.length; i++) {
         if (cands[i].status === 'evaluated') continue;
+        setCurrentAction(`Vurderer ${cands[i].name}...`);
         const evalRes = await evaluateCandidate(cands[i], activeProject.rubric);
         cands[i] = { ...cands[i], evaluation: evalRes, status: 'evaluated' };
+        saveCandidate(cands[i]);
         setActiveProject(prev => prev ? { ...prev, candidates: [...cands] } : null);
       }
-    } catch (e) { console.error(e); } finally { setRubricStatus({ loading: false, text: '' }); }
+    } catch (e) { console.error(e); } finally { 
+      setRubricStatus({ loading: false, text: '' }); 
+      setCurrentAction('');
+    }
   };
 
-  return {
-    processingCount,
-    batchTotal,
-    batchCompleted,
-    rubricStatus,
-    handleTaskFileSelect,
-    handleCandidateFileSelect,
-    handleEvaluateAll,
-    handleGenerateRubric,
-    handleRetryPage,
-    handleSmartCleanup,
-    updateActiveProject
-  };
+  return { processingCount, batchTotal, batchCompleted, currentAction, rubricStatus, handleTaskFileSelect, handleCandidateFileSelect, handleEvaluateAll, handleGenerateRubric, handleRetryPage, handleSmartCleanup, updateActiveProject };
 };

@@ -16,15 +16,12 @@ export const generateHash = (str: string): string => {
   return Math.abs(hash).toString(36);
 };
 
-/**
- * Genererer en liten thumbnail for å spare RAM
- */
 const createThumbnail = async (base64: string): Promise<string> => {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement('canvas');
-      const maxDim = 300;
+      const maxDim = 1200;
       let w = img.width;
       let h = img.height;
       if (w > h) {
@@ -35,9 +32,49 @@ const createThumbnail = async (base64: string): Promise<string> => {
       canvas.width = w;
       canvas.height = h;
       const ctx = canvas.getContext('2d');
-      ctx?.drawImage(img, 0, 0, w, h);
-      resolve(canvas.toDataURL('image/jpeg', 0.6));
+      if (ctx) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, w, h);
+      }
+      resolve(canvas.toDataURL('image/jpeg', 0.85));
     };
+    img.src = base64;
+  });
+};
+
+/**
+ * Splitter et bilde i to (Venstre/Høyre eller Topp/Bunn)
+ * Bruker ren GEOMETRISK 50/50-deling for å garantere at ingen marger beskjæres.
+ */
+export const splitA3Spread = async (base64: string, side: 'LEFT' | 'RIGHT'): Promise<{ preview: string }> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return reject("Canvas context error");
+
+      const isLandscape = img.width > img.height;
+      
+      // Vi bruker nøyaktig halvparten av arealet for å unngå "smart" cropping som feiler.
+      if (isLandscape) {
+        canvas.width = img.width / 2;
+        canvas.height = img.height;
+        const offsetX = side === 'LEFT' ? 0 : img.width / 2;
+        ctx.drawImage(img, offsetX, 0, img.width / 2, img.height, 0, 0, canvas.width, canvas.height);
+      } else {
+        // Noen ganger skannes A3-oppslag som portrett (to sider over hverandre)
+        canvas.width = img.width;
+        canvas.height = img.height / 2;
+        const offsetY = side === 'LEFT' ? 0 : img.height / 2;
+        ctx.drawImage(img, 0, offsetY, img.width, img.height / 2, 0, 0, canvas.width, canvas.height);
+      }
+
+      const splitBase64 = canvas.toDataURL('image/jpeg', 0.9);
+      resolve({ preview: splitBase64 });
+    };
+    img.onerror = reject;
     img.src = base64;
   });
 };
@@ -68,37 +105,7 @@ const createTextPlaceholderImage = (text: string, fileName: string): string => {
       y += 24;
     }
   });
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = 'italic 12px Inter, sans-serif';
-  ctx.fillText("Generert bilde for kontroll-visning", 40, canvas.height - 40);
   return canvas.toDataURL('image/jpeg', 0.8);
-};
-
-export const cropImageFromBase64 = async (base64: string, box: number[]): Promise<{ preview: string, data: string }> => {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return reject("Kunne ikke opprette canvas context");
-      const padding = 20; 
-      const [ymin, xmin, ymax, xmax] = box;
-      const left = Math.max(0, ((xmin - padding) / 1000) * img.width);
-      const top = Math.max(0, ((ymin - padding) / 1000) * img.height);
-      const width = Math.min(img.width - left, ((xmax - xmin + padding * 2) / 1000) * img.width);
-      const height = Math.min(img.height - top, ((ymax - ymin + padding * 2) / 1000) * img.height);
-      canvas.width = width;
-      canvas.height = height;
-      ctx.drawImage(img, left, top, width, height, 0, 0, width, height);
-      const croppedBase64 = canvas.toDataURL('image/jpeg', 0.8);
-      resolve({
-        preview: croppedBase64,
-        data: croppedBase64.split(',')[1]
-      });
-    };
-    img.onerror = reject;
-    img.src = base64;
-  });
 };
 
 export const processFileToImages = async (file: File): Promise<Page[]> => {
@@ -112,17 +119,7 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
         const id = Math.random().toString(36).substring(7);
         await saveMedia(id, visualPreview);
         const thumb = await createThumbnail(visualPreview);
-        
-        resolve([{ 
-          id, 
-          fileName: file.name, 
-          imagePreview: thumb, 
-          contentHash: generateHash(text), 
-          mimeType: 'text/plain', 
-          status: 'pending', 
-          transcription: text, 
-          rotation: 0 
-        }]);
+        resolve([{ id, fileName: file.name, imagePreview: thumb, contentHash: generateHash(text), mimeType: 'text/plain', status: 'pending', transcription: text, rotation: 0 }]);
       } catch (e) { resolve([]); }
       return;
     }
@@ -134,27 +131,18 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
         const pages: Page[] = [];
         for (let i = 1; i <= pdf.numPages; i++) {
           const page = await pdf.getPage(i);
-          const viewport = page.getViewport({ scale: 1.5 });
+          const viewport = page.getViewport({ scale: 2.5 });
           const canvas = document.createElement('canvas');
           const context = canvas.getContext('2d');
           if (!context) continue;
           canvas.height = viewport.height; 
           canvas.width = viewport.width;
           await page.render({ canvasContext: context, viewport }).promise;
-          const b64 = canvas.toDataURL('image/jpeg', 0.7);
+          const b64 = canvas.toDataURL('image/jpeg', 0.9);
           const id = Math.random().toString(36).substring(7);
           await saveMedia(id, b64);
           const thumb = await createThumbnail(b64);
-          
-          pages.push({ 
-            id, 
-            fileName: `${file.name} (S${i})`, 
-            imagePreview: thumb, 
-            contentHash: generateHash(b64), 
-            mimeType: 'image/jpeg', 
-            status: 'pending', 
-            rotation: 0 
-          });
+          pages.push({ id, fileName: `${file.name} (S${i})`, imagePreview: thumb, contentHash: generateHash(b64), mimeType: 'image/jpeg', status: 'pending', rotation: 0 });
         }
         resolve(pages);
       } catch (e) { resolve([]); }
@@ -169,25 +157,14 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
           const canvas = document.createElement('canvas');
           const ctx = canvas.getContext('2d');
           if (!ctx) { resolve([]); return; }
-          canvas.width = img.width; 
-          canvas.height = img.height;
+          canvas.width = img.width; canvas.height = img.height;
           ctx.drawImage(img, 0, 0);
-          const b64 = canvas.toDataURL('image/jpeg', 0.7);
+          const b64 = canvas.toDataURL('image/jpeg', 0.9);
           const id = Math.random().toString(36).substring(7);
           await saveMedia(id, b64);
           const thumb = await createThumbnail(b64);
-          
-          resolve([{ 
-            id, 
-            fileName: file.name, 
-            imagePreview: thumb, 
-            contentHash: generateHash(b64), 
-            mimeType: 'image/jpeg', 
-            status: 'pending', 
-            rotation: 0 
-          }]);
+          resolve([{ id, fileName: file.name, imagePreview: thumb, contentHash: generateHash(b64), mimeType: 'image/jpeg', status: 'pending', rotation: 0 }]);
         };
-        img.onerror = () => resolve([]);
         img.src = e.target?.result as string;
       };
       reader.readAsDataURL(file);
