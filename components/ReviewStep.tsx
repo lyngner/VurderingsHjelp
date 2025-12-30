@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Project, Candidate, Page } from '../types';
 import { LatexRenderer, Spinner } from './SharedUI';
-import { getMedia } from '../services/storageService';
+import { getMedia, saveCandidate } from '../services/storageService';
 
 interface ReviewStepProps {
   activeProject: Project;
@@ -47,12 +47,11 @@ const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
     return () => { isMounted = false; };
   }, [page.id]);
 
-  if (!src && !error) return <div className="aspect-[1/1.41] w-full flex items-center justify-center bg-slate-100 rounded-2xl animate-pulse text-slate-400 font-black uppercase text-[10px]">Laster bilde...</div>;
+  if (!src && !error) return <div className="aspect-[1/1.41] w-full flex items-center justify-center bg-slate-100 rounded-xl animate-pulse text-slate-400 font-black uppercase text-[10px]">Laster...</div>;
 
   return (
-    <div className="relative w-full overflow-hidden rounded-2xl border border-slate-200 shadow-md group bg-white">
-      {/* HD Indikator */}
-      <div className={`absolute top-4 right-4 z-10 px-2 py-1 rounded-md text-[8px] font-black uppercase tracking-widest transition-all duration-500 ${isFullRes ? 'bg-emerald-500 text-white opacity-100' : 'bg-slate-200 text-slate-500 opacity-50'}`}>
+    <div className="relative w-full overflow-hidden rounded-xl border border-slate-200 shadow-md group bg-white">
+      <div className={`absolute top-2 right-2 z-10 px-2 py-0.5 rounded text-[7px] font-black uppercase tracking-widest transition-all duration-500 ${isFullRes ? 'bg-emerald-500 text-white opacity-80' : 'bg-slate-200 text-slate-500 opacity-50'}`}>
         {isFullRes ? 'HD ✓' : 'Laster HD...'}
       </div>
 
@@ -63,12 +62,10 @@ const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
       />
       
       {error && (
-        <div className="absolute inset-0 flex items-center justify-center bg-rose-50/90 text-rose-500 p-8 text-center">
-          <p className="text-[10px] font-black uppercase tracking-widest">Kunne ikke laste originalbilde. Viser forhåndsvisning.</p>
+        <div className="absolute inset-0 flex items-center justify-center bg-rose-50/90 text-rose-500 p-4 text-center">
+          <p className="text-[8px] font-black uppercase tracking-widest">Feil ved lasting.</p>
         </div>
       )}
-      
-      <div className="absolute inset-0 bg-slate-900/0 group-hover:bg-slate-900/5 transition-all pointer-events-none"></div>
     </div>
   );
 };
@@ -110,7 +107,6 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
         const taskNum = t.taskNumber || "";
         const subT = t.subTask || "";
         if (taskNum) {
-          // Normaliserer ukjente varianter i visningen
           const cleanSub = subT.toUpperCase().includes('UKJENT') ? 'UKJENT' : subT;
           const label = `${taskNum}${cleanSub}`;
           groups[groupKey].add(label);
@@ -121,6 +117,68 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
       del1: Array.from(groups["Del 1"]).sort((a,b) => a.localeCompare(b, undefined, {numeric: true})),
       del2: Array.from(groups["Del 2"]).sort((a,b) => a.localeCompare(b, undefined, {numeric: true}))
     };
+  };
+
+  const handleMetadataChange = async (pageId: string, field: 'candidateId' | 'pageNumber' | 'part', value: string | number) => {
+    setActiveProject(prev => {
+      if (!prev) return null;
+      let newCandidates = [...prev.candidates];
+      let pageToMove: Page | null = null;
+      let sourceCandidateId = "";
+
+      if (field === 'candidateId') {
+        newCandidates = newCandidates.map(c => {
+          const pageIndex = c.pages.findIndex(p => p.id === pageId);
+          if (pageIndex !== -1) {
+            sourceCandidateId = c.id;
+            pageToMove = { ...c.pages[pageIndex], candidateId: String(value) };
+            const updatedPages = c.pages.filter(p => p.id !== pageId);
+            return { ...c, pages: updatedPages };
+          }
+          return c;
+        }).filter(c => c.pages.length > 0);
+
+        if (pageToMove) {
+          const targetCandidateId = String(value);
+          let targetCandidateIdx = newCandidates.findIndex(c => c.id === targetCandidateId);
+          
+          if (targetCandidateIdx === -1) {
+            const newCand: Candidate = {
+              id: targetCandidateId,
+              projectId: prev.id,
+              name: `Kandidat ${targetCandidateId}`,
+              status: 'completed',
+              pages: [pageToMove]
+            };
+            newCandidates.push(newCand);
+            saveCandidate(newCand);
+          } else {
+            newCandidates[targetCandidateIdx] = {
+              ...newCandidates[targetCandidateIdx],
+              pages: [...newCandidates[targetCandidateIdx].pages, pageToMove].sort((a,b) => (a.pageNumber || 0) - (b.pageNumber || 0))
+            };
+            saveCandidate(newCandidates[targetCandidateIdx]);
+          }
+          if (selectedReviewCandidateId === sourceCandidateId) {
+             setSelectedReviewCandidateId(targetCandidateId);
+          }
+        }
+      } else {
+        newCandidates = newCandidates.map(c => {
+          if (c.pages.some(p => p.id === pageId)) {
+            const updatedCand = {
+              ...c,
+              pages: c.pages.map(p => p.id === pageId ? { ...p, [field]: value } : p)
+            };
+            saveCandidate(updatedCand);
+            return updatedCand;
+          }
+          return c;
+        });
+      }
+
+      return { ...prev, candidates: newCandidates };
+    });
   };
 
   const allUniqueTasks = useMemo(() => {
@@ -150,77 +208,56 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-[#F1F5F9]">
-      <aside className="w-80 bg-white border-r flex flex-col shrink-0 no-print shadow-sm h-full">
-         <div className="p-6 border-b shrink-0 bg-white/80 backdrop-blur-md sticky top-0 z-20">
-            <div className="flex justify-between items-center mb-4">
-               <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Besvarelser</h3>
+      <aside className="w-64 bg-white border-r flex flex-col shrink-0 no-print shadow-sm h-full">
+         <div className="p-4 border-b shrink-0 bg-white/80 sticky top-0 z-20">
+            <div className="flex justify-between items-center mb-3">
+               <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Kandidater</h3>
                {handleSmartCleanup && (
-                 <button onClick={handleSmartCleanup} disabled={isCleaning} className="text-[9px] font-black uppercase text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 transition-all flex items-center gap-2">
-                   {isCleaning ? <Spinner size="w-3 h-3" /> : '✨ Smart-avstemming'}
+                 <button onClick={handleSmartCleanup} disabled={isCleaning} className="text-[8px] font-black uppercase text-indigo-600 px-2 py-1 rounded-md border border-indigo-100 hover:bg-indigo-50 transition-all">
+                   {isCleaning ? <Spinner size="w-2 h-2" /> : '✨ Rydd'}
                  </button>
                )}
             </div>
             
-            <div className="space-y-4">
-              <div className="bg-slate-50 p-4 rounded-2xl flex items-center gap-2 border">
-                <input type="text" placeholder="Søk kandidat..." className="bg-transparent border-none outline-none font-bold text-[11px] flex-1" value={reviewFilter} onChange={e => setReviewFilter(e.target.value)} />
-              </div>
+            <div className="space-y-3">
+              <input type="text" placeholder="Søk..." className="w-full bg-slate-50 border p-2 rounded-lg font-bold text-[10px] outline-none" value={reviewFilter} onChange={e => setReviewFilter(e.target.value)} />
 
               {allUniqueTasks.length > 0 && (
-                <div className="space-y-3">
-                  <p className="text-[9px] font-black uppercase text-slate-400 tracking-[0.1em] px-1 flex justify-between">
-                    <span>Filtrer oppgave:</span>
-                    {taskFilter && <button onClick={() => setTaskFilter(null)} className="text-rose-500 hover:underline">Nullstill</button>}
-                  </p>
-                  <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-1 custom-scrollbar">
-                    {allUniqueTasks.map(t => {
-                      const isUnknown = t.toLowerCase().includes('ukjent');
-                      return (
-                        <button 
-                          key={t}
-                          onClick={() => setTaskFilter(t === taskFilter ? null : t)}
-                          className={`text-[9px] font-black uppercase px-2.5 py-1.5 rounded-xl border transition-all ${taskFilter === t ? 'bg-slate-800 text-white border-slate-800 shadow-md' : isUnknown ? 'bg-rose-50 text-rose-500 border-rose-100' : 'bg-white text-slate-500 hover:border-indigo-300'}`}
-                        >
-                          {t}
-                        </button>
-                      );
-                    })}
-                  </div>
+                <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto custom-scrollbar p-1">
+                  {allUniqueTasks.map(t => (
+                    <button 
+                      key={t}
+                      onClick={() => setTaskFilter(t === taskFilter ? null : t)}
+                      className={`text-[8px] font-black uppercase px-2 py-1 rounded-lg border transition-all ${taskFilter === t ? 'bg-slate-800 text-white' : 'bg-white text-slate-500'}`}
+                    >
+                      {t}
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
          </div>
          
-         <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar bg-slate-50/30">
+         <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar bg-slate-50/30">
            {finalCandidates.length === 0 ? (
-             <div className="py-20 text-center opacity-30 italic text-[11px] font-bold uppercase tracking-widest text-slate-400">Ingen treff</div>
+             <div className="py-10 text-center opacity-30 italic text-[10px] font-bold uppercase tracking-widest text-slate-400">Ingen treff</div>
            ) : (
              finalCandidates.map(c => {
                const { del1, del2 } = getGroupedTasks(c);
                const isSelected = selectedReviewCandidateId === c.id;
                const isUnknown = c.name.toLowerCase().includes('ukjent');
                return (
-                 <button key={c.id} onClick={() => setSelectedReviewCandidateId(c.id)} className={`w-full text-left p-5 rounded-[35px] border transition-all relative overflow-hidden group ${isSelected ? 'bg-slate-900 text-white border-slate-900 shadow-xl scale-[1.02]' : isUnknown ? 'bg-rose-50/30 border-rose-100 hover:border-rose-300' : 'bg-white hover:border-indigo-200'}`}>
-                   <div className="flex justify-between items-start mb-3">
-                     <div className={`font-black text-[13px] truncate max-w-[150px] ${isUnknown && !isSelected ? 'text-rose-600' : ''}`}>{c.name || 'Ukjent'}</div>
-                     <div className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full ${isSelected ? 'bg-white/20' : 'bg-slate-100 text-slate-400'}`}>{c.pages.length} s</div>
+                 <button key={c.id} onClick={() => setSelectedReviewCandidateId(c.id)} className={`w-full text-left p-4 rounded-2xl border transition-all relative overflow-hidden ${isSelected ? 'bg-slate-900 text-white border-slate-900 shadow-lg' : isUnknown ? 'bg-rose-50/30 border-rose-100' : 'bg-white hover:border-indigo-100'}`}>
+                   <div className="flex justify-between items-start mb-2">
+                     <div className={`font-black text-[12px] truncate max-w-[120px] ${isUnknown && !isSelected ? 'text-rose-600' : ''}`}>{c.name || 'Ukjent'}</div>
+                     <div className={`text-[7px] font-black uppercase px-1.5 py-0.5 rounded-full ${isSelected ? 'bg-white/20' : 'bg-slate-100 text-slate-400'}`}>{c.pages.length} s</div>
                    </div>
-                   <div className="space-y-4 mt-4">
-                     {(del1.length > 0 || del2.length > 0) ? (
-                       <div className="flex flex-col gap-2">
-                         {del1.length > 0 && (
-                           <div className="flex flex-wrap gap-1">
-                             {del1.map(t => (<span key={t} className={`text-[8px] font-black uppercase px-2 py-1 rounded-lg ${isSelected ? 'bg-indigo-500/30 text-white' : 'bg-indigo-50 text-indigo-500 border border-indigo-100/50'}`}>{t}</span>))}
-                           </div>
-                         )}
-                         {del2.length > 0 && (
-                           <div className="flex flex-wrap gap-1">
-                             {del2.map(t => (<span key={t} className={`text-[8px] font-black uppercase px-2 py-1 rounded-lg ${isSelected ? 'bg-emerald-500/30 text-white' : 'bg-emerald-50 text-emerald-600 border border-emerald-100/50'}`}>{t}</span>))}
-                           </div>
-                         )}
+                   <div className="flex flex-col gap-1.5">
+                     {(del1.length > 0 || del2.length > 0) && (
+                       <div className="flex flex-wrap gap-1">
+                         {del1.map(t => (<span key={t} className={`text-[7px] font-black uppercase px-1.5 py-0.5 rounded-md ${isSelected ? 'bg-indigo-500/30' : 'bg-indigo-50 text-indigo-500'}`}>{t}</span>))}
+                         {del2.map(t => (<span key={t} className={`text-[7px] font-black uppercase px-1.5 py-0.5 rounded-md ${isSelected ? 'bg-emerald-500/30' : 'bg-emerald-50 text-emerald-600'}`}>{t}</span>))}
                        </div>
-                     ) : (
-                       <div className="text-[7px] font-black uppercase opacity-20 italic">Ingen oppgaver detektert</div>
                      )}
                    </div>
                  </button>
@@ -230,64 +267,86 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
          </div>
       </aside>
 
-      <main className="flex-1 overflow-y-auto custom-scrollbar p-8 h-full bg-[#F1F5F9]">
-        <div className="max-w-[1600px] mx-auto space-y-12 pb-40">
+      <main className="flex-1 overflow-y-auto custom-scrollbar p-6 h-full bg-[#F1F5F9]">
+        <div className="max-w-[1400px] mx-auto space-y-8 pb-32">
           {!currentReviewCandidate ? (
-            <div className="h-full flex flex-col items-center justify-center text-slate-300 py-40">
-              <div className="text-9xl mb-12 opacity-10">📄</div>
-              <h2 className="text-xl font-black uppercase tracking-widest text-slate-400">Velg en kandidat fra listen</h2>
-              <p className="text-[10px] font-bold uppercase tracking-[0.2em] mt-4 opacity-50">Analysert med Gemini 3 Pro</p>
+            <div className="h-full flex flex-col items-center justify-center text-slate-300 py-20">
+              <h2 className="text-lg font-black uppercase tracking-widest text-slate-400">Velg en kandidat</h2>
             </div>
           ) : (
             <>
-              <header className="flex justify-between items-end mb-16 animate-in fade-in slide-in-from-top-4 duration-500">
+              <header className="flex justify-between items-end mb-8">
                  <div>
-                   <h2 className="text-5xl font-black text-slate-800 tracking-tighter">{currentReviewCandidate.name || 'Ukjent'}</h2>
-                   <p className="text-[11px] font-black uppercase text-indigo-500 tracking-[0.3em] mt-3">Kontrollerer transkripsjon & oppgavekobling</p>
+                   <h2 className="text-3xl font-black text-slate-800 tracking-tighter">{currentReviewCandidate.name || 'Ukjent'}</h2>
+                   <p className="text-[10px] font-black uppercase text-indigo-500 tracking-[0.2em] mt-1">Kontrollerer transkripsjon</p>
                  </div>
               </header>
 
-              <div className="space-y-20">
+              <div className="space-y-12">
                 {currentReviewCandidate.pages.sort((a,b) => (a.pageNumber || 0) - (b.pageNumber || 0)).map((p, idx) => {
                   const isEditing = editingPageIds.has(p.id);
                   return (
-                    <div key={p.id} className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-start animate-in fade-in slide-in-from-bottom-6 duration-700">
-                      <div className="space-y-6">
-                         <div className="flex justify-between items-center px-4">
+                    <div key={p.id} className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+                      <div className="space-y-4">
+                         <div className="flex justify-between items-center px-2">
                            <div className="flex items-center gap-4">
-                             <div className="w-12 h-12 rounded-[20px] bg-slate-800 text-white flex items-center justify-center font-black text-sm shadow-xl shrink-0">{p.pageNumber || idx + 1}</div>
+                             <div className="flex flex-col items-center">
+                               <span className="text-[7px] font-black uppercase text-slate-400 mb-0.5 tracking-widest">Side</span>
+                               <input 
+                                 type="number"
+                                 value={p.pageNumber || idx + 1}
+                                 onChange={e => handleMetadataChange(p.id, 'pageNumber', parseInt(e.target.value) || 0)}
+                                 className="w-10 h-10 rounded-xl bg-slate-800 text-white flex items-center justify-center font-black text-xs text-center outline-none ring-indigo-500/30 focus:ring-2"
+                               />
+                             </div>
+
                              <div className="flex flex-col">
-                               <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Sidevisning</span>
-                               <span className="text-[12px] font-black text-slate-800 uppercase">{p.part || "Ukjent Del"}</span>
+                               <span className="text-[7px] font-black uppercase text-slate-400 mb-0.5 tracking-widest">Kandidat / Del</span>
+                               <div className="flex items-center gap-1.5">
+                                  <input 
+                                    type="text"
+                                    value={p.candidateId || ""}
+                                    placeholder="ID"
+                                    onChange={e => handleMetadataChange(p.id, 'candidateId', e.target.value)}
+                                    className="w-14 h-7 bg-white border border-slate-200 rounded-md text-center font-black text-[10px] outline-none"
+                                  />
+                                  <select 
+                                    value={p.part || "Del 1"}
+                                    onChange={e => handleMetadataChange(p.id, 'part', e.target.value)}
+                                    className="h-7 bg-white border border-slate-200 rounded-md px-1 font-black text-[10px] outline-none"
+                                  >
+                                    <option value="Del 1">Del 1</option>
+                                    <option value="Del 2">Del 2</option>
+                                  </select>
+                               </div>
                              </div>
                            </div>
-                           <div className="flex gap-3">
-                             <button onClick={() => rotatePage(p.id)} title="Roter 90 grader" className="w-12 h-12 flex items-center justify-center bg-white border rounded-[18px] hover:bg-slate-50 transition-all shadow-sm">↻</button>
-                             <button onClick={() => { if(confirm('Slette side?')) deletePage(currentReviewCandidate.id, p.id); }} title="Slett side" className="w-12 h-12 flex items-center justify-center bg-white border rounded-[18px] hover:bg-rose-50 text-rose-400 transition-all shadow-sm">✕</button>
+                           <div className="flex gap-2">
+                             <button onClick={() => rotatePage(p.id)} title="Roter" className="w-10 h-10 flex items-center justify-center bg-white border rounded-xl hover:bg-slate-50 transition-all">↻</button>
+                             <button onClick={() => { if(confirm('Slett?')) deletePage(currentReviewCandidate.id, p.id); }} title="Slett" className="w-10 h-10 flex items-center justify-center bg-white border rounded-xl hover:bg-rose-50 text-rose-400 transition-all">✕</button>
                            </div>
                          </div>
                          <LazyImage page={p} />
                       </div>
-                      <div className="space-y-6">
-                         <div className="flex items-center justify-between px-4 h-12">
-                            <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Transkripsjon & Oppgave-ID</span>
-                            <button onClick={() => toggleEdit(p.id)} className={`text-[10px] font-black uppercase px-6 py-3 rounded-full border transition-all ${isEditing ? 'bg-emerald-600 text-white border-emerald-600 shadow-lg' : 'bg-white text-indigo-600 border-indigo-100 hover:bg-indigo-50 shadow-sm'}`}>
-                              {isEditing ? 'Lagre Endringer ✓' : 'Rediger Tekst ✎'}
+                      <div className="space-y-4">
+                         <div className="flex items-center justify-between px-2 h-10">
+                            <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Transkripsjon</span>
+                            <button onClick={() => toggleEdit(p.id)} className={`text-[9px] font-black uppercase px-4 py-2 rounded-full border transition-all ${isEditing ? 'bg-emerald-600 text-white' : 'bg-white text-indigo-600 hover:bg-indigo-50'}`}>
+                              {isEditing ? 'Lagre ✓' : 'Rediger ✎'}
                             </button>
                          </div>
-                         <div className="bg-indigo-600 rounded-[45px] p-12 shadow-2xl min-h-[600px] flex flex-col relative overflow-hidden group/trans">
-                            <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-16 -mt-16 transition-transform group-hover/trans:scale-110"></div>
-                            <div className="flex justify-between items-center mb-10 border-b border-indigo-400/40 pb-6 relative z-10">
-                              <span className="text-[10px] font-black uppercase text-indigo-100 tracking-[0.2em]">Matematikk (LaTeX)</span>
+                         <div className="bg-indigo-600 rounded-2xl p-8 shadow-xl min-h-[400px] flex flex-col relative overflow-hidden group/trans">
+                            <div className="flex justify-between items-center mb-6 border-b border-indigo-400/40 pb-4 relative z-10">
+                              <span className="text-[9px] font-black uppercase text-indigo-100 tracking-[0.2em]">LaTeX Matematikk</span>
                               {p.identifiedTasks && p.identifiedTasks.length > 0 && (
-                                <div className="flex flex-wrap justify-end gap-1.5 max-w-[60%]">
+                                <div className="flex flex-wrap justify-end gap-1 max-w-[60%]">
                                    {p.identifiedTasks.map(t => {
                                      const cleanSub = (t.subTask || "").toUpperCase().includes('UKJENT') ? 'UKJENT' : t.subTask || "";
                                      const label = `${t.taskNumber || ''}${cleanSub}`;
                                      if (!label) return null;
                                      const isUnknown = label.toLowerCase().includes('ukjent');
                                      return (
-                                       <span key={label} className={`text-[9px] font-black px-3 py-1.5 rounded-xl uppercase shadow-sm ${isUnknown ? 'bg-rose-500 text-white' : 'bg-white/20 text-white'}`}>
+                                       <span key={label} className={`text-[8px] font-black px-2 py-1 rounded-md uppercase ${isUnknown ? 'bg-rose-500 text-white' : 'bg-white/20 text-white'}`}>
                                          {label}
                                        </span>
                                      );
@@ -304,13 +363,13 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                                       const val = e.target.value;
                                       setActiveProject(prev => prev ? ({ ...prev, candidates: prev.candidates.map(c => c.id === currentReviewCandidate.id ? { ...c, pages: c.pages.map(pg => pg.id === p.id ? { ...pg, transcription: val } : pg) } : c) }) : null);
                                     }} 
-                                    className="w-full h-full min-h-[500px] bg-indigo-700/40 text-white p-8 rounded-3xl text-[16px] font-medium outline-none resize-none custom-scrollbar border border-indigo-400/30 focus:ring-4 ring-white/10" 
+                                    className="w-full h-full min-h-[350px] bg-indigo-700/40 text-white p-4 rounded-xl text-sm font-medium outline-none resize-none custom-scrollbar" 
                                  />
                                ) : (
                                  <div className="text-white">
-                                   <LatexRenderer content={p.transcription || ""} className="text-[18px] text-white font-medium leading-[1.8]" />
+                                   <LatexRenderer content={p.transcription || ""} className="text-base text-white font-medium leading-relaxed" />
                                    {(!p.transcription || p.transcription.trim() === "") && (
-                                     <div className="py-20 text-center opacity-40 italic font-black uppercase text-[10px] tracking-widest">Ingen tekst detektert</div>
+                                     <div className="py-10 text-center opacity-40 italic font-black uppercase text-[9px] tracking-widest">Tom side</div>
                                    )}
                                  </div>
                                )}

@@ -106,24 +106,24 @@ export const transcribeAndAnalyzeImage = async (page: Page): Promise<any[]> => {
       contents: {
         parts: [
           { inlineData: { mimeType: page.mimeType, data: page.base64Data } }, 
-          { text: "STRENGE REGLER FOR BILDEANALYSE (v4.5.2):\n1. INGEN BESKJÆRING: Du har ikke lov til å be om cropping eller returnere koordinater. Vi viser alltid 100% av arealet.\n2. DETERMINISTISK A3-SPLIT: Hvis bildet er i LANDSKAP (bredere enn høyt), SKAL du anta at det er et A3-oppslag og returnere TO JSON-objekter (ett for LEFT og ett for RIGHT). Bruk 'A3_SPREAD'.\n3. IDENTIFIKASJON: Prioriter boksene 'Kandidatnr' og 'sidenummer' øverst. De skal styre metadata.\n4. MATEMATIKK: Bruk vertikal oppstilling i aligned-miljøer med dobbel bakslash \\\\." }
+          { text: "STRENGE REGLER (v4.6.4):\n1. PORTRETT-STANDARD: Finn nødvendig rotasjon (0, 90, 180, 270) for å få teksten 'opp' og kandidattabellen øverst.\n2. A3 SPREAD: Hvis bildet inneholder TO sider ved siden av hverandre, returner TO objekter (LEFT og RIGHT). Dette er KRITISK for landskapsbilder som er A3.\n3. ID: Hent tall fra 'Kandidatnr' og 'sidenummer' boksene.\n4. MATEMATIKK: Bruk vertikal aligned-miljøer for alle utregninger." }
         ],
       },
       config: { 
-        systemInstruction: "Du er en OCR-motor for eksamensark. Din eneste oppgave er å identifisere sidetype og transkribere tekst. Hvis bildet er landskap, skal du behandle det som to sider (LEFT/RIGHT). Bruk ren JSON.",
+        systemInstruction: "Du er en OCR-motor spesialisert på A4/A3 eksamensark. Din viktigste jobb er å identifisere om bildet er en enkeltside eller et oppslag med to sider (A3_SPREAD), og sørge for at alt roteres til portrett-orientering.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.ARRAY,
           items: {
             type: Type.OBJECT,
             properties: {
-              layoutType: { type: Type.STRING, description: "Enten 'A3_SPREAD' (for landskap/to sider) eller 'A4_SINGLE'." },
-              sideInSpread: { type: Type.STRING, description: "'LEFT' eller 'RIGHT' hvis A3_SPREAD." },
+              layoutType: { type: Type.STRING, description: "A3_SPREAD hvis to sider, A4_SINGLE hvis én side." },
+              sideInSpread: { type: Type.STRING, description: "LEFT eller RIGHT." },
               candidateId: { type: Type.STRING },
               part: { type: Type.STRING },
               pageNumber: { type: Type.INTEGER },
               fullText: { type: Type.STRING },
-              rotation: { type: Type.INTEGER },
+              rotation: { type: Type.INTEGER, description: "Nødvendig rotasjon for å få bildet oppreist." },
               identifiedTasks: { 
                 type: Type.ARRAY, 
                 items: { 
@@ -157,20 +157,11 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[], studen
       contents: { 
         parts: [
           ...parts, 
-          { text: `Generer rettemanual basert på vedlagte oppgaveark. 
-          
-          VIKTIGE REGLER FOR VISUELL STRUKTUR (v4.5.2):
-          1. MATEMATIKK: Alle utregninger over flere trinn SKAL bruke display-math: \\[ \\begin{aligned} ... \\end{aligned} \\]. 
-             Bruk dobbel bakslash \\\\ for å tvinge linjeskift mellom hvert trinn.
-          2. RETTEVEILEDNING: Bruk punktlister (*) eller tydelige linjeskift. Ikke skriv tekstvegger.
-          3. POENG: Maks 2.0 poeng per deloppgave.
-          
-          ELEV-DATA TIL ANALYSE:
-          ${studentSamples || 'Ingen elevdata tilgjengelig.'}` }
+          { text: `Generer rettemanual basert på vedlagte oppgaveark. BRUK VERTIKAL MATEMATIKK med aligned-miljøer.` }
         ] 
       },
       config: { 
-        systemInstruction: "Ekspert på matematikkvurdering. Du lager pedagogiske og strengt vertikalt oppstilte løsningsforslag. Bruk LaTeX aligned-miljøer. Returner ren JSON.",
+        systemInstruction: "Ekspert på matematikkvurdering. Bruk LaTeX aligned-miljøer for alle utregninger. Returner ren JSON.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -213,8 +204,7 @@ export const evaluateCandidate = async (candidate: Candidate, rubric: Rubric): P
 
     const response = await ai.models.generateContent({
       model: 'gemini-3-pro-preview',
-      contents: `Vurder besvarelsen mot rettemanualen. Svar KUN JSON. 
-      BRUK VERTIKALE UTREGNINGER i feedback ved hjelp av \\[ \\begin{aligned} ... \\end{aligned} \\].`,
+      contents: `Vurder besvarelsen mot rettemanualen. BRUK VERTIKALE UTREGNINGER.`,
       config: { 
         systemInstruction: "Sensor. Svar KUN JSON. Bruk LaTeX med vertikale aligned-miljøer.",
         thinkingConfig: { thinkingBudget: 16000 }, 
@@ -254,7 +244,7 @@ export const reconcileProjectData = async (project: Project): Promise<any> => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const response = await ai.models.generateContent({
       model: 'gemini-3-pro-preview',
-      contents: { parts: [{ text: `Analyser kandidater og sider. Finn ut om 'Ukjent' sider egentlig tilhører en kandidat. Prosjektdata: ${JSON.stringify(project.candidates.map(c => ({ id: c.id, pages: c.pages.map(p => ({ nr: p.pageNumber, tasks: p.identifiedTasks })) })))}` }] },
+      contents: { parts: [{ text: `Analyser kandidater og sider. Slå sammen Kandidat 101, 102 etc hvis de logisk hører sammen.` }] },
       config: { 
         systemInstruction: "Ekspert på data-rehabilitering. Slå sammen kandidater som logisk hører sammen.",
         responseMimeType: "application/json" 

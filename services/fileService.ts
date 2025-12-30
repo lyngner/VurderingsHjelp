@@ -44,35 +44,45 @@ const createThumbnail = async (base64: string): Promise<string> => {
 };
 
 /**
- * Splitter et bilde i to (Venstre/Høyre eller Topp/Bunn)
- * Bruker ren GEOMETRISK 50/50-deling for å garantere at ingen marger beskjæres.
+ * Splitter et bilde i to (Venstre/Høyre)
+ * VIKTIG v4.6.2: Roterer bildet FØR splitting for å sikre korrekt midtakse.
  */
-export const splitA3Spread = async (base64: string, side: 'LEFT' | 'RIGHT'): Promise<{ preview: string }> => {
+export const splitA3Spread = async (base64: string, side: 'LEFT' | 'RIGHT', rotation: number = 0): Promise<{ preview: string }> => {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return reject("Canvas context error");
+      // 1. Lag en midlertidig canvas for å rotere hele bildet til "oppreist" posisjon
+      const rotateCanvas = document.createElement('canvas');
+      const rCtx = rotateCanvas.getContext('2d');
+      if (!rCtx) return reject("Canvas context error");
 
-      const isLandscape = img.width > img.height;
+      const rads = (rotation * Math.PI) / 180;
+      const is90or270 = rotation % 180 !== 0;
       
-      // Vi bruker nøyaktig halvparten av arealet for å unngå "smart" cropping som feiler.
-      if (isLandscape) {
-        canvas.width = img.width / 2;
-        canvas.height = img.height;
-        const offsetX = side === 'LEFT' ? 0 : img.width / 2;
-        ctx.drawImage(img, offsetX, 0, img.width / 2, img.height, 0, 0, canvas.width, canvas.height);
-      } else {
-        // Noen ganger skannes A3-oppslag som portrett (to sider over hverandre)
-        canvas.width = img.width;
-        canvas.height = img.height / 2;
-        const offsetY = side === 'LEFT' ? 0 : img.height / 2;
-        ctx.drawImage(img, 0, offsetY, img.width, img.height / 2, 0, 0, canvas.width, canvas.height);
-      }
+      rotateCanvas.width = is90or270 ? img.height : img.width;
+      rotateCanvas.height = is90or270 ? img.width : img.height;
 
-      const splitBase64 = canvas.toDataURL('image/jpeg', 0.9);
-      resolve({ preview: splitBase64 });
+      rCtx.translate(rotateCanvas.width / 2, rotateCanvas.height / 2);
+      rCtx.rotate(rads);
+      rCtx.drawImage(img, -img.width / 2, -img.height / 2);
+
+      // 2. Lag selve splitten fra den ferdig roterte canvasen
+      const splitCanvas = document.createElement('canvas');
+      const sCtx = splitCanvas.getContext('2d');
+      if (!sCtx) return reject("Split canvas error");
+
+      splitCanvas.width = rotateCanvas.width / 2;
+      splitCanvas.height = rotateCanvas.height;
+
+      const offsetX = side === 'LEFT' ? 0 : rotateCanvas.width / 2;
+      
+      sCtx.drawImage(
+        rotateCanvas, 
+        offsetX, 0, rotateCanvas.width / 2, rotateCanvas.height, 
+        0, 0, splitCanvas.width, splitCanvas.height
+      );
+
+      resolve({ preview: splitCanvas.toDataURL('image/jpeg', 0.9) });
     };
     img.onerror = reject;
     img.src = base64;

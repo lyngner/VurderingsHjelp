@@ -1,29 +1,21 @@
 
-# Vurderingshjelp - Systemdokumentasjon & Master-manual
+# Vurderingshjelp - Systemdokumentasjon
 
-Vurderingshjelp er et profesjonelt verktøy designet for lærere for å digitalisere og effektivisere rettingsarbeidet. Systemet bruker avansert KI (Gemini 3 Pro) for å tolke håndskrevne besvarelser, men er bygget på prinsippet om **læreren som kontrollør**.
+Profesjonelt verktøy for digitalisering og vurdering av elevbesvarelser.
 
----
+## 🚀 Hovedprinsipper
+1. **Læreren som kontrollør**: KI foreslår, læreren bekrefter.
+2. **Symmetrisk arkitektur**: Rettemanual og elevsvar følger samme 3-nivå struktur (Del -> Oppgave -> Deloppgave).
+3. **A4-Portrett Standard**: Systemet transformerer automatisk alle skanneformater (A3, rotert A4) til standard portrett-visning for optimal lesbarhet.
 
-## 🏛️ Teknisk Arkitektur (v4.0.0)
+## 🎨 Designvalg (v4.6.4)
+* **Kompakt layout**: Minimal bruk av whitespace for å maksimere mengden synlig matematikk.
+* **Hierarkisk navigasjon**: Isolerte sidebarer for lynrask veksling mellom elever og oppgaver.
+* **LaTeX-først**: All matematikk rendres med MathJax for krystallklar visning av utregninger.
 
-### 1. Symmetrisk Hierarki
-*   **Hva**: Hele systemet følger et 3-nivå hierarki: **Del -> Oppgave -> Deloppgave**.
-*   **Hvorfor**: Sikrer at elevens svar kobles 100% nøyaktig mot fasiten i rettemanualen.
+## 🛠 Teknisk Stack
+* **KI**: Gemini 3 Pro (OCR, Analyse, Vurdering).
+* **Database**: IndexedDB (Normalisert lagring av kandidater og bilder).
+* **Bildebehandling**: Canvas API for fysisk rotasjon og splitting av A3-oppslag.
 
-### 2. Normalisert Database (v4-skjema)
-*   **Hva**: Kandidater lagres i en egen database-store separat fra prosjekt-metadata.
-*   **Ytelse**: Tillater Delta-oppdateringer og lynrask håndtering av svært store prøvesett.
-
----
-
-## 📅 Versjonshistorikk (Siste)
-
-### v4.0.0 - Produksjonsklar Arkitektur
-*   **Status**: Offisiell release av normalisert og hierarkisk arkitektur.
-
-### v3.38.0 - Symmetrisk Hierarki
-*   **Hva**: Siste oppdatering før spranget til v4. Utvidet hierarkiet til elevdata.
-
-### v3.36.0 - Database Normalisering
-*   **Hva**: Implementerte IndexedDB v4 med normalisert lagring.
+For detaljerte designvalg, se `DESIGN_CHOICES.md`.

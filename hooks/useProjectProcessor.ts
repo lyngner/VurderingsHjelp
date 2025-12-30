@@ -16,7 +16,6 @@ const sanitizeTaskPart = (val: string | undefined): string => {
   const v = val.trim().toUpperCase();
   const noise = ["NULL", "UNKNOWN", "UKJENT", "NONE", "UNDEFINED", "HELE", "ALL", "TOTAL", "EMPTY"];
   if (noise.some(n => v === n || v.includes(n))) return "UKJENT";
-  // Fjerner tegnsetting på slutten
   return val.trim().replace(/[\.\)\:\,]+$/, "");
 };
 
@@ -126,10 +125,12 @@ export const useProjectProcessor = (
       }
       const candidateIdStr = sanitizeId(res.candidateId);
       
+      // VIKTIG v4.6.2: Vi roterer bildet FØR vi splitter hvis det er A3_SPREAD
       if (shouldSplit && res.layoutType === 'A3_SPREAD' && res.sideInSpread && originalMedia) {
         try {
           const side = res.sideInSpread as 'LEFT' | 'RIGHT';
-          const split = await splitA3Spread(originalMedia, side);
+          // Send med detected rotation slik at split skjer på riktig akse
+          const split = await splitA3Spread(originalMedia, side, res.rotation || 0);
           await saveMedia(newId, split.preview);
           processedPages.push({ 
             ...originalPage, 
@@ -140,7 +141,7 @@ export const useProjectProcessor = (
             pageNumber: res.pageNumber, 
             transcription: res.fullText, 
             identifiedTasks: tasks, 
-            rotation: res.rotation || 0,
+            rotation: 0, // Siden er nå ferdig rotert i bildet
             layoutType: 'A3_SPREAD',
             status: 'completed' 
           });
