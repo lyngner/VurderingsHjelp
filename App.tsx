@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { Project, Candidate } from './types';
 import { saveProject, getAllProjects, deleteProject as deleteProjectFromStorage, loadFullProject } from './services/storageService';
@@ -31,9 +30,11 @@ const App: React.FC = () => {
     processingCount,
     batchTotal,
     batchCompleted,
+    currentAction,
     rubricStatus,
     handleTaskFileSelect,
     handleCandidateFileSelect,
+    handleDriveImport,
     handleEvaluateAll,
     handleGenerateRubric,
     handleRetryPage,
@@ -136,6 +137,11 @@ const App: React.FC = () => {
     });
   };
 
+  const handleNavigateToCandidate = (id: string) => {
+    setSelectedReviewCandidateId(id);
+    setCurrentStep('review');
+  };
+
   const filteredCandidates = useMemo(() => {
     if (!activeProject?.candidates) return [];
     let list = activeProject.candidates.filter(c => !reviewFilter || c.name.toLowerCase().includes(reviewFilter.toLowerCase()));
@@ -176,7 +182,21 @@ const App: React.FC = () => {
         {activeProject && (
           <>
             {currentStep === 'setup' && (
-              <SetupStep activeProject={activeProject} isProcessing={processingCount > 0} batchTotal={batchTotal} batchCompleted={batchCompleted} rubricStatus={rubricStatus} handleTaskFileSelect={handleTaskFileSelect} handleGenerateRubric={() => handleGenerateRubric()} handleCandidateFileSelect={handleCandidateFileSelect} handleRetryPage={handleRetryPage} updateActiveProject={updateActiveProject} />
+              <SetupStep 
+                activeProject={activeProject} 
+                isProcessing={processingCount > 0} 
+                batchTotal={batchTotal} 
+                batchCompleted={batchCompleted} 
+                currentAction={currentAction}
+                rubricStatus={rubricStatus} 
+                handleTaskFileSelect={handleTaskFileSelect} 
+                handleGenerateRubric={() => handleGenerateRubric()} 
+                handleCandidateFileSelect={handleCandidateFileSelect} 
+                handleDriveImport={handleDriveImport}
+                handleRetryPage={handleRetryPage} 
+                updateActiveProject={updateActiveProject} 
+                onNavigateToCandidate={handleNavigateToCandidate} 
+              />
             )}
             {currentStep === 'review' && (
               <ReviewStep activeProject={activeProject} selectedReviewCandidateId={selectedReviewCandidateId} setSelectedReviewCandidateId={(id) => setSelectedReviewCandidateId(id)} reviewFilter={reviewFilter} setReviewFilter={setReviewFilter} filteredCandidates={filteredCandidates} currentReviewCandidate={activeProject.candidates.find(c => c.id === selectedReviewCandidateId) || null} rotatePage={handleRotatePage} deletePage={handleDeletePage} updatePageNumber={handleUpdatePageNumber} setActiveProject={setActiveProject} handleSmartCleanup={handleSmartCleanup} isCleaning={rubricStatus.loading} />

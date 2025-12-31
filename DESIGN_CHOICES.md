@@ -1,20 +1,22 @@
 
-# Designvalg & Brukeropplevelse (v4.6.x)
+# Designvalg & Brukeropplevelse (v4.7.x)
 
 Dette dokumentet beskriver de bevisste designvalgene som er tatt for å gjøre Vurderingshjelp til et effektivt lærerverktøy.
 
-## 1. Kompakt Innholdsfokus
-For å minimere skrolling har vi valgt en tettere layout:
-* **Padding**: Redusert fra 48px til 24px i hovedcontainere.
-* **Typografi**: Bruker 'Inter' med ekstra tung vekt (black/900) for titler for å skape tydelig hierarki selv med mindre tekststørrelser.
-* **Hjørner**: Radius er satt til 16-24px. Dette sparer plass i hjørnene sammenlignet med de tidligere 50px-radiene, noe som er kritisk i tabeller og rutenett.
+## 1. Rubrikk-Låst Pipeline (v4.7.0)
+For å sikre 100% nøyaktighet i oppgavedeteksjon, er arbeidsflyten nå lineær og streng:
+* **Fasit Først**: Det er ikke lenger mulig å laste opp elevbesvarelser før rettemanualen er generert. Dette er fordi KI-en trenger "kartet" (oppgavestrukturen) for å vite hva den skal lete etter i elevens tekst.
+* **Validerings-garanti**: Ved å ha fasiten klar, kan systemet umiddelbart forkaste støy og "fiktive" oppgaver som ofte oppstår i komplekse Word-dokumenter.
 
-## 2. Den Strikte Portrett-pipelinen (A4-standard)
-Lærere er vant til å rette A4 på høykant. Systemet tvinger alt innhold inn i denne formen:
-* **Automatisk Splitting**: A3-oppslag (to sider i ett bilde) blir alltid fysisk delt i to. Dette fjerner kognitiv belastning ved at man slipper å se to sider samtidig.
-* **Pre-Rotation**: Bilder roteres i "mørkerommet" (Canvas API) før de vises. Dette sikrer at transkripsjon og bilde alltid er synkronisert i orientering.
+## 2. Digital Presisjon (Word/PDF)
+* **Word-lister**: Systemet er spesialisert på å gjenkjenne lister i Word-format, inkludert romertall (i, ii, iii), bokstavlister (a, b, c) og hierarkiske punktlister.
+* **ID-Aggresjon**: Vi søker etter kandidatnummer i alle tekstlag (inkludert det som Mammoth trekker ut fra topp/bunntekst) før vi kategoriserer som "Ukjent".
 
-## 3. Fargepsykologi i Rettemanualen
-* **Indigo (Blå)**: Brukes for Del 1 (uten hjelpemidler). Signaliserer fokus og struktur.
-* **Emerald (Grønn)**: Brukes for Del 2 (med hjelpemidler). Signaliserer kreativitet og problemløsning.
-* **Rose (Rød)**: Brukes for feil, mangler og "Ukjente" elementer som krever lærerens oppmerksomhet.
+## 3. Kompakt Innholdsfokus
+* **Padding**: Redusert padding i alle hovedcontainere.
+* **Typografi**: Bruker 'Inter' med black/900 vekt for titler.
+* **Hjørner**: Radius satt til 16-24px for optimal plassutnyttelse.
+
+## 4. Den Strikte Portrett-pipelinen
+* **A3-Splitting**: Alle landskapsbilder splittes fysisk i to.
+* **Pre-Rotation**: Bilder roteres fysisk i Canvas før lagring for å sikre at tekst og bilde alltid er synkronisert.

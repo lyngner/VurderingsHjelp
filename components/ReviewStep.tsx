@@ -1,13 +1,137 @@
-
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Project, Candidate, Page } from '../types';
 import { LatexRenderer, Spinner } from './SharedUI';
 import { getMedia, saveCandidate } from '../services/storageService';
 
+// Hjelpefunksjon for å konvertere base64 til Blob
+const base64ToBlob = (base64: string): Blob => {
+  const parts = base64.split(';base64,');
+  const contentType = parts[0].split(':')[1];
+  const raw = window.atob(parts[1]);
+  const rawLength = raw.length;
+  const uInt8Array = new Uint8Array(rawLength);
+  for (let i = 0; i < rawLength; ++i) {
+    uInt8Array[i] = raw.charCodeAt(i);
+  }
+  return new Blob([uInt8Array], { type: contentType });
+};
+
+const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [isVisible, setIsVisible] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [error, setError] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Intersection Observer for å kun laste bilder når de er i nærheten av viewport
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setIsVisible(true);
+          // Vi slutter ikke å observere, slik at vi kan tømme minnet når bildet skrolles ut
+        } else {
+          setIsVisible(false);
+        }
+      },
+      { rootMargin: '400px' } // Last inn litt før det kommer på skjermen
+    );
+
+    if (containerRef.current) {
+      observer.observe(containerRef.current);
+    }
+
+    return () => observer.disconnect();
+  }, []);
+
+  // Håndtering av minne (Blob URL)
+  useEffect(() => {
+    let currentUrl: string | null = null;
+
+    const loadFullRes = async () => {
+      if (!isVisible) {
+        if (blobUrl) {
+          URL.revokeObjectURL(blobUrl);
+          setBlobUrl(null);
+          setIsLoaded(false);
+        }
+        return;
+      }
+
+      if (blobUrl) return; // Allerede lastet
+
+      try {
+        const base64 = await getMedia(page.id);
+        if (base64) {
+          const blob = base64ToBlob(base64);
+          currentUrl = URL.createObjectURL(blob);
+          setBlobUrl(currentUrl);
+        }
+      } catch (e) {
+        console.error("Feil ved lasting av bilde", e);
+        setError(true);
+      }
+    };
+
+    loadFullRes();
+
+    return () => {
+      if (currentUrl) {
+        URL.revokeObjectURL(currentUrl);
+      }
+    };
+  }, [isVisible, page.id]);
+
+  return (
+    <div 
+      ref={containerRef}
+      className="relative w-full overflow-hidden rounded-xl border border-slate-200 shadow-md group bg-white min-h-[300px]"
+    >
+      {!blobUrl && !error && (
+        <div className="absolute inset-0 flex items-center justify-center bg-slate-50 flex-col gap-3">
+          <Spinner size="w-6 h-6" color="text-slate-300" />
+          <p className="text-[8px] font-black uppercase text-slate-400 tracking-widest">
+            {isVisible ? 'Henter fra arkiv...' : 'Venter på skroll...'}
+          </p>
+          {page.imagePreview && !isVisible && (
+            <img 
+              src={page.imagePreview} 
+              className="absolute inset-0 w-full h-full object-contain opacity-20 blur-sm" 
+              alt="Preview"
+            />
+          )}
+        </div>
+      )}
+
+      {blobUrl && (
+        <div className="relative">
+          <div className="absolute top-2 right-2 z-10 px-2 py-0.5 rounded bg-emerald-500 text-white text-[7px] font-black uppercase tracking-widest opacity-80">
+            HD ✓
+          </div>
+          <img 
+            src={blobUrl} 
+            onLoad={() => setIsLoaded(true)}
+            style={{ transform: `rotate(${page.rotation || 0}deg)` }} 
+            className={`w-full transition-all duration-500 object-contain ${isLoaded ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`} 
+            alt={page.fileName}
+          />
+        </div>
+      )}
+      
+      {error && (
+        <div className="absolute inset-0 flex items-center justify-center bg-rose-50/90 text-rose-500 p-4 text-center">
+          <p className="text-[8px] font-black uppercase tracking-widest">Kunne ikke laste bildet.</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Added ReviewStepProps interface to fix compilation error
 interface ReviewStepProps {
   activeProject: Project;
   selectedReviewCandidateId: string | null;
-  setSelectedReviewCandidateId: (id: string) => void;
+  setSelectedReviewCandidateId: (id: string | null) => void;
   reviewFilter: string;
   setReviewFilter: (filter: string) => void;
   filteredCandidates: Candidate[];
@@ -16,59 +140,9 @@ interface ReviewStepProps {
   deletePage: (candidateId: string, pageId: string) => void;
   updatePageNumber: (candidateId: string, pageId: string, newNum: number) => void;
   setActiveProject: React.Dispatch<React.SetStateAction<Project | null>>;
-  handleSmartCleanup?: () => void;
-  isCleaning?: boolean;
+  handleSmartCleanup?: () => Promise<void>;
+  isCleaning: boolean;
 }
-
-const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
-  const [src, setSrc] = useState<string | null>(page.imagePreview || null);
-  const [isFullRes, setIsFullRes] = useState(false);
-  const [error, setError] = useState(false);
-
-  useEffect(() => {
-    let isMounted = true;
-    setIsFullRes(false);
-    setError(false);
-
-    const loadFullRes = async () => {
-      try {
-        const fullRes = await getMedia(page.id);
-        if (isMounted && fullRes) {
-          setSrc(fullRes);
-          setIsFullRes(true);
-        }
-      } catch (e) {
-        console.error("Feil ved lasting av høyoppløselig bilde", e);
-        if (isMounted) setError(true);
-      }
-    };
-
-    loadFullRes();
-    return () => { isMounted = false; };
-  }, [page.id]);
-
-  if (!src && !error) return <div className="aspect-[1/1.41] w-full flex items-center justify-center bg-slate-100 rounded-xl animate-pulse text-slate-400 font-black uppercase text-[10px]">Laster...</div>;
-
-  return (
-    <div className="relative w-full overflow-hidden rounded-xl border border-slate-200 shadow-md group bg-white">
-      <div className={`absolute top-2 right-2 z-10 px-2 py-0.5 rounded text-[7px] font-black uppercase tracking-widest transition-all duration-500 ${isFullRes ? 'bg-emerald-500 text-white opacity-80' : 'bg-slate-200 text-slate-500 opacity-50'}`}>
-        {isFullRes ? 'HD ✓' : 'Laster HD...'}
-      </div>
-
-      <img 
-        src={src || ""} 
-        style={{ transform: `rotate(${page.rotation || 0}deg)` }} 
-        className={`w-full transition-all duration-300 object-contain ${isFullRes ? 'opacity-100 scale-100' : 'opacity-80 scale-[0.99] filter contrast-125'}`} 
-      />
-      
-      {error && (
-        <div className="absolute inset-0 flex items-center justify-center bg-rose-50/90 text-rose-500 p-4 text-center">
-          <p className="text-[8px] font-black uppercase tracking-widest">Feil ved lasting.</p>
-        </div>
-      )}
-    </div>
-  );
-};
 
 export const ReviewStep: React.FC<ReviewStepProps> = ({
   activeProject,

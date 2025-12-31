@@ -1,4 +1,3 @@
-
 import { Page } from '../types';
 import mammoth from 'mammoth';
 import { saveMedia } from './storageService';
@@ -21,115 +20,83 @@ const createThumbnail = async (base64: string): Promise<string> => {
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement('canvas');
-      const maxDim = 1200;
-      let w = img.width;
-      let h = img.height;
-      if (w > h) {
-        if (w > maxDim) { h *= maxDim / w; w = maxDim; }
-      } else {
-        if (h > maxDim) { w *= maxDim / h; h = maxDim; }
-      }
-      canvas.width = w;
-      canvas.height = h;
+      const maxDim = 800;
+      let w = img.width, h = img.height;
+      if (w > h) { if (w > maxDim) { h *= maxDim / w; w = maxDim; } }
+      else { if (h > maxDim) { w *= maxDim / h; h = maxDim; } }
+      canvas.width = w; canvas.height = h;
       const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(img, 0, 0, w, h);
-      }
-      resolve(canvas.toDataURL('image/jpeg', 0.85));
+      if (ctx) ctx.drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/jpeg', 0.7));
     };
     img.src = base64;
   });
 };
 
-/**
- * Splitter et bilde i to (Venstre/Høyre)
- * VIKTIG v4.6.2: Roterer bildet FØR splitting for å sikre korrekt midtakse.
- */
-export const splitA3Spread = async (base64: string, side: 'LEFT' | 'RIGHT', rotation: number = 0): Promise<{ preview: string }> => {
+export const processImageRotation = async (base64: string, rotation: number): Promise<string> => {
+  if (rotation === 0) return base64;
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
-      // 1. Lag en midlertidig canvas for å rotere hele bildet til "oppreist" posisjon
-      const rotateCanvas = document.createElement('canvas');
-      const rCtx = rotateCanvas.getContext('2d');
-      if (!rCtx) return reject("Canvas context error");
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return reject("Canvas error");
 
-      const rads = (rotation * Math.PI) / 180;
       const is90or270 = rotation % 180 !== 0;
-      
-      rotateCanvas.width = is90or270 ? img.height : img.width;
-      rotateCanvas.height = is90or270 ? img.width : img.height;
+      canvas.width = is90or270 ? img.height : img.width;
+      canvas.height = is90or270 ? img.width : img.height;
 
-      rCtx.translate(rotateCanvas.width / 2, rotateCanvas.height / 2);
-      rCtx.rotate(rads);
-      rCtx.drawImage(img, -img.width / 2, -img.height / 2);
-
-      // 2. Lag selve splitten fra den ferdig roterte canvasen
-      const splitCanvas = document.createElement('canvas');
-      const sCtx = splitCanvas.getContext('2d');
-      if (!sCtx) return reject("Split canvas error");
-
-      splitCanvas.width = rotateCanvas.width / 2;
-      splitCanvas.height = rotateCanvas.height;
-
-      const offsetX = side === 'LEFT' ? 0 : rotateCanvas.width / 2;
-      
-      sCtx.drawImage(
-        rotateCanvas, 
-        offsetX, 0, rotateCanvas.width / 2, rotateCanvas.height, 
-        0, 0, splitCanvas.width, splitCanvas.height
-      );
-
-      resolve({ preview: splitCanvas.toDataURL('image/jpeg', 0.9) });
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate((rotation * Math.PI) / 180);
+      ctx.drawImage(img, -img.width / 2, -img.height / 2);
+      resolve(canvas.toDataURL('image/jpeg', 0.9));
     };
     img.onerror = reject;
     img.src = base64;
   });
 };
 
-const createTextPlaceholderImage = (text: string, fileName: string): string => {
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return "";
-  canvas.width = 800;
-  canvas.height = 1131;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = '#f8fafc';
-  ctx.fillRect(0, 0, canvas.width, 100);
-  ctx.strokeStyle = '#e2e8f0';
-  ctx.strokeRect(0, 0, canvas.width, 100);
-  ctx.fillStyle = '#64748b';
-  ctx.font = 'bold 14px Inter, sans-serif';
-  ctx.fillText(`DIGITAL BESVARELSE: ${fileName.toUpperCase()}`, 40, 55);
-  ctx.fillStyle = '#1e293b';
-  ctx.font = '16px Inter, sans-serif';
-  const lines = text.split('\n').slice(0, 40);
-  let y = 160;
-  lines.forEach(line => {
-    if (y < canvas.height - 40) {
-      const cleanLine = line.length > 80 ? line.substring(0, 80) + "..." : line;
-      ctx.fillText(cleanLine, 60, y);
-      y += 24;
-    }
+export const splitA3Spread = async (base64: string, side: 'LEFT' | 'RIGHT', rotation: number = 0): Promise<{ preview: string }> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const rotateCanvas = document.createElement('canvas');
+      const rCtx = rotateCanvas.getContext('2d');
+      if (!rCtx) return reject("Canvas error");
+
+      const is90or270 = rotation % 180 !== 0;
+      rotateCanvas.width = is90or270 ? img.height : img.width;
+      rotateCanvas.height = is90or270 ? img.width : img.height;
+
+      rCtx.translate(rotateCanvas.width / 2, rotateCanvas.height / 2);
+      rCtx.rotate((rotation * Math.PI) / 180);
+      rCtx.drawImage(img, -img.width / 2, -img.height / 2);
+
+      const splitCanvas = document.createElement('canvas');
+      const sCtx = splitCanvas.getContext('2d');
+      if (!sCtx) return reject("Split error");
+
+      splitCanvas.width = rotateCanvas.width / 2;
+      splitCanvas.height = rotateCanvas.height;
+      const offsetX = side === 'LEFT' ? 0 : rotateCanvas.width / 2;
+      
+      sCtx.drawImage(rotateCanvas, offsetX, 0, rotateCanvas.width / 2, rotateCanvas.height, 0, 0, splitCanvas.width, splitCanvas.height);
+      resolve({ preview: splitCanvas.toDataURL('image/jpeg', 0.9) });
+    };
+    img.src = base64;
   });
-  return canvas.toDataURL('image/jpeg', 0.8);
 };
 
 export const processFileToImages = async (file: File): Promise<Page[]> => {
   return new Promise(async (resolve) => {
-    if (file.name.endsWith('.docx') || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+    if (file.name.endsWith('.docx')) {
       try {
         const buffer = await file.arrayBuffer();
         const result = await mammoth.extractRawText({ arrayBuffer: buffer });
         const text = result.value;
-        const visualPreview = createTextPlaceholderImage(text, file.name);
         const id = Math.random().toString(36).substring(7);
-        await saveMedia(id, visualPreview);
-        const thumb = await createThumbnail(visualPreview);
-        resolve([{ id, fileName: file.name, imagePreview: thumb, contentHash: generateHash(text), mimeType: 'text/plain', status: 'pending', transcription: text, rotation: 0 }]);
+        const hash = generateHash(text);
+        resolve([{ id, fileName: file.name, contentHash: hash, mimeType: 'text/plain', status: 'pending', transcription: text, candidateId: "Ukjent", rotation: 0 }]);
       } catch (e) { resolve([]); }
       return;
     }
@@ -143,11 +110,8 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
           const page = await pdf.getPage(i);
           const viewport = page.getViewport({ scale: 2.5 });
           const canvas = document.createElement('canvas');
-          const context = canvas.getContext('2d');
-          if (!context) continue;
-          canvas.height = viewport.height; 
-          canvas.width = viewport.width;
-          await page.render({ canvasContext: context, viewport }).promise;
+          canvas.height = viewport.height; canvas.width = viewport.width;
+          await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise;
           const b64 = canvas.toDataURL('image/jpeg', 0.9);
           const id = Math.random().toString(36).substring(7);
           await saveMedia(id, b64);
@@ -165,10 +129,8 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
         const img = new Image();
         img.onload = async () => {
           const canvas = document.createElement('canvas');
-          const ctx = canvas.getContext('2d');
-          if (!ctx) { resolve([]); return; }
           canvas.width = img.width; canvas.height = img.height;
-          ctx.drawImage(img, 0, 0);
+          canvas.getContext('2d')!.drawImage(img, 0, 0);
           const b64 = canvas.toDataURL('image/jpeg', 0.9);
           const id = Math.random().toString(36).substring(7);
           await saveMedia(id, b64);
@@ -178,8 +140,6 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
         img.src = e.target?.result as string;
       };
       reader.readAsDataURL(file);
-      return;
     }
-    resolve([]);
   });
 };
