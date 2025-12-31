@@ -1,8 +1,8 @@
+
 import React, { useState, useEffect } from 'react';
 import { Project, Page, Candidate, IdentifiedTask } from '../types';
 import { processFileToImages, splitA3Spread, processImageRotation } from '../services/fileService';
 import { getMedia, saveMedia, saveCandidate } from '../services/storageService';
-import { fetchImagesFromDriveFolder, downloadDriveFile } from '../services/driveService';
 import { 
   transcribeAndAnalyzeImage, 
   analyzeTextContent, 
@@ -10,6 +10,8 @@ import {
   evaluateCandidate,
   reconcileProjectData
 } from '../services/geminiService';
+// Added missing imports for Drive integration
+import { fetchImagesFromDriveFolder, downloadDriveFile } from '../services/driveService';
 
 const sanitizeTaskPart = (val: string | undefined): string => {
   if (!val) return "";
@@ -192,7 +194,7 @@ export const useProjectProcessor = (
     const updated = { ...activeProject, taskFiles: [...activeProject.taskFiles, ...allPages] };
     setActiveProject(updated);
     await handleGenerateRubric(updated);
-    setProcessingCount(0);
+    // Vi nullstiller ikke batch her umiddelbart, det skjer i generateRubric
   };
 
   const handleCandidateFileSelect = async (files: FileList) => {
@@ -219,51 +221,51 @@ export const useProjectProcessor = (
 
   const handleDriveImport = async (folderId: string) => {
     if (!activeProject) return;
-    setCurrentAction("Henter fil-liste fra Drive...");
-    setRubricStatus({ loading: true, text: "Kobler til Google Drive..." });
-    
+    setRubricStatus({ loading: true, text: 'Henter filer fra Google Drive...' });
     try {
-      const files = await fetchImagesFromDriveFolder(folderId);
-      if (files.length === 0) throw new Error("Ingen relevante filer funnet i mappen.");
-      
-      setBatchTotal(files.length);
-      setBatchCompleted(0);
-      let allNewPages: Page[] = [];
+      const driveFiles = await fetchImagesFromDriveFolder(folderId);
+      if (driveFiles.length === 0) {
+        alert("Fant ingen gyldige filer i mappen.");
+        return;
+      }
 
-      for (const file of files) {
+      setBatchTotal(prev => prev + driveFiles.length);
+      setBatchCompleted(0);
+      setProcessingCount(prev => prev + driveFiles.length);
+
+      const allNewPages: Page[] = [];
+
+      for (const file of driveFiles) {
         setCurrentAction(`Laster ned ${file.name}...`);
         const { data, mimeType } = await downloadDriveFile(file.id);
-        
-        const id = Math.random().toString(36).substring(7);
-        await saveMedia(id, data);
-        const thumb = await createThumbnailFromBase64(data);
-        const newPage: Page = {
-          id,
-          fileName: file.name,
-          imagePreview: thumb,
-          contentHash: Math.random().toString(36),
-          mimeType,
-          status: 'pending',
-          rotation: 0
-        };
-        allNewPages.push(newPage);
+        const response = await fetch(data);
+        const blob = await response.blob();
+        const dummyFile = new File([blob], file.name, { type: mimeType });
+        const pgs = await processFileToImages(dummyFile);
+        allNewPages.push(...pgs);
         setBatchCompleted(prev => prev + 1);
       }
 
-      updateActiveProject({ unprocessedPages: [...(activeProject.unprocessedPages || []), ...allNewPages] });
+      setActiveProject(prev => {
+        if (!prev) return null;
+        return { 
+          ...prev, 
+          unprocessedPages: [...(prev.unprocessedPages || []), ...allNewPages] 
+        };
+      });
 
       if (activeProject.rubric) {
-        setBatchTotal(allNewPages.length);
-        setBatchCompleted(0);
-        setProcessingCount(allNewPages.length);
-        for (const p of allNewPages) { await processSinglePage(p); }
+        for (const p of allNewPages) {
+          processSinglePage(p);
+        }
         await handleSmartCleanup();
       }
     } catch (e: any) {
-      alert(e.message);
+      console.error(e);
+      alert(`Feil ved Drive-import: ${e.message}`);
     } finally {
-      setRubricStatus({ loading: false, text: "" });
-      setCurrentAction("");
+      setRubricStatus({ loading: false, text: '' });
+      setCurrentAction('');
     }
   };
 
@@ -275,10 +277,17 @@ export const useProjectProcessor = (
       const taskFilesWithMedia = await Promise.all(proj.taskFiles.map(async f => ({ ...f, base64Data: (await getMedia(f.id))?.split(',')[1] || "" })));
       const rubric = await generateRubricFromTaskAndSamples(taskFilesWithMedia);
       setActiveProject(prev => prev ? { ...prev, rubric } : null);
-      // Nullstill batch-tellere her slik at elev-prosesseringen starter friskt
-      setBatchTotal(0);
-      setBatchCompleted(0);
-    } catch (e) { console.error(e); } finally { setRubricStatus({ loading: false, text: '' }); }
+      
+      // V4.17.0: Forsinket nullstilling av batch for å hindre flikking i UI
+      setTimeout(() => {
+        setBatchTotal(0);
+        setBatchCompleted(0);
+      }, 1000);
+    } catch (e) { 
+      console.error(e); 
+    } finally { 
+      setRubricStatus({ loading: false, text: '' }); 
+    }
   };
 
   const handleEvaluateAll = async () => {
@@ -299,7 +308,7 @@ export const useProjectProcessor = (
 
   return { 
     processingCount, batchTotal, batchCompleted, currentAction, rubricStatus, 
-    handleTaskFileSelect, handleCandidateFileSelect, handleDriveImport, 
+    handleTaskFileSelect, handleCandidateFileSelect, handleDriveImport,
     handleEvaluateAll, handleGenerateRubric, handleRetryPage: processSinglePage, 
     handleSmartCleanup, updateActiveProject 
   };

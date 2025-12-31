@@ -1,22 +1,18 @@
 
-# Designvalg & Brukeropplevelse (v4.7.x)
+# Designvalg & Brukeropplevelse (v4.16.0)
 
-Dette dokumentet beskriver de bevisste designvalgene som er tatt for å gjøre Vurderingshjelp til et effektivt lærerverktøy.
+## 1. Informasjonstetthet (Compact Content Focus)
+Etter v4.6.3 har applikasjonen gått bort fra "mobil-stilen" med store avrunder og mye luft, til et profesjonelt dashboard-design:
+*   **Padding**: Redusert med 40% for å minimere skrolling.
+*   **Hjørner**: Radius er satt til 16-24px (tidligere 50px) for å maksimere brukbart areal.
+*   **Sidebar**: Låst posisjon (sticky) med uavhengig skroll. Dette sikrer at navigasjon mellom kandidater og oppgaver alltid er tilgjengelig.
 
-## 1. Rubrikk-Låst Pipeline (v4.7.0)
-For å sikre 100% nøyaktighet i oppgavedeteksjon, er arbeidsflyten nå lineær og streng:
-* **Fasit Først**: Det er ikke lenger mulig å laste opp elevbesvarelser før rettemanualen er generert. Dette er fordi KI-en trenger "kartet" (oppgavestrukturen) for å vite hva den skal lete etter i elevens tekst.
-* **Validerings-garanti**: Ved å ha fasiten klar, kan systemet umiddelbart forkaste støy og "fiktive" oppgaver som ofte oppstår i komplekse Word-dokumenter.
+## 2. Vertikal Flyt (Pedagogisk Matematikk)
+*   **Visuelt Hierarki**: Vi bruker dype indigo-farger (`bg-indigo-600`) for transkripsjonsbokser. Dette gir hvit LaTeX-tekst maksimal lesbarhet.
+*   **Vertikalitet**: Siden lærere retter vertikalt, tvinger vi all matematikk inn i `aligned`-miljøer. Dette speiler den tradisjonelle måten å sette opp regnestykker på.
+*   **Fade-in Rendering**: Vi bruker en myk fade-in i `LatexRenderer` for å skjule råkoden mens MathJax jobber. Dette fjerner visuelt "hopp" og flimmer.
 
-## 2. Digital Presisjon (Word/PDF)
-* **Word-lister**: Systemet er spesialisert på å gjenkjenne lister i Word-format, inkludert romertall (i, ii, iii), bokstavlister (a, b, c) og hierarkiske punktlister.
-* **ID-Aggresjon**: Vi søker etter kandidatnummer i alle tekstlag (inkludert det som Mammoth trekker ut fra topp/bunntekst) før vi kategoriserer som "Ukjent".
-
-## 3. Kompakt Innholdsfokus
-* **Padding**: Redusert padding i alle hovedcontainere.
-* **Typografi**: Bruker 'Inter' med black/900 vekt for titler.
-* **Hjørner**: Radius satt til 16-24px for optimal plassutnyttelse.
-
-## 4. Den Strikte Portrett-pipelinen
-* **A3-Splitting**: Alle landskapsbilder splittes fysisk i to.
-* **Pre-Rotation**: Bilder roteres fysisk i Canvas før lagring for å sikre at tekst og bilde alltid er synkronisert.
+## 3. Brukerinteraksjon
+*   **Direkte Navigasjon**: Kandidatkort i Setup-steget navigerer direkte til aktuell elev i Review-steget.
+*   **Manual Overrides**: Alle KI-valg (ID, Side, Del) har tydelige manuelle kontroller i Review-steget.
+*   **Symmetri**: Fargekodingen i rettemanualen (Indigo for Del 1, Emerald for Del 2) gjentas konsekvent i alle moduler for umiddelbar kontekstforståelse.

@@ -1,3 +1,4 @@
+
 import { Page } from '../types';
 import mammoth from 'mammoth';
 import { saveMedia } from './storageService';
@@ -96,8 +97,22 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
         const text = result.value;
         const id = Math.random().toString(36).substring(7);
         const hash = generateHash(text);
-        resolve([{ id, fileName: file.name, contentHash: hash, mimeType: 'text/plain', status: 'pending', transcription: text, candidateId: "Ukjent", rotation: 0 }]);
-      } catch (e) { resolve([]); }
+        
+        resolve([{ 
+          id, 
+          fileName: file.name, 
+          contentHash: hash, 
+          mimeType: 'text/plain', 
+          status: 'pending', 
+          rawText: text, // Bevarer originalteksten
+          transcription: text, 
+          candidateId: "Ukjent", 
+          rotation: 0 
+        }]);
+      } catch (e) { 
+        console.error("Mammoth error:", e);
+        resolve([]); 
+      }
       return;
     }
     

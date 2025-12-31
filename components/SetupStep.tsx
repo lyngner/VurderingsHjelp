@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+
+import React, { useMemo, useState, useEffect } from 'react';
 import { Project, Page } from '../types';
 import { Spinner } from './SharedUI';
 import { extractFolderId } from '../services/driveService';
@@ -13,7 +14,7 @@ interface SetupStepProps {
   handleTaskFileSelect: (files: FileList) => void;
   handleGenerateRubric: () => void;
   handleCandidateFileSelect: (files: FileList) => void;
-  handleDriveImport?: (folderId: string) => void;
+  handleDriveImport: (folderId: string) => void;
   handleRetryPage: (page: Page) => void;
   updateActiveProject: (updates: Partial<Project>) => void;
   onNavigateToCandidate?: (id: string) => void;
@@ -35,31 +36,29 @@ export const SetupStep: React.FC<SetupStepProps> = ({
   onNavigateToCandidate
 }) => {
   const [driveUrl, setDriveUrl] = useState('');
+  const [hasKey, setHasKey] = useState(true);
   const isAiWorking = rubricStatus.loading;
   const hasRubric = !!activeProject.rubric;
 
-  const handleDriveSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const folderId = extractFolderId(driveUrl);
-    if (folderId && handleDriveImport) {
-      handleDriveImport(folderId);
-      setDriveUrl('');
-    } else {
-      alert("Ugyldig Google Drive-link. Sørg for at mappen er offentlig.");
-    }
-  };
+  useEffect(() => {
+    const checkKey = async () => {
+      if ((window as any).aistudio?.hasSelectedApiKey) {
+        const selected = await (window as any).aistudio.hasSelectedApiKey();
+        setHasKey(selected);
+      }
+    };
+    checkKey();
+    const interval = setInterval(checkKey, 3000);
+    return () => clearInterval(interval);
+  }, []);
 
-  // Beregn progress mer intuitivt
   const progressPercent = useMemo(() => {
     if (batchTotal === 0 && !isAiWorking) return 0;
-    
     const fileProgress = batchTotal > 0 ? (batchCompleted / batchTotal) * 100 : 0;
-    
-    // Hvis alle filer er prosessert, men KI-en jobber fortsatt med manualen, hold den på 98%
-    if (fileProgress >= 100 && isAiWorking) {
-      return 98;
+    if (isAiWorking) {
+      if (batchTotal > 0 && batchCompleted >= batchTotal) return 98;
+      if (batchTotal === 0) return 95;
     }
-    
     return Math.min(100, Math.round(fileProgress));
   }, [batchTotal, batchCompleted, isAiWorking]);
 
@@ -75,16 +74,51 @@ export const SetupStep: React.FC<SetupStepProps> = ({
     };
   }, [activeProject]);
 
+  const handleConnectKey = async () => {
+    if ((window as any).aistudio?.openSelectKey) {
+      await (window as any).aistudio.openSelectKey();
+      setHasKey(true);
+    }
+  };
+
+  const onDriveImportClick = () => {
+    const folderId = extractFolderId(driveUrl);
+    if (folderId) {
+      handleDriveImport(folderId);
+      setDriveUrl('');
+    } else {
+      alert("Ugyldig Google Drive-link. Sørg for at den inneholder en folder-ID.");
+    }
+  };
+
   return (
     <div className="p-6 max-w-[1400px] mx-auto h-full flex flex-col overflow-hidden">
       
+      {!hasKey && (
+        <div className="mb-6 bg-indigo-600 text-white p-4 rounded-3xl flex justify-between items-center animate-in slide-in-from-top-4 duration-500 shadow-xl border-4 border-white/10">
+          <div className="flex items-center gap-4">
+            <span className="text-2xl">🔑</span>
+            <div>
+              <p className="text-[11px] font-black uppercase tracking-widest">API-tilkobling mangler</p>
+              <p className="text-[10px] font-medium opacity-80">Du må velge en betalt API-nøkkel for å bruke Gemini 3 Pro-modellen.</p>
+            </div>
+          </div>
+          <button 
+            onClick={handleConnectKey}
+            className="bg-white text-indigo-600 px-6 py-2 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-slate-100 transition-colors"
+          >
+            Koble til nøkkel
+          </button>
+        </div>
+      )}
+
       {(batchTotal > 0 || isAiWorking) && (
         <div className="mb-8 animate-in fade-in slide-in-from-top-4 duration-500">
           <div className="bg-white p-6 rounded-[35px] border border-slate-100 shadow-xl flex flex-col gap-4">
             <div className="flex justify-between items-end">
               <div>
                 <h4 className={`text-[10px] font-black uppercase tracking-[0.2em] mb-1 ${isAiWorking ? 'text-indigo-600' : 'text-slate-400'}`}>
-                  {isAiWorking ? (progressPercent >= 98 ? 'Finaliserer rettemanual...' : 'KI-Analyse') : 'Prosesserer filer'}
+                  {isAiWorking ? (progressPercent >= 95 ? 'Finaliserer rettemanual...' : 'KI-Analyse') : 'Prosesserer filer'}
                 </h4>
                 <div className="flex items-center gap-3">
                   <p className="text-xl font-black text-slate-800">
@@ -97,7 +131,7 @@ export const SetupStep: React.FC<SetupStepProps> = ({
                   )}
                 </div>
               </div>
-              {(isAiWorking || batchCompleted < batchTotal) && (
+              {(isAiWorking || (batchTotal > 0 && batchCompleted < batchTotal)) && (
                 <div className="flex items-center gap-2 mb-1">
                   <Spinner size="w-4 h-4" />
                 </div>
@@ -105,7 +139,7 @@ export const SetupStep: React.FC<SetupStepProps> = ({
             </div>
             <div className="h-3 bg-slate-50 rounded-full overflow-hidden border border-slate-100 p-0.5 relative">
               <div 
-                className={`h-full transition-all duration-1000 ease-out rounded-full relative overflow-hidden ${isAiWorking ? 'bg-indigo-500 shadow-[0_0_15px_rgba(99,102,241,0.5)]' : 'bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.3)]'}`}
+                className={`h-full transition-all duration-700 ease-out rounded-full relative overflow-hidden ${isAiWorking ? 'bg-indigo-500 shadow-[0_0_15px_rgba(99,102,241,0.5)]' : 'bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.3)]'}`}
                 style={{ width: `${progressPercent}%` }}
               >
                 {isAiWorking && (
@@ -126,7 +160,6 @@ export const SetupStep: React.FC<SetupStepProps> = ({
 
       <div className="grid grid-cols-1 md:grid-cols-12 gap-6 h-full overflow-hidden pb-10">
         
-        {/* KOLONNE 1: OPPGAVE / FASIT */}
         <div className="md:col-span-4 bg-white rounded-[45px] shadow-sm border border-slate-100 flex flex-col overflow-hidden h-full">
           <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/20 shrink-0">
             <div>
@@ -165,7 +198,6 @@ export const SetupStep: React.FC<SetupStepProps> = ({
           </div>
         </div>
         
-        {/* KOLONNE 2: ELEVBESVARELSER */}
         <div className="md:col-span-8 bg-white rounded-[45px] shadow-sm border border-slate-100 flex flex-col overflow-hidden h-full">
           <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/20 shrink-0">
             <div className="flex flex-col">
@@ -184,8 +216,8 @@ export const SetupStep: React.FC<SetupStepProps> = ({
           </div>
 
           <div className="p-8 flex-1 flex flex-col gap-6 overflow-hidden relative">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 shrink-0">
-               <div className="relative group h-32">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 shrink-0">
+               <div className="relative group h-40">
                  <input 
                    type="file" 
                    multiple 
@@ -193,24 +225,33 @@ export const SetupStep: React.FC<SetupStepProps> = ({
                    onChange={e => e.target.files && handleCandidateFileSelect(e.target.files)} 
                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" 
                  />
-                 <div className="border-2 border-dashed border-slate-100 rounded-[35px] h-full flex flex-col items-center justify-center p-4 text-center group-hover:border-emerald-200 transition-all bg-slate-50/30 group-hover:bg-emerald-50/20">
-                   <div className="text-2xl mb-2">📥</div>
-                   <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.1em]">Slipp filer eller klikk</p>
+                 <div className="border-2 border-dashed border-slate-100 rounded-[35px] h-full flex flex-col items-center justify-center p-6 text-center group-hover:border-emerald-200 transition-all bg-slate-50/30 group-hover:bg-emerald-50/20">
+                   <div className="text-4xl mb-3">📥</div>
+                   <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Lokale filer</p>
+                   <p className="text-[8px] font-bold text-slate-400 mt-2 uppercase tracking-widest">Dra og slipp filer her</p>
                  </div>
                </div>
 
-               <div className="bg-slate-50 rounded-[35px] p-6 border border-slate-100 flex flex-col justify-center">
-                  <h4 className="text-[9px] font-black uppercase text-slate-400 tracking-widest mb-3">Google Drive Import</h4>
-                  <form onSubmit={handleDriveSubmit} className="flex gap-2">
-                    <input 
-                      type="text" 
-                      placeholder="Lim inn mappe-link..." 
-                      className="flex-1 bg-white border border-slate-100 p-3 rounded-2xl text-[10px] font-bold outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
-                      value={driveUrl}
-                      onChange={e => setDriveUrl(e.target.value)}
-                    />
-                    <button type="submit" className="bg-indigo-600 text-white px-4 py-2 rounded-2xl font-black text-[9px] uppercase hover:bg-indigo-700 transition-all">Koble til</button>
-                  </form>
+               <div className="bg-slate-50/30 border-2 border-dashed border-slate-100 rounded-[35px] h-40 p-6 flex flex-col justify-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">📁</span>
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Google Drive Mappe</p>
+                  </div>
+                  <input 
+                    type="text" 
+                    placeholder="Lim inn delt link her..." 
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-[11px] font-bold outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all"
+                    value={driveUrl}
+                    onChange={e => setDriveUrl(e.target.value)}
+                  />
+                  <button 
+                    onClick={onDriveImportClick}
+                    disabled={!driveUrl || isProcessing}
+                    className="w-full bg-emerald-600 text-white py-2 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-emerald-700 disabled:opacity-50 transition-all"
+                  >
+                    Importer fra Drive
+                  </button>
+                  <p className="text-[8px] text-slate-400 font-bold uppercase tracking-tight text-center">Mappen må være delt (Alle med linken)</p>
                </div>
             </div>
 
@@ -223,7 +264,6 @@ export const SetupStep: React.FC<SetupStepProps> = ({
               )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {/* Prosesserende filer */}
                 {(activeProject?.unprocessedPages || []).map(p => (
                   <div key={p.id} className={`text-[11px] font-bold p-4 rounded-2xl border flex gap-4 items-center transition-all ${p.status === 'error' ? 'bg-rose-50 border-rose-200 text-rose-700' : p.status === 'pending' && !hasRubric ? 'bg-slate-50 border-slate-200 text-slate-400' : 'bg-indigo-50/50 border-indigo-100 text-indigo-700 shadow-sm'}`}>
                     <div className="shrink-0">
@@ -237,7 +277,6 @@ export const SetupStep: React.FC<SetupStepProps> = ({
                   </div>
                 ))}
 
-                {/* Ferdige kandidat-kort */}
                 {(activeProject?.candidates || []).map(c => (
                   <button 
                     key={c.id} 

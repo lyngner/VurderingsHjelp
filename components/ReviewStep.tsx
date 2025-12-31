@@ -1,9 +1,9 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Project, Candidate, Page } from '../types';
 import { LatexRenderer, Spinner } from './SharedUI';
 import { getMedia, saveCandidate } from '../services/storageService';
 
-// Hjelpefunksjon for å konvertere base64 til Blob
 const base64ToBlob = (base64: string): Blob => {
   const parts = base64.split(';base64,');
   const contentType = parts[0].split(':')[1];
@@ -23,18 +23,16 @@ const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
   const [error, setError] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Intersection Observer for å kun laste bilder når de er i nærheten av viewport
   useEffect(() => {
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
           setIsVisible(true);
-          // Vi slutter ikke å observere, slik at vi kan tømme minnet når bildet skrolles ut
         } else {
           setIsVisible(false);
         }
       },
-      { rootMargin: '400px' } // Last inn litt før det kommer på skjermen
+      { rootMargin: '400px' }
     );
 
     if (containerRef.current) {
@@ -44,7 +42,6 @@ const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
     return () => observer.disconnect();
   }, []);
 
-  // Håndtering av minne (Blob URL)
   useEffect(() => {
     let currentUrl: string | null = null;
 
@@ -58,7 +55,7 @@ const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
         return;
       }
 
-      if (blobUrl) return; // Allerede lastet
+      if (blobUrl) return;
 
       try {
         const base64 = await getMedia(page.id);
@@ -81,6 +78,22 @@ const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
       }
     };
   }, [isVisible, page.id]);
+
+  if (page.mimeType === 'text/plain') {
+    return (
+      <div className="relative w-full overflow-hidden rounded-xl border border-slate-200 shadow-md bg-white p-8 min-h-[400px]">
+        <div className="absolute top-2 right-2 px-2 py-0.5 rounded bg-blue-500 text-white text-[7px] font-black uppercase tracking-widest opacity-80">
+          DIGITAL BESVARELSE
+        </div>
+        <div className="text-[10px] font-black text-slate-300 uppercase tracking-widest mb-4 border-b pb-2">
+          {page.fileName}
+        </div>
+        <div className="text-slate-600 text-sm whitespace-pre-wrap font-medium leading-relaxed font-serif italic">
+          {page.rawText || page.transcription}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div 
@@ -127,7 +140,6 @@ const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
   );
 };
 
-// Added ReviewStepProps interface to fix compilation error
 interface ReviewStepProps {
   activeProject: Project;
   selectedReviewCandidateId: string | null;

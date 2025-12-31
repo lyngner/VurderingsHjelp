@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { Project, Candidate } from './types';
 import { saveProject, getAllProjects, deleteProject as deleteProjectFromStorage, loadFullProject } from './services/storageService';
@@ -46,7 +47,6 @@ const App: React.FC = () => {
   const [selectedReviewCandidateId, setSelectedReviewCandidateId] = useState<string | null>(null);
   const [reviewFilter, setReviewFilter] = useState('');
 
-  // Sikkerhetsmekanisme: Auto-generer manual hvis filer finnes men manual mangler
   useEffect(() => {
     if (activeProject && activeProject.taskFiles.length > 0 && !activeProject.rubric && !rubricStatus.loading && processingCount === 0) {
       const timer = setTimeout(() => {

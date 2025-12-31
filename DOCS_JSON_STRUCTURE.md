@@ -1,39 +1,49 @@
 
-# Teknisk Dokumentasjon: JSON-arkitektur & Datamodeller (v4.0.0)
+# Teknisk Dokumentasjon: JSON & Database (v4.16.0)
 
-Vurderingshjelp opererer med en normalisert databasearkitektur og et symmetrisk hierarkisk system.
+## 🏛️ Database-struktur (IndexedDB V4)
+Applikasjonen bruker en normalisert database for å håndtere store datamengder uten å krasje nettleseren.
 
----
+### 1. `projects` store
+Lagrer metadata om selve prosjektet.
+*   `id`: String (UUID)
+*   `name`: String
+*   `rubric`: Rubric-objekt (Fasit)
+*   `candidateCount`: Integer (Cache for dashboard)
+*   `taskFiles`: Array av Page-objekter (Oppgaveark)
 
-## 🏛️ 1. Database-struktur (IndexedDB V4)
+### 2. `candidates` store
+Lagrer normaliserte elevdata.
+*   `id`: String (Kandidatnummer)
+*   `projectId`: String (Fremmednøkkel med Index)
+*   `name`: String
+*   `pages`: Array av Page-objekter (UTEN base64Data)
+*   `evaluation`: Vurderingsresultat
 
-Systemet bruker fire dedikerte Object Stores:
+### 3. `media_blobs` store
+Lagrer tunge binærdata.
+*   `id`: String (Koblet til Page.id)
+*   `data`: Base64-streng (Full oppløsning)
 
-| Store | Nøkkel | Beskrivelse |
-| :--- | :--- | :--- |
-| `projects` | `id` | Metadata og rettemanual. |
-| `candidates` | `id` | Elevdata (normalisert). |
-| `media_blobs` | `id` | Bilder (fulloppløselig). |
-| `global_cache`| `contentHash` | KI-cache. |
+## 🔍 KI-Kontrakt (Response Schema)
+Alle API-kall mot Gemini 3 Pro skal bruke `responseSchema` for å garantere følgende struktur:
 
----
+### Bildeanalyse (OCR)
+```json
+{
+  "layoutType": "A4_SINGLE" | "A3_SPREAD",
+  "candidateId": "KUN siffer",
+  "fullText": "LaTeX-transkripsjon uten systeminstruks",
+  "rotation": 0 | 90 | 180 | 270,
+  "identifiedTasks": [{ "taskNumber": "string", "subTask": "string" }]
+}
+```
 
-## 📋 2. Hierarkisk System (3-nivå)
-Både rettemanualen og elevbesvarelsene følger nå samme struktur:
+### Digital Analyse (Word)
+Søker etter `candidateId` i metadata/header og mapper tekstsekvenser til `identifiedTasks` basert på fasiten.
 
-| Nivå | Felt | Beskrivelse |
-| :--- | :--- | :--- |
-| **1. Del** | `part` | Del 1 eller Del 2. |
-| **2. Oppgave** | `taskNumber` | Hovednummer (f.eks. "1"). |
-| **3. Deloppgave**| `subTask` | Bokstav (f.eks. "a"). |
-
----
-
-## 👤 3. Elevbesvarelse (Submission JSON)
-Elevens data lagres nå med hierarkiske koblinger for nøyaktig vurdering.
-
-### Sider (`Page`):
-Hver side inneholder nå `identifiedTasks`, en liste over objekter med `{ taskNumber, subTask }`.
-
-### Vurdering (`TaskEvaluation`):
-Karakterutskriften følger samme mønster, noe som tillater en ryddig tabellvisning av resultater sortert etter oppgave.
+## 🧼 JSON Sanitering
+Funksjonen `cleanJson` i `geminiService.ts` er kritisk. Den må alltid:
+1. Fjerne Markdown-kodeblokker (```json).
+2. Finne første `{` eller `[` og siste `}` eller `]`.
+3. Håndtere asynkrone ufullstendige svar ved bruk av try/catch.
