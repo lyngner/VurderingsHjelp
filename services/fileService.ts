@@ -50,17 +50,18 @@ export const processImageRotation = async (base64: string, rotation: number): Pr
       ctx.translate(canvas.width / 2, canvas.height / 2);
       ctx.rotate((rotation * Math.PI) / 180);
       ctx.drawImage(img, -img.width / 2, -img.height / 2);
-      resolve(canvas.toDataURL('image/jpeg', 0.9));
+      resolve(canvas.toDataURL('image/jpeg', 0.95));
     };
     img.onerror = reject;
     img.src = base64;
   });
 };
 
-export const splitA3Spread = async (base64: string, side: 'LEFT' | 'RIGHT', rotation: number = 0): Promise<{ preview: string }> => {
+export const splitA3Spread = async (base64: string, side: 'LEFT' | 'RIGHT', rotation: number = 0): Promise<{ fullRes: string }> => {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
+      // 1. Roter først for å få arket rett vei (landskap)
       const rotateCanvas = document.createElement('canvas');
       const rCtx = rotateCanvas.getContext('2d');
       if (!rCtx) return reject("Canvas error");
@@ -73,6 +74,7 @@ export const splitA3Spread = async (base64: string, side: 'LEFT' | 'RIGHT', rota
       rCtx.rotate((rotation * Math.PI) / 180);
       rCtx.drawImage(img, -img.width / 2, -img.height / 2);
 
+      // 2. Splitt arket nøyaktig 50/50 vertikalt
       const splitCanvas = document.createElement('canvas');
       const sCtx = splitCanvas.getContext('2d');
       if (!sCtx) return reject("Split error");
@@ -82,7 +84,7 @@ export const splitA3Spread = async (base64: string, side: 'LEFT' | 'RIGHT', rota
       const offsetX = side === 'LEFT' ? 0 : rotateCanvas.width / 2;
       
       sCtx.drawImage(rotateCanvas, offsetX, 0, rotateCanvas.width / 2, rotateCanvas.height, 0, 0, splitCanvas.width, splitCanvas.height);
-      resolve({ preview: splitCanvas.toDataURL('image/jpeg', 0.9) });
+      resolve({ fullRes: splitCanvas.toDataURL('image/jpeg', 0.95) });
     };
     img.src = base64;
   });
@@ -104,7 +106,7 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
           contentHash: hash, 
           mimeType: 'text/plain', 
           status: 'pending', 
-          rawText: text, // Bevarer originalteksten
+          rawText: text, 
           transcription: text, 
           candidateId: "Ukjent", 
           rotation: 0 
@@ -127,7 +129,7 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
           const canvas = document.createElement('canvas');
           canvas.height = viewport.height; canvas.width = viewport.width;
           await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise;
-          const b64 = canvas.toDataURL('image/jpeg', 0.9);
+          const b64 = canvas.toDataURL('image/jpeg', 0.95);
           const id = Math.random().toString(36).substring(7);
           await saveMedia(id, b64);
           const thumb = await createThumbnail(b64);
@@ -146,7 +148,7 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
           const canvas = document.createElement('canvas');
           canvas.width = img.width; canvas.height = img.height;
           canvas.getContext('2d')!.drawImage(img, 0, 0);
-          const b64 = canvas.toDataURL('image/jpeg', 0.9);
+          const b64 = canvas.toDataURL('image/jpeg', 0.95);
           const id = Math.random().toString(36).substring(7);
           await saveMedia(id, b64);
           const thumb = await createThumbnail(b64);

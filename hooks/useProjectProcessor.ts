@@ -10,8 +10,6 @@ import {
   evaluateCandidate,
   reconcileProjectData
 } from '../services/geminiService';
-// Added missing imports for Drive integration
-import { fetchImagesFromDriveFolder, downloadDriveFile } from '../services/driveService';
 
 const sanitizeTaskPart = (val: string | undefined): string => {
   if (!val) return "";
@@ -109,12 +107,23 @@ export const useProjectProcessor = (
       });
 
       if (res.layoutType === 'A3_SPREAD' && res.sideInSpread && originalMedia) {
+        // FYSISK SPLITTING OG ROTASJON
         const split = await splitA3Spread(originalMedia, res.sideInSpread as 'LEFT' | 'RIGHT', res.rotation || 0);
         const newId = `${originalPage.id}_${res.sideInSpread}`;
-        await saveMedia(newId, split.preview);
-        const newThumb = await createThumbnailFromBase64(split.preview);
-        processedPages.push({ ...originalPage, id: newId, imagePreview: newThumb, candidateId: String(res.candidateId || "Ukjent").replace(/\D/g, ''), transcription: res.fullText, identifiedTasks: tasks, rotation: 0, status: 'completed' });
+        await saveMedia(newId, split.fullRes);
+        const newThumb = await createThumbnailFromBase64(split.fullRes);
+        processedPages.push({ 
+          ...originalPage, 
+          id: newId, 
+          imagePreview: newThumb, 
+          candidateId: String(res.candidateId || "Ukjent").replace(/\D/g, ''), 
+          transcription: res.fullText, 
+          identifiedTasks: tasks, 
+          rotation: 0, // Allerede rotert fysisk
+          status: 'completed' 
+        });
       } else {
+        // FYSISK ROTASJON FOR ENKELTSIDER
         let finalImage = originalMedia;
         let finalThumb = originalPage.imagePreview;
         if (res.rotation && res.rotation !== 0 && originalMedia) {
@@ -122,7 +131,15 @@ export const useProjectProcessor = (
           await saveMedia(originalPage.id, finalImage);
           finalThumb = await createThumbnailFromBase64(finalImage);
         }
-        processedPages.push({ ...originalPage, imagePreview: finalThumb, candidateId: String(res.candidateId || "Ukjent").replace(/\D/g, ''), transcription: res.fullText, identifiedTasks: tasks, rotation: 0, status: 'completed' });
+        processedPages.push({ 
+          ...originalPage, 
+          imagePreview: finalThumb, 
+          candidateId: String(res.candidateId || "Ukjent").replace(/\D/g, ''), 
+          transcription: res.fullText, 
+          identifiedTasks: tasks, 
+          rotation: 0, // Allerede rotert fysisk
+          status: 'completed' 
+        });
       }
     }
 
@@ -168,7 +185,6 @@ export const useProjectProcessor = (
     } finally { setProcessingCount(prev => Math.max(0, prev - 1)); }
   };
 
-  // V4.10.0: Effekt som starter prosessering av køen når fasiten blir tilgjengelig
   useEffect(() => {
     if (activeProject?.rubric && (activeProject.unprocessedPages || []).some(p => p.status === 'pending') && processingCount === 0) {
       const pendingPages = activeProject.unprocessedPages!.filter(p => p.status === 'pending');
@@ -194,7 +210,6 @@ export const useProjectProcessor = (
     const updated = { ...activeProject, taskFiles: [...activeProject.taskFiles, ...allPages] };
     setActiveProject(updated);
     await handleGenerateRubric(updated);
-    // Vi nullstiller ikke batch her umiddelbart, det skjer i generateRubric
   };
 
   const handleCandidateFileSelect = async (files: FileList) => {
@@ -206,66 +221,14 @@ export const useProjectProcessor = (
       allPages = [...allPages, ...pgs];
     }
     
-    // Oppdaterer alltid unprocessedPages slik at de dukker opp i grensesnittet
     updateActiveProject({ unprocessedPages: [...(activeProject.unprocessedPages || []), ...allPages] });
     
-    // Hvis rubrikken allerede er der, start prosessering med en gang
     if (activeProject.rubric) {
         setBatchTotal(allPages.length);
         setBatchCompleted(0);
         setProcessingCount(allPages.length);
         for (const p of allPages) { await processSinglePage(p); }
         await handleSmartCleanup();
-    }
-  };
-
-  const handleDriveImport = async (folderId: string) => {
-    if (!activeProject) return;
-    setRubricStatus({ loading: true, text: 'Henter filer fra Google Drive...' });
-    try {
-      const driveFiles = await fetchImagesFromDriveFolder(folderId);
-      if (driveFiles.length === 0) {
-        alert("Fant ingen gyldige filer i mappen.");
-        return;
-      }
-
-      setBatchTotal(prev => prev + driveFiles.length);
-      setBatchCompleted(0);
-      setProcessingCount(prev => prev + driveFiles.length);
-
-      const allNewPages: Page[] = [];
-
-      for (const file of driveFiles) {
-        setCurrentAction(`Laster ned ${file.name}...`);
-        const { data, mimeType } = await downloadDriveFile(file.id);
-        const response = await fetch(data);
-        const blob = await response.blob();
-        const dummyFile = new File([blob], file.name, { type: mimeType });
-        const pgs = await processFileToImages(dummyFile);
-        allNewPages.push(...pgs);
-        setBatchCompleted(prev => prev + 1);
-      }
-
-      setActiveProject(prev => {
-        if (!prev) return null;
-        return { 
-          ...prev, 
-          unprocessedPages: [...(prev.unprocessedPages || []), ...allNewPages] 
-        };
-      });
-
-      if (activeProject.rubric) {
-        for (const p of allNewPages) {
-          processSinglePage(p);
-        }
-        await handleSmartCleanup();
-      }
-    } catch (e: any) {
-      console.error(e);
-      alert(`Feil ved Drive-import: ${e.message}`);
-    } finally {
-      setRubricStatus({ loading: false, text: '' });
-      setCurrentAction('');
     }
   };
 
@@ -278,7 +241,6 @@ export const useProjectProcessor = (
       const rubric = await generateRubricFromTaskAndSamples(taskFilesWithMedia);
       setActiveProject(prev => prev ? { ...prev, rubric } : null);
       
-      // V4.17.0: Forsinket nullstilling av batch for å hindre flikking i UI
       setTimeout(() => {
         setBatchTotal(0);
         setBatchCompleted(0);
@@ -308,7 +270,7 @@ export const useProjectProcessor = (
 
   return { 
     processingCount, batchTotal, batchCompleted, currentAction, rubricStatus, 
-    handleTaskFileSelect, handleCandidateFileSelect, handleDriveImport,
+    handleTaskFileSelect, handleCandidateFileSelect,
     handleEvaluateAll, handleGenerateRubric, handleRetryPage: processSinglePage, 
     handleSmartCleanup, updateActiveProject 
   };

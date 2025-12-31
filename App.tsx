@@ -35,7 +35,6 @@ const App: React.FC = () => {
     rubricStatus,
     handleTaskFileSelect,
     handleCandidateFileSelect,
-    handleDriveImport,
     handleEvaluateAll,
     handleGenerateRubric,
     handleRetryPage,
@@ -192,7 +191,6 @@ const App: React.FC = () => {
                 handleTaskFileSelect={handleTaskFileSelect} 
                 handleGenerateRubric={() => handleGenerateRubric()} 
                 handleCandidateFileSelect={handleCandidateFileSelect} 
-                handleDriveImport={handleDriveImport}
                 handleRetryPage={handleRetryPage} 
                 updateActiveProject={updateActiveProject} 
                 onNavigateToCandidate={handleNavigateToCandidate} 

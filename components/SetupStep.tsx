@@ -2,7 +2,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Project, Page } from '../types';
 import { Spinner } from './SharedUI';
-import { extractFolderId } from '../services/driveService';
 
 interface SetupStepProps {
   activeProject: Project;
@@ -14,7 +13,6 @@ interface SetupStepProps {
   handleTaskFileSelect: (files: FileList) => void;
   handleGenerateRubric: () => void;
   handleCandidateFileSelect: (files: FileList) => void;
-  handleDriveImport: (folderId: string) => void;
   handleRetryPage: (page: Page) => void;
   updateActiveProject: (updates: Partial<Project>) => void;
   onNavigateToCandidate?: (id: string) => void;
@@ -30,12 +28,10 @@ export const SetupStep: React.FC<SetupStepProps> = ({
   handleTaskFileSelect,
   handleGenerateRubric,
   handleCandidateFileSelect,
-  handleDriveImport,
   handleRetryPage,
   updateActiveProject,
   onNavigateToCandidate
 }) => {
-  const [driveUrl, setDriveUrl] = useState('');
   const [hasKey, setHasKey] = useState(true);
   const isAiWorking = rubricStatus.loading;
   const hasRubric = !!activeProject.rubric;
@@ -78,16 +74,6 @@ export const SetupStep: React.FC<SetupStepProps> = ({
     if ((window as any).aistudio?.openSelectKey) {
       await (window as any).aistudio.openSelectKey();
       setHasKey(true);
-    }
-  };
-
-  const onDriveImportClick = () => {
-    const folderId = extractFolderId(driveUrl);
-    if (folderId) {
-      handleDriveImport(folderId);
-      setDriveUrl('');
-    } else {
-      alert("Ugyldig Google Drive-link. Sørg for at den inneholder en folder-ID.");
     }
   };
 
@@ -216,7 +202,7 @@ export const SetupStep: React.FC<SetupStepProps> = ({
           </div>
 
           <div className="p-8 flex-1 flex flex-col gap-6 overflow-hidden relative">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 shrink-0">
+            <div className="shrink-0">
                <div className="relative group h-40">
                  <input 
                    type="file" 
@@ -227,31 +213,9 @@ export const SetupStep: React.FC<SetupStepProps> = ({
                  />
                  <div className="border-2 border-dashed border-slate-100 rounded-[35px] h-full flex flex-col items-center justify-center p-6 text-center group-hover:border-emerald-200 transition-all bg-slate-50/30 group-hover:bg-emerald-50/20">
                    <div className="text-4xl mb-3">📥</div>
-                   <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Lokale filer</p>
-                   <p className="text-[8px] font-bold text-slate-400 mt-2 uppercase tracking-widest">Dra og slipp filer her</p>
+                   <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Last opp elevfiler</p>
+                   <p className="text-[8px] font-bold text-slate-400 mt-2 uppercase tracking-widest">PDF, Word eller JPG (A3/A4)</p>
                  </div>
-               </div>
-
-               <div className="bg-slate-50/30 border-2 border-dashed border-slate-100 rounded-[35px] h-40 p-6 flex flex-col justify-center gap-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xl">📁</span>
-                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Google Drive Mappe</p>
-                  </div>
-                  <input 
-                    type="text" 
-                    placeholder="Lim inn delt link her..." 
-                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-[11px] font-bold outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all"
-                    value={driveUrl}
-                    onChange={e => setDriveUrl(e.target.value)}
-                  />
-                  <button 
-                    onClick={onDriveImportClick}
-                    disabled={!driveUrl || isProcessing}
-                    className="w-full bg-emerald-600 text-white py-2 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-emerald-700 disabled:opacity-50 transition-all"
-                  >
-                    Importer fra Drive
-                  </button>
-                  <p className="text-[8px] text-slate-400 font-bold uppercase tracking-tight text-center">Mappen må være delt (Alle med linken)</p>
                </div>
             </div>
 

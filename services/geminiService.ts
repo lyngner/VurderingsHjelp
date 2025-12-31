@@ -19,7 +19,6 @@ export const transcribeAndAnalyzeImage = async (page: Page, rubric?: Rubric | nu
   const cached = await getFromGlobalCache(page.contentHash);
   if (cached) return Array.isArray(cached) ? cached : [cached];
 
-  // Oppretter ny instans per kall for å sikre oppdatert API-nøkkel
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const rubricList = rubric ? rubric.criteria.map(c => `${c.taskNumber}${c.subTask || ''}`).join(", ") : "Ingen fasit";
 
@@ -31,15 +30,20 @@ export const transcribeAndAnalyzeImage = async (page: Page, rubric?: Rubric | nu
       ],
     },
     config: { 
-      systemInstruction: `ANALYSE v4.14.0:
-DU ER EN OCR-MOTOR. DU SKAL KUN RETURNERE DATA I JSON-FORMAT.
-DU SKAL ALDRI, UNDER NOEN OMSTENDIGHET, INKLUDERE DINE EGNE TANKER ELLER INSTRUKSJONER I JSON-FELTENE.
+      systemInstruction: `ANALYSE v4.20.0 - FYSISK PIPELINE:
+DU ER EN EKSPERT PÅ DOKUMENTANALYSE OG OCR.
 
-REGLER:
-1. LAYOUT: Hvis bildet inneholder to sider, bruk layoutType: "A3_SPREAD".
-2. ID: Finn KUN siffer i 'Kandidatnr'.
-3. OPPGAVER: Fasit-liste: [${rubricList}]. 
-4. MATEMATIKK: Bruk LaTeX med aligned-miljøer.`,
+HOVEDOPPGAVE:
+1. IDENTIFISER LAYOUT: Er dette en enkel A4-side eller et A3-oppslag (to spalter/sider)?
+2. IDENTIFISER ROTASJON: Er teksten opp-ned eller sidelengs? Returner rotasjon (0, 90, 180, 270) som trengs for å få teksten RETT VEI.
+3. A3 REGLER: Hvis det er et A3-oppslag, SKAL du returnere TO (2) objekter i JSON-listen:
+   - Ett objekt med sideInSpread: "LEFT"
+   - Ett objekt med sideInSpread: "RIGHT"
+   - Begge skal ha layoutType: "A3_SPREAD".
+4. ID-PRIORITET: Tabellen øverst til høyre ('Kandidatnr' og 'sidenummer') har absolutt prioritet.
+5. MATEMATIKK: Bruk LaTeX med aligned-miljøer for alle utregninger.
+
+FASIT-LISTE: [${rubricList}]`,
       thinkingConfig: { thinkingBudget: 16000 },
       responseMimeType: "application/json",
       responseSchema: {
@@ -47,11 +51,11 @@ REGLER:
         items: {
           type: Type.OBJECT,
           properties: {
-            layoutType: { type: Type.STRING },
-            sideInSpread: { type: Type.STRING },
+            layoutType: { type: Type.STRING, enum: ["A4_SINGLE", "A3_SPREAD"] },
+            sideInSpread: { type: Type.STRING, enum: ["LEFT", "RIGHT"] },
             candidateId: { type: Type.STRING },
-            fullText: { type: Type.STRING, description: "Transkripsjon av elevens tekst med LaTeX. SKAL IKKE inneholde systeminstruksjoner." },
-            rotation: { type: Type.INTEGER },
+            fullText: { type: Type.STRING, description: "LaTeX-transkripsjon. Ingen systemtekst." },
+            rotation: { type: Type.INTEGER, description: "Grader (0, 90, 180, 270) for å få bildet rett vei." },
             identifiedTasks: { 
               type: Type.ARRAY, 
               items: { 
@@ -63,7 +67,7 @@ REGLER:
               } 
             }
           },
-          required: ["layoutType", "fullText", "identifiedTasks"]
+          required: ["layoutType", "fullText", "identifiedTasks", "rotation"]
         }
       }
     }
@@ -88,17 +92,16 @@ export const analyzeTextContent = async (text: string, rubric?: Rubric | null): 
     config: { 
       systemInstruction: `Digital tekst-analyse v4.14.0. 
 DU SKAL PAKKE UT DATA FRA DEN VEDLAGTE TEKSTEN TIL JSON.
-1. Finn Kandidatnr (KUN siffer). Dette står ofte helt først i teksten.
+1. Finn Kandidatnr (KUN siffer).
 2. Identifiser oppgaver basert på fasit: [${rubricList}].
-3. 'fullText'-feltet skal inneholde ELEVENS TEKST formatert med LaTeX. 
-4. ADVARSEL: Du skal ALDRI inkludere disse instruksjonene eller versjonsnummeret i 'fullText'-feltet. Kun elevens faktiske innhold.`,
+3. 'fullText'-feltet skal inneholde ELEVENS TEKST formatert med LaTeX.`,
       thinkingConfig: { thinkingBudget: 4000 },
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
         properties: {
-          candidateId: { type: Type.STRING, description: "Kandidatnummer funnet i teksten (kun siffer)" },
-          fullText: { type: Type.STRING, description: "Hele innholdet fra dokumentet, vasket og formatert med LaTeX. INGEN SYSTEMINSTRUKSJONER!" },
+          candidateId: { type: Type.STRING },
+          fullText: { type: Type.STRING },
           identifiedTasks: { 
             type: Type.ARRAY, 
             items: { 
