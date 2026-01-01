@@ -1,24 +1,18 @@
 
-# Vurderingshjelp - Master Documentation (v4.20.0)
+# Vurderingshjelp - Master Documentation (v4.24.0)
 
 Profesjonelt verktøy for digitalisering og vurdering av elevbesvarelser ved bruk av Gemini 3 Pro Preview.
 
-## 🛡️ Kritiske Regler for Regresjonsvern
-For å forhindre at applikasjonen degenererer, skal følgende regler ALLTID følges ved koding:
+## 🛡️ Kritiske Regler for Regresjonsvern (Grunnloven)
+For å forhindre at applikasjonen degenererer, skal følgende regler ALLTID følges:
 
-1.  **Fysisk Pipeline**: Alle rotasjoner og splittinger skal skje FYSISK via Canvas API før lagring i IndexedDB. Aldri stol utelukkende på CSS-transform eller metadata for orientering.
-2.  **A3-Splitting**: Alle landskapsbilder som inneholder to kolonner/sider skal vurderes som A3_SPREAD. KI skal returnere TO objekter (LEFT/RIGHT), og disse splittes nøyaktig 50/50 etter rotasjon.
-3.  **API-Håndtering**: Bruk Gemini 3 Pro med dynamisk klient-instansiering for å fange opp aktiv API-nøkkel fra brukerdialogen.
-4.  **Bilde-Pipeline (Anti-Crop)**: Automatisk beskjæring (cropping) er strengt forbudt. Vis alltid full frame (A4).
-5.  **Matematikk-Standard**: Bruk konsekvent `aligned`-miljøer i LaTeX for vertikal utregning. ALDRI bruk horisontale kjede-likninger (A=B=C).
-6.  **KI-Isolasjon**: Systeminstruksjoner skal KUN ligge i `systemInstruction`. ALDRI la KI-ens tankeprosess eller instrukser lekke inn i transkripsjonsfeltene.
-7.  **Database (V4 Normalisering)**: Respekter IndexedDB V4-strukturen. Kandidater lagres i `candidates`, bilder i `media_blobs`. ALDRI lagre base64-strenger direkte i prosjekt-objektet.
-8.  **ID-Prioritet**: Ved OCR skal tabellen i øvre høyre hjørne ('Kandidatnr' og 'sidenummer') ha absolutt prioritet over all annen tekst.
-9.  **Design (Compact Focus)**: Radius 16-24px, minimal padding, Inter 900 for titler. Sticky sidebars med uavhengig skroll er påkrevd.
-10. **Lokal Filhåndtering**: Appen støtter kun lokale filopplastinger (PDF, Word, JPG).
+1.  **Fysisk Pipeline (Rotate-then-Bisect)**: Alle rotasjoner og splittinger skal skje FYSISK via Canvas API før lagring. Se `TECHNICAL_STANDARD.md` for matematisk detaljering.
+2.  **Atomic Persistence**: Alle database-operasjoner SKAL avventes (`await`) før staten oppdateres. Dette hindrer race-conditions der kandidater forsvinner.
+3.  **Deterministisk A3-Splitting**: Landskapsbilder skal roteres til korrekt orientering FØR de splittes nøyaktig 50/50 vertikalt. Gemini SKAL returnere to objekter.
+4.  **API-Håndtering**: Bruk dynamisk klient-instansiering for Gemini 3 Pro for å fange opp aktiv API-nøkkel fra brukerdialogen.
+5.  **Anti-Crop**: Vis alltid full frame (A4). Ingen automatisert beskjæring av marger.
+6.  **Vertikal Matematikk**: Bruk konsekvent `aligned`-miljøer i LaTeX. Ingen horisontale kjede-likninger (A=B=C).
+7.  **Database Normalisering**: Respekter IndexedDB V4-strukturen (prosjekter, kandidater, media_blobs separert).
 
-## 🚀 Hovedmoduler
-*   **Innlasting**: Støtter lokal opplasting (PDF, Word, JPG) fra din egen maskin.
-*   **Kontroll**: Side-ved-side visning av original (full frame) og transkripsjon (LaTeX).
-*   **Rettemanual**: KI-generert fasit med 3-nivå hierarki: Del -> Oppgave -> Deloppgave.
-*   **Resultater**: Automatisk poengberegning og generering av tilbakemelding.
+## 🛠️ Teknisk Standard
+Se [TECHNICAL_STANDARD.md](./TECHNICAL_STANDARD.md) for detaljert dokumentasjon av "HVORDAN" systemet er bygget. Dette dokumentet er kritisk for å hindre kode-degenerasjon.

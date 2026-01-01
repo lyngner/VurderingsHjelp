@@ -1,8 +1,12 @@
 
 import { Page } from '../types';
 import mammoth from 'mammoth';
+import JSZip from 'jszip';
 import { saveMedia } from './storageService';
 
+/**
+ * GENERERER HASH FOR CACHING
+ */
 export const generateHash = (str: string): string => {
   if (!str) return Math.random().toString(36).substring(7);
   const sample = str.length > 2000 
@@ -34,19 +38,49 @@ const createThumbnail = async (base64: string): Promise<string> => {
   });
 };
 
+/**
+ * GREEDY XML EXTRACTION v4.40.0
+ * Henter tekst fra alle headers og footers for å finne kandidatnummer.
+ */
+const extractWordMetadata = async (arrayBuffer: ArrayBuffer): Promise<string> => {
+  try {
+    const zip = await JSZip.loadAsync(arrayBuffer);
+    const metaFiles = Object.keys(zip.files).filter(name => 
+      name.startsWith('word/header') || name.startsWith('word/footer')
+    );
+    
+    let metaText = "";
+    for (const fileName of metaFiles) {
+      const content = await zip.files[fileName].async('text');
+      // Mer robust parsing av tekstnoder som håndterer splittede ord
+      const matches = content.match(/<w:t[^>]*>(.*?)<\/w:t>/g);
+      if (matches) {
+        const fileText = matches.map(m => {
+          const text = m.replace(/<[^>]+>/g, '');
+          // HTML-entity decoding (enkel versjon for tall/bokstaver)
+          return text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+        }).join('');
+        metaText += fileText + "\n";
+      }
+    }
+    return metaText.trim();
+  } catch (e) {
+    console.warn("Metadata-ekstraksjon feilet:", e);
+    return "";
+  }
+};
+
 export const processImageRotation = async (base64: string, rotation: number): Promise<string> => {
-  if (rotation === 0) return base64;
+  if (rotation === 0 || !rotation) return base64;
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       if (!ctx) return reject("Canvas error");
-
       const is90or270 = rotation % 180 !== 0;
       canvas.width = is90or270 ? img.height : img.width;
       canvas.height = is90or270 ? img.width : img.height;
-
       ctx.translate(canvas.width / 2, canvas.height / 2);
       ctx.rotate((rotation * Math.PI) / 180);
       ctx.drawImage(img, -img.width / 2, -img.height / 2);
@@ -60,31 +94,20 @@ export const processImageRotation = async (base64: string, rotation: number): Pr
 export const splitA3Spread = async (base64: string, side: 'LEFT' | 'RIGHT', rotation: number = 0): Promise<{ fullRes: string }> => {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onload = () => {
-      // 1. Roter først for å få arket rett vei (landskap)
-      const rotateCanvas = document.createElement('canvas');
-      const rCtx = rotateCanvas.getContext('2d');
-      if (!rCtx) return reject("Canvas error");
-
-      const is90or270 = rotation % 180 !== 0;
-      rotateCanvas.width = is90or270 ? img.height : img.width;
-      rotateCanvas.height = is90or270 ? img.width : img.height;
-
-      rCtx.translate(rotateCanvas.width / 2, rotateCanvas.height / 2);
-      rCtx.rotate((rotation * Math.PI) / 180);
-      rCtx.drawImage(img, -img.width / 2, -img.height / 2);
-
-      // 2. Splitt arket nøyaktig 50/50 vertikalt
-      const splitCanvas = document.createElement('canvas');
-      const sCtx = splitCanvas.getContext('2d');
-      if (!sCtx) return reject("Split error");
-
-      splitCanvas.width = rotateCanvas.width / 2;
-      splitCanvas.height = rotateCanvas.height;
-      const offsetX = side === 'LEFT' ? 0 : rotateCanvas.width / 2;
-      
-      sCtx.drawImage(rotateCanvas, offsetX, 0, rotateCanvas.width / 2, rotateCanvas.height, 0, 0, splitCanvas.width, splitCanvas.height);
-      resolve({ fullRes: splitCanvas.toDataURL('image/jpeg', 0.95) });
+    img.onload = async () => {
+      const rotatedBase64 = rotation !== 0 ? await processImageRotation(base64, rotation) : base64;
+      const rotatedImg = new Image();
+      rotatedImg.onload = () => {
+        const splitCanvas = document.createElement('canvas');
+        const sCtx = splitCanvas.getContext('2d');
+        if (!sCtx) return reject("Split error");
+        splitCanvas.width = rotatedImg.width / 2;
+        splitCanvas.height = rotatedImg.height;
+        const offsetX = side === 'LEFT' ? 0 : rotatedImg.width / 2;
+        sCtx.drawImage(rotatedImg, offsetX, 0, rotatedImg.width / 2, rotatedImg.height, 0, 0, splitCanvas.width, splitCanvas.height);
+        resolve({ fullRes: splitCanvas.toDataURL('image/jpeg', 0.95) });
+      };
+      rotatedImg.src = rotatedBase64;
     };
     img.src = base64;
   });
@@ -95,10 +118,15 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
     if (file.name.endsWith('.docx')) {
       try {
         const buffer = await file.arrayBuffer();
+        const metaText = await extractWordMetadata(buffer);
         const result = await mammoth.extractRawText({ arrayBuffer: buffer });
-        const text = result.value;
+        const bodyText = result.value;
+        
+        // Forsterket innpakning for KI-analyse
+        const combinedText = `[METADATA-SØK]:\n${metaText}\n\n[DOKUMENT-BODY]:\n${bodyText}`;
+        
         const id = Math.random().toString(36).substring(7);
-        const hash = generateHash(text);
+        const hash = generateHash(combinedText);
         
         resolve([{ 
           id, 
@@ -106,13 +134,13 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
           contentHash: hash, 
           mimeType: 'text/plain', 
           status: 'pending', 
-          rawText: text, 
-          transcription: text, 
+          rawText: combinedText, 
+          transcription: combinedText, 
           candidateId: "Ukjent", 
           rotation: 0 
         }]);
       } catch (e) { 
-        console.error("Mammoth error:", e);
+        console.error("Word error:", e);
         resolve([]); 
       }
       return;

@@ -173,6 +173,14 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
 }) => {
   const [editingPageIds, setEditingPageIds] = useState<Set<string>>(new Set());
   const [taskFilter, setTaskFilter] = useState<string | null>(null);
+  const mainScrollRef = useRef<HTMLElement>(null);
+
+  // CRITICAL UX v4.75.0: Auto-scroll til toppen ved kandidatbytte
+  useEffect(() => {
+    if (selectedReviewCandidateId && mainScrollRef.current) {
+      mainScrollRef.current.scrollTo({ top: 0, behavior: 'auto' });
+    }
+  }, [selectedReviewCandidateId]);
 
   const toggleEdit = (pageId: string) => {
     const next = new Set(editingPageIds);
@@ -353,7 +361,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
          </div>
       </aside>
 
-      <main className="flex-1 overflow-y-auto custom-scrollbar p-6 h-full bg-[#F1F5F9]">
+      <main ref={mainScrollRef} className="flex-1 overflow-y-auto custom-scrollbar p-6 h-full bg-[#F1F5F9]">
         <div className="max-w-[1400px] mx-auto space-y-8 pb-32">
           {!currentReviewCandidate ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-300 py-20">

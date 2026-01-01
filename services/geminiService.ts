@@ -20,7 +20,11 @@ export const transcribeAndAnalyzeImage = async (page: Page, rubric?: Rubric | nu
   if (cached) return Array.isArray(cached) ? cached : [cached];
 
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const rubricList = rubric ? rubric.criteria.map(c => `${c.taskNumber}${c.subTask || ''}`).join(", ") : "Ingen fasit";
+  
+  // Send hele konteksten fra fasiten slik at KI kan gjette smartere
+  const rubricContext = rubric 
+    ? rubric.criteria.map(c => `- [${c.taskNumber}${c.subTask || ''}]: ${c.description.substring(0, 100)}`).join("\n") 
+    : "Ingen fasit lastet opp ennå.";
 
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
@@ -30,20 +34,19 @@ export const transcribeAndAnalyzeImage = async (page: Page, rubric?: Rubric | nu
       ],
     },
     config: { 
-      systemInstruction: `ANALYSE v4.20.0 - FYSISK PIPELINE:
-DU ER EN EKSPERT PÅ DOKUMENTANALYSE OG OCR.
+      systemInstruction: `DOKUMENTANALYSE v5.0.0 - CONTEXT-AWARE MAPPING:
+DU ER EN EKSPERT PÅ Å TOLKE SKANNEDE ELEVBESVARELSER.
 
-HOVEDOPPGAVE:
-1. IDENTIFISER LAYOUT: Er dette en enkel A4-side eller et A3-oppslag (to spalter/sider)?
-2. IDENTIFISER ROTASJON: Er teksten opp-ned eller sidelengs? Returner rotasjon (0, 90, 180, 270) som trengs for å få teksten RETT VEI.
-3. A3 REGLER: Hvis det er et A3-oppslag, SKAL du returnere TO (2) objekter i JSON-listen:
-   - Ett objekt med sideInSpread: "LEFT"
-   - Ett objekt med sideInSpread: "RIGHT"
-   - Begge skal ha layoutType: "A3_SPREAD".
-4. ID-PRIORITET: Tabellen øverst til høyre ('Kandidatnr' og 'sidenummer') har absolutt prioritet.
-5. MATEMATIKK: Bruk LaTeX med aligned-miljøer for alle utregninger.
+GYLDIG RETTEMANUAL (WHITELIST):
+${rubricContext}
 
-FASIT-LISTE: [${rubricList}]`,
+STRENGE REGLER FOR KATEGORISERING:
+1. KUN oppgaver som finnes i whitelisten over er tillatt i 'identifiedTasks'.
+2. EVIDENCE-BASED MAPPING: Se på hva eleven faktisk har skrevet. Hvis eleven skriver "Oppgave 1" og innholdet ligner på beskrivelsen for [1A] i fasiten, kategoriser som [1A].
+3. FORBUD MOT STØY: Punktlister (i, ii, iii) eller (1, 2, 3) inne i en tekst er IKKE egne oppgaver. De skal kun transkriberes i 'fullText'.
+4. Hvis du er usikker eller oppgaven mangler i fasiten, sett "UKJENT". ALDRI finn på nye oppgavenummer som f.eks. "1I" eller "1III".
+
+MATEMATIKK: Bruk LaTeX aligned.`,
       thinkingConfig: { thinkingBudget: 16000 },
       responseMimeType: "application/json",
       responseSchema: {
@@ -54,8 +57,9 @@ FASIT-LISTE: [${rubricList}]`,
             layoutType: { type: Type.STRING, enum: ["A4_SINGLE", "A3_SPREAD"] },
             sideInSpread: { type: Type.STRING, enum: ["LEFT", "RIGHT"] },
             candidateId: { type: Type.STRING },
-            fullText: { type: Type.STRING, description: "LaTeX-transkripsjon. Ingen systemtekst." },
-            rotation: { type: Type.INTEGER, description: "Grader (0, 90, 180, 270) for å få bildet rett vei." },
+            part: { type: Type.STRING, enum: ["Del 1", "Del 2"] },
+            fullText: { type: Type.STRING },
+            rotation: { type: Type.INTEGER },
             identifiedTasks: { 
               type: Type.ARRAY, 
               items: { 
@@ -80,27 +84,35 @@ FASIT-LISTE: [${rubricList}]`,
 
 export const analyzeTextContent = async (text: string, rubric?: Rubric | null): Promise<any> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const rubricList = rubric ? rubric.criteria.map(c => `${c.taskNumber}${c.subTask || ''}`).join(", ") : "Ingen fasit";
+  const rubricContext = rubric 
+    ? rubric.criteria.map(c => `- [${c.taskNumber}${c.subTask || ''}]: ${c.description.substring(0, 100)}`).join("\n") 
+    : "Ingen fasit lastet opp ennå.";
   
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
-    contents: { 
-      parts: [
-        { text: `DOKUMENTINNHOLD SOM SKAL ANALYSERES:\n---\n${text}\n---` }
-      ] 
-    },
+    contents: { parts: [{ text: `DOKUMENT SOM SKAL ANALYSERES:\n\n${text.substring(0, 10000)}` }] },
     config: { 
-      systemInstruction: `Digital tekst-analyse v4.14.0. 
-DU SKAL PAKKE UT DATA FRA DEN VEDLAGTE TEKSTEN TIL JSON.
-1. Finn Kandidatnr (KUN siffer).
-2. Identifiser oppgaver basert på fasit: [${rubricList}].
-3. 'fullText'-feltet skal inneholde ELEVENS TEKST formatert med LaTeX.`,
-      thinkingConfig: { thinkingBudget: 4000 },
+      systemInstruction: `DIGITAL ANALYSE v5.0.0 - CONTEXT-AWARE MAPPING:
+
+GYLDIG RETTEMANUAL (WHITELIST):
+${rubricContext}
+
+STRENGE REGLER:
+- Du har KUN lov til å identifisere oppgaver som finnes i listen over.
+- Bruk teksten i besvarelsen til å gjette hvilken oppgave det er. Hvis teksten handler om det samme som beskrivelsen i fasiten, velg den oppgaven.
+- ROMERTALL (i, ii, iii) er punkttegn, ALDRI egne oppgaver.
+- Hvis usikker, sett "UKJENT".
+
+HEURISTIKK: Word-filer er nesten alltid "Del 2".
+
+MATEMATIKK: Bruk LaTeX aligned.`,
+      thinkingConfig: { thinkingBudget: 16000 },
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
         properties: {
-          candidateId: { type: Type.STRING },
+          candidateId: { type: Type.STRING, description: "Kun siffer fra kandidatnummeret." },
+          part: { type: Type.STRING, enum: ["Del 2", "Del 1"], description: "Default til 'Del 2' for Word-filer." },
           fullText: { type: Type.STRING },
           identifiedTasks: { 
             type: Type.ARRAY, 
@@ -113,7 +125,7 @@ DU SKAL PAKKE UT DATA FRA DEN VEDLAGTE TEKSTEN TIL JSON.
             } 
           }
         },
-        required: ["fullText", "identifiedTasks"]
+        required: ["candidateId", "part", "fullText", "identifiedTasks"]
       }
     }
   });
@@ -123,15 +135,12 @@ DU SKAL PAKKE UT DATA FRA DEN VEDLAGTE TEKSTEN TIL JSON.
 export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promise<Rubric> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const parts = taskFiles.map(f => {
-    if (f.mimeType === 'text/plain') {
-      return { text: `TEKST FRA OPPGAVEFIL (${f.fileName}):\n${f.transcription}` };
-    }
+    if (f.mimeType === 'text/plain') return { text: `TEKST FRA OPPGAVEFIL (${f.fileName}):\n${f.transcription}` };
     return { inlineData: { mimeType: f.mimeType, data: f.base64Data } };
   });
-  
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
-    contents: { parts: [...parts, { text: "Generer en strukturert rettemanual basert på oppgavearkene. Bruk LaTeX for alle utregninger. Hver deloppgave skal ha maks 2 poeng." }] },
+    contents: { parts: [...parts, { text: "Generer en strukturert rettemanual. Bruk LaTeX aligned for utregninger." }] },
     config: { 
       thinkingConfig: { thinkingBudget: 16000 },
       responseMimeType: "application/json",
@@ -150,9 +159,7 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promi
                 part: { type: Type.STRING },
                 description: { type: Type.STRING },
                 suggestedSolution: { type: Type.STRING },
-                commonErrors: { type: Type.STRING },
-                maxPoints: { type: Type.NUMBER },
-                tema: { type: Type.STRING }
+                maxPoints: { type: Type.NUMBER }
               },
               required: ["taskNumber", "subTask", "part", "description", "suggestedSolution", "maxPoints"]
             }
@@ -162,16 +169,8 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promi
       }
     }
   });
-  
   const rubric = JSON.parse(cleanJson(response.text)) as Rubric;
-  
-  if (rubric && rubric.criteria && Array.isArray(rubric.criteria)) {
-    rubric.totalMaxPoints = rubric.criteria.reduce((acc, c) => acc + (c.maxPoints || 0), 0);
-  } else {
-    rubric.totalMaxPoints = 0;
-    rubric.criteria = [];
-  }
-  
+  rubric.totalMaxPoints = rubric.criteria.reduce((acc, c) => acc + (c.maxPoints || 0), 0);
   return rubric;
 };
 
@@ -181,10 +180,7 @@ export const evaluateCandidate = async (candidate: Candidate, rubric: Rubric): P
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
     contents: `Vurder besvarelsen mot manualen:\n${JSON.stringify(rubric)}\n\nELEV:\n${content}`,
-    config: { 
-      thinkingConfig: { thinkingBudget: 24000 },
-      responseMimeType: "application/json" 
-    }
+    config: { thinkingBudget: 24000 }, responseMimeType: "application/json" }
   });
   return JSON.parse(cleanJson(response.text));
 };
@@ -193,11 +189,8 @@ export const reconcileProjectData = async (project: Project): Promise<any> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
-    contents: `Rydd i kandidat-IDer og oppgaver. Slå sammen duplikater.\nPROSJEKT: ${JSON.stringify(project.candidates.map(c => ({ id: c.id, pages: c.pages.length })))}`,
-    config: { 
-      thinkingConfig: { thinkingBudget: 8000 },
-      responseMimeType: "application/json" 
-    }
+    contents: `Rydd i kandidat-IDer. PROSJEKT: ${JSON.stringify(project.candidates.map(c => ({ id: c.id, pages: c.pages.length })))}`,
+    config: { thinkingBudget: 8000 }, responseMimeType: "application/json" }
   });
   return JSON.parse(cleanJson(response.text));
 };

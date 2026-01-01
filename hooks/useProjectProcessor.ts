@@ -1,8 +1,8 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Project, Page, Candidate, IdentifiedTask } from '../types';
 import { processFileToImages, splitA3Spread, processImageRotation } from '../services/fileService';
-import { getMedia, saveMedia, saveCandidate } from '../services/storageService';
+import { getMedia, saveMedia, saveCandidate, saveProject } from '../services/storageService';
 import { 
   transcribeAndAnalyzeImage, 
   analyzeTextContent, 
@@ -21,10 +21,24 @@ const sanitizeTaskPart = (val: string | undefined): string => {
   return cleaned;
 };
 
-const getNormalizedTaskKey = (task: string, sub: string): string => {
-  const cleanTask = task.replace(/\D/g, ''); 
-  const cleanSub = sub.replace(/[^A-Z0-9]/gi, '').toUpperCase(); 
-  return `${cleanTask}${cleanSub}`;
+/**
+ * HARD WHITELISTING v4.95.1
+ * Fjerner oppgaver som ikke finnes i rettemanualen eller som er romertall-støy.
+ */
+const filterTasksAgainstRubric = (tasks: IdentifiedTask[], project: Project | null): IdentifiedTask[] => {
+  if (!project || !project.rubric) return tasks;
+  const validTasks = new Set(project.rubric.criteria.map(c => `${c.taskNumber}${c.subTask || ''}`.toUpperCase()));
+  
+  return tasks.filter(t => {
+    const taskKey = `${t.taskNumber}${t.subTask || ''}`.toUpperCase();
+    
+    // Forkast romertall-støy (i, ii, iii, iv, v, vi, vii, viii, ix, x)
+    const isRoman = /^[IVXLCDM]+$/.test(t.subTask?.toUpperCase() || "");
+    if (isRoman && !validTasks.has(taskKey)) return false;
+
+    // Kun behold hvis den finnes i whitelisten
+    return validTasks.has(taskKey);
+  });
 };
 
 const createThumbnailFromBase64 = async (base64: string): Promise<string> => {
@@ -54,9 +68,240 @@ export const useProjectProcessor = (
   const [batchCompleted, setBatchCompleted] = useState(0);
   const [currentAction, setCurrentAction] = useState<string>('');
   const [rubricStatus, setRubricStatus] = useState<{ loading: boolean; text: string }>({ loading: false, text: '' });
+  
+  const isBatchProcessing = useRef(false);
 
-  const updateActiveProject = (updates: Partial<Project>) => {
+  const updateActiveProject = useCallback((updates: Partial<Project>) => {
     setActiveProject(prev => prev ? { ...prev, ...updates, updatedAt: Date.now() } : null);
+  }, [setActiveProject]);
+
+  const integratePageResults = async (originalPage: Page, results: any[]) => {
+    const isDigital = originalPage.mimeType === 'text/plain';
+    const processedPages: Page[] = [];
+
+    if (!isDigital) {
+      const originalMedia = await getMedia(originalPage.id);
+      if (!originalMedia) return;
+
+      for (const res of results) {
+        const rawTasks = (res.identifiedTasks || []).map((t: any) => ({
+          taskNumber: sanitizeTaskPart(t.taskNumber),
+          subTask: sanitizeTaskPart(t.subTask)
+        }));
+        
+        // HARD WHITELISTING
+        const tasks = filterTasksAgainstRubric(rawTasks, activeProject);
+        
+        let candRaw = String(res.candidateId || "UKJENT").trim().toUpperCase();
+        let candidateId = candRaw.replace(/\D/g, '');
+        if (!candidateId || candRaw.includes("UKJENT")) candidateId = "UKJENT";
+
+        if (res.layoutType === 'A3_SPREAD' && res.sideInSpread) {
+          const split = await splitA3Spread(originalMedia, res.sideInSpread as 'LEFT' | 'RIGHT', res.rotation || 0);
+          const newId = `${originalPage.id}_${res.sideInSpread}`;
+          await saveMedia(newId, split.fullRes);
+          const newThumb = await createThumbnailFromBase64(split.fullRes);
+          processedPages.push({ 
+            ...originalPage, 
+            id: newId, 
+            fileName: res.sideInSpread === 'LEFT' ? 'Side A' : 'Side B',
+            imagePreview: newThumb, 
+            candidateId, 
+            part: res.part || originalPage.part || "Del 1",
+            transcription: res.fullText, 
+            identifiedTasks: tasks, 
+            rotation: 0,
+            status: 'completed' 
+          });
+        } else {
+          let finalImage = originalMedia;
+          let finalThumb = originalPage.imagePreview;
+          if (res.rotation && res.rotation !== 0) {
+            finalImage = await processImageRotation(originalMedia, res.rotation);
+            await saveMedia(originalPage.id, finalImage);
+            finalThumb = await createThumbnailFromBase64(finalImage);
+          }
+          processedPages.push({ 
+            ...originalPage, 
+            imagePreview: finalThumb, 
+            candidateId, 
+            part: res.part || originalPage.part || "Del 1",
+            transcription: res.fullText, 
+            identifiedTasks: tasks, 
+            rotation: 0,
+            status: 'completed' 
+          });
+        }
+      }
+    } else {
+      for (const res of results) {
+        const rawTasks = (res.identifiedTasks || []).map((t: any) => ({
+          taskNumber: sanitizeTaskPart(t.taskNumber),
+          subTask: sanitizeTaskPart(t.subTask)
+        }));
+
+        // HARD WHITELISTING
+        const tasks = filterTasksAgainstRubric(rawTasks, activeProject);
+        
+        let candRaw = String(res.candidateId || "UKJENT").trim().toUpperCase();
+        let candidateId = candRaw.replace(/\D/g, '');
+        if (!candidateId || candRaw.includes("UKJENT")) candidateId = "UKJENT";
+        
+        processedPages.push({ 
+          ...originalPage, 
+          candidateId, 
+          part: res.part || originalPage.part || "Del 2", 
+          transcription: res.fullText, 
+          identifiedTasks: tasks, 
+          status: 'completed' 
+        });
+      }
+    }
+
+    // ATOMISK OPPDATERING
+    setActiveProject(prev => {
+      if (!prev) return null;
+      const updatedCands = [...prev.candidates];
+      
+      processedPages.forEach(p => {
+        const isUnknown = p.candidateId === "UKJENT";
+        const storageId = isUnknown ? `UKJENT_${p.id}` : p.candidateId!;
+        const displayName = isUnknown ? `Ukjent (${p.fileName})` : `Kandidat ${p.candidateId}`;
+        
+        let cIdx = updatedCands.findIndex(c => String(c.id) === storageId);
+        
+        if (cIdx === -1) {
+          const newC: Candidate = { id: storageId, projectId: prev.id, name: displayName, pages: [p], status: 'completed' };
+          updatedCands.push(newC);
+          saveCandidate(newC);
+        } else {
+          const pageExists = updatedCands[cIdx].pages.some(ex => ex.id === p.id);
+          if (!pageExists) {
+            updatedCands[cIdx] = { ...updatedCands[cIdx], pages: [...updatedCands[cIdx].pages, p].sort((a,b) => (a.pageNumber || 0) - (b.pageNumber || 0)) };
+          } else {
+            updatedCands[cIdx] = { ...updatedCands[cIdx], pages: updatedCands[cIdx].pages.map(ex => ex.id === p.id ? p : ex).sort((a,b) => (a.pageNumber || 0) - (b.pageNumber || 0)) };
+          }
+          saveCandidate(updatedCands[cIdx]);
+        }
+      });
+
+      const updatedUnprocessed = (prev.unprocessedPages || []).filter(up => up.id !== originalPage.id);
+      const newProject = { ...prev, candidates: updatedCands, unprocessedPages: updatedUnprocessed };
+      saveProject(newProject);
+      return newProject;
+    });
+  };
+
+  const processSinglePage = async (page: Page, rubric: any) => {
+    try {
+      setActiveProject(prev => prev ? ({
+        ...prev,
+        unprocessedPages: (prev.unprocessedPages || []).map(p => p.id === page.id ? { ...p, status: 'processing' } : p)
+      }) : null);
+
+      setCurrentAction(`Analyserer ${page.fileName}...`);
+      
+      if (page.mimeType === 'text/plain') {
+        const textToAnalyze = page.transcription || page.rawText || "";
+        const res = await analyzeTextContent(textToAnalyze, rubric);
+        await integratePageResults(page, [res]);
+      } else {
+        const media = await getMedia(page.id);
+        if (!media) throw new Error("Media missing");
+        const results = await transcribeAndAnalyzeImage({ ...page, base64Data: media.split(',')[1] || "" }, rubric);
+        await integratePageResults(page, results);
+      }
+    } catch (e) {
+      console.error("Prosessering feilet:", page.fileName, e);
+      setActiveProject(prev => prev ? ({ 
+        ...prev, 
+        unprocessedPages: (prev.unprocessedPages || []).map(p => p.id === page.id ? { ...p, status: 'error' } : p) 
+      }) : null);
+    } finally { 
+      setBatchCompleted(prev => prev + 1);
+      setProcessingCount(prev => Math.max(0, prev - 1)); 
+    }
+  };
+
+  useEffect(() => {
+    const pendingPages = activeProject?.unprocessedPages?.filter(p => p.status === 'pending') || [];
+    
+    if (activeProject?.rubric && pendingPages.length > 0 && !isBatchProcessing.current) {
+      isBatchProcessing.current = true;
+      const rubric = activeProject.rubric;
+      
+      setBatchTotal(pendingPages.length);
+      setBatchCompleted(0);
+      setProcessingCount(pendingPages.length);
+
+      const runBatch = async () => {
+        for (const p of pendingPages) {
+          await processSinglePage(p, rubric);
+        }
+        isBatchProcessing.current = false;
+        setCurrentAction('');
+      };
+      runBatch();
+    }
+  }, [activeProject?.rubric, activeProject?.unprocessedPages?.length]);
+
+  const handleTaskFileSelect = async (files: FileList) => {
+    if (!activeProject) return;
+    const fileList = Array.from(files);
+    setBatchTotal(fileList.length);
+    setBatchCompleted(0);
+    const allPages: Page[] = [];
+    for (const f of fileList) {
+      const pages = await processFileToImages(f);
+      allPages.push(...pages);
+      setBatchCompleted(prev => prev + 1);
+    }
+    updateActiveProject({ taskFiles: [...activeProject.taskFiles, ...allPages] });
+  };
+
+  const handleCandidateFileSelect = async (files: FileList) => {
+    if (!activeProject) return;
+    const fileList = Array.from(files);
+    let allPages: Page[] = [];
+    for (const f of fileList) {
+      const pgs = await processFileToImages(f);
+      allPages = [...allPages, ...pgs];
+    }
+    updateActiveProject({ unprocessedPages: [...(activeProject.unprocessedPages || []), ...allPages] });
+  };
+
+  const handleGenerateRubric = async (overrideProject?: Project) => {
+    const proj = overrideProject || activeProject;
+    if (!proj || proj.taskFiles.length === 0) return;
+    setRubricStatus({ loading: true, text: 'Genererer rettemanual...' });
+    try {
+      const taskFilesWithMedia = await Promise.all(proj.taskFiles.map(async f => ({ 
+        ...f, 
+        base64Data: f.mimeType !== 'text/plain' ? (await getMedia(f.id))?.split(',')[1] || "" : ""
+      })));
+      const rubric = await generateRubricFromTaskAndSamples(taskFilesWithMedia);
+      updateActiveProject({ rubric });
+    } catch (e) { 
+      console.error(e); 
+    } finally { 
+      setRubricStatus({ loading: false, text: '' }); 
+    }
+  };
+
+  const handleEvaluateAll = async () => {
+    if (!activeProject?.rubric) return;
+    setRubricStatus({ loading: true, text: 'Vurderer besvarelser...' });
+    const cands = [...activeProject.candidates];
+    for (let i = 0; i < cands.length; i++) {
+      if (cands[i].status === 'evaluated') continue;
+      setCurrentAction(`Vurderer ${cands[i].name}...`);
+      const res = await evaluateCandidate(cands[i], activeProject.rubric);
+      cands[i] = { ...cands[i], evaluation: res, status: 'evaluated' };
+      await saveCandidate(cands[i]);
+      setActiveProject(prev => prev ? { ...prev, candidates: [...cands] } : null);
+    }
+    setRubricStatus({ loading: false, text: '' });
+    setCurrentAction('');
   };
 
   const handleSmartCleanup = async () => {
@@ -82,196 +327,10 @@ export const useProjectProcessor = (
     } catch (e) { console.error(e); } finally { setRubricStatus({ loading: false, text: '' }); }
   };
 
-  const integratePageResults = async (originalPage: Page, results: any[]) => {
-    if (!activeProject) return;
-    const processedPages: Page[] = [];
-    const originalMedia = await getMedia(originalPage.id);
-    const validTaskKeys = new Set(activeProject.rubric?.criteria.map(c => 
-      getNormalizedTaskKey(c.taskNumber, c.subTask || "")
-    ));
-
-    for (const res of results) {
-      const tasks = (res.identifiedTasks || []).map((t: any) => {
-        const tNum = sanitizeTaskPart(t.taskNumber);
-        const tSub = sanitizeTaskPart(t.subTask);
-        const key = getNormalizedTaskKey(tNum, tSub);
-        if (activeProject.rubric && !validTaskKeys.has(key)) {
-          const splitMatch = tNum.match(/^(\d+)([A-Z])?$/);
-          if (splitMatch) {
-            const newKey = getNormalizedTaskKey(splitMatch[1], splitMatch[2] || tSub);
-            if (validTaskKeys.has(newKey)) return { taskNumber: splitMatch[1], subTask: splitMatch[2] || tSub };
-          }
-          return { taskNumber: tNum, subTask: "UKJENT" };
-        }
-        return { taskNumber: tNum, subTask: tSub };
-      });
-
-      if (res.layoutType === 'A3_SPREAD' && res.sideInSpread && originalMedia) {
-        // FYSISK SPLITTING OG ROTASJON
-        const split = await splitA3Spread(originalMedia, res.sideInSpread as 'LEFT' | 'RIGHT', res.rotation || 0);
-        const newId = `${originalPage.id}_${res.sideInSpread}`;
-        await saveMedia(newId, split.fullRes);
-        const newThumb = await createThumbnailFromBase64(split.fullRes);
-        processedPages.push({ 
-          ...originalPage, 
-          id: newId, 
-          imagePreview: newThumb, 
-          candidateId: String(res.candidateId || "Ukjent").replace(/\D/g, ''), 
-          transcription: res.fullText, 
-          identifiedTasks: tasks, 
-          rotation: 0, // Allerede rotert fysisk
-          status: 'completed' 
-        });
-      } else {
-        // FYSISK ROTASJON FOR ENKELTSIDER
-        let finalImage = originalMedia;
-        let finalThumb = originalPage.imagePreview;
-        if (res.rotation && res.rotation !== 0 && originalMedia) {
-          finalImage = await processImageRotation(originalMedia, res.rotation);
-          await saveMedia(originalPage.id, finalImage);
-          finalThumb = await createThumbnailFromBase64(finalImage);
-        }
-        processedPages.push({ 
-          ...originalPage, 
-          imagePreview: finalThumb, 
-          candidateId: String(res.candidateId || "Ukjent").replace(/\D/g, ''), 
-          transcription: res.fullText, 
-          identifiedTasks: tasks, 
-          rotation: 0, // Allerede rotert fysisk
-          status: 'completed' 
-        });
-      }
-    }
-
-    setActiveProject(prev => {
-      if (!prev) return null;
-      let cands = [...prev.candidates];
-      processedPages.forEach(p => {
-        let cIdClean = p.candidateId || "Ukjent";
-        let cIdx = cands.findIndex(c => String(c.id) === cIdClean);
-        if (cIdx === -1) {
-          const newC: Candidate = { id: cIdClean, projectId: prev.id, name: `Kandidat ${cIdClean}`, pages: [p], status: 'completed' };
-          cands.push(newC);
-          saveCandidate(newC);
-        } else {
-          const pageExists = cands[cIdx].pages.some(existing => existing.id === p.id);
-          if (!pageExists) {
-            cands[cIdx] = { ...cands[cIdx], pages: [...cands[cIdx].pages, p].sort((a,b) => (a.pageNumber || 0) - (b.pageNumber || 0)) };
-          } else {
-            cands[cIdx] = { ...cands[cIdx], pages: cands[cIdx].pages.map(existing => existing.id === p.id ? p : existing).sort((a,b) => (a.pageNumber || 0) - (b.pageNumber || 0)) };
-          }
-          saveCandidate(cands[cIdx]);
-        }
-      });
-      return { ...prev, candidates: cands, unprocessedPages: prev.unprocessedPages?.filter(up => up.id !== originalPage.id) };
-    });
-  };
-
-  const processSinglePage = async (page: Page) => {
-    try {
-      setCurrentAction(`Analyserer ${page.fileName}...`);
-      if (page.mimeType === 'text/plain') {
-        const res = await analyzeTextContent(page.transcription!, activeProject?.rubric);
-        await integratePageResults(page, [res]);
-      } else {
-        const media = await getMedia(page.id);
-        const results = await transcribeAndAnalyzeImage({ ...page, base64Data: media?.split(',')[1] || "" }, activeProject?.rubric);
-        await integratePageResults(page, results);
-      }
-      setBatchCompleted(prev => prev + 1);
-    } catch (e) {
-      console.error(e);
-      setActiveProject(prev => prev ? ({ ...prev, unprocessedPages: prev.unprocessedPages?.map(p => p.id === page.id ? { ...p, status: 'error' } : p) }) : null as any);
-    } finally { setProcessingCount(prev => Math.max(0, prev - 1)); }
-  };
-
-  useEffect(() => {
-    if (activeProject?.rubric && (activeProject.unprocessedPages || []).some(p => p.status === 'pending') && processingCount === 0) {
-      const pendingPages = activeProject.unprocessedPages!.filter(p => p.status === 'pending');
-      if (pendingPages.length > 0) {
-        setBatchTotal(prev => prev + pendingPages.length);
-        setProcessingCount(pendingPages.length);
-        pendingPages.forEach(p => processSinglePage(p));
-      }
-    }
-  }, [activeProject?.rubric]);
-
-  const handleTaskFileSelect = async (files: FileList) => {
-    if (!activeProject) return;
-    const fileList = Array.from(files);
-    setBatchTotal(fileList.length);
-    setProcessingCount(fileList.length);
-    const allPages: Page[] = [];
-    for (const f of fileList) {
-      const pages = await processFileToImages(f);
-      allPages.push(...pages);
-      setBatchCompleted(prev => prev + 1);
-    }
-    const updated = { ...activeProject, taskFiles: [...activeProject.taskFiles, ...allPages] };
-    setActiveProject(updated);
-    await handleGenerateRubric(updated);
-  };
-
-  const handleCandidateFileSelect = async (files: FileList) => {
-    if (!activeProject) return;
-    const fileList = Array.from(files);
-    let allPages: Page[] = [];
-    for (const f of fileList) {
-      const pgs = await processFileToImages(f);
-      allPages = [...allPages, ...pgs];
-    }
-    
-    updateActiveProject({ unprocessedPages: [...(activeProject.unprocessedPages || []), ...allPages] });
-    
-    if (activeProject.rubric) {
-        setBatchTotal(allPages.length);
-        setBatchCompleted(0);
-        setProcessingCount(allPages.length);
-        for (const p of allPages) { await processSinglePage(p); }
-        await handleSmartCleanup();
-    }
-  };
-
-  const handleGenerateRubric = async (overrideProject?: Project) => {
-    const proj = overrideProject || activeProject;
-    if (!proj || proj.taskFiles.length === 0) return;
-    setRubricStatus({ loading: true, text: 'Genererer rettemanual...' });
-    try {
-      const taskFilesWithMedia = await Promise.all(proj.taskFiles.map(async f => ({ ...f, base64Data: (await getMedia(f.id))?.split(',')[1] || "" })));
-      const rubric = await generateRubricFromTaskAndSamples(taskFilesWithMedia);
-      setActiveProject(prev => prev ? { ...prev, rubric } : null);
-      
-      setTimeout(() => {
-        setBatchTotal(0);
-        setBatchCompleted(0);
-      }, 1000);
-    } catch (e) { 
-      console.error(e); 
-    } finally { 
-      setRubricStatus({ loading: false, text: '' }); 
-    }
-  };
-
-  const handleEvaluateAll = async () => {
-    if (!activeProject?.rubric) return;
-    setRubricStatus({ loading: true, text: 'Vurderer besvarelser...' });
-    const cands = [...activeProject.candidates];
-    for (let i = 0; i < cands.length; i++) {
-      if (cands[i].status === 'evaluated') continue;
-      setCurrentAction(`Vurderer ${cands[i].name}...`);
-      const res = await evaluateCandidate(cands[i], activeProject.rubric);
-      cands[i] = { ...cands[i], evaluation: res, status: 'evaluated' };
-      saveCandidate(cands[i]);
-      setActiveProject(prev => prev ? { ...prev, candidates: [...cands] } : null);
-    }
-    setRubricStatus({ loading: false, text: '' });
-    setCurrentAction('');
-  };
-
   return { 
     processingCount, batchTotal, batchCompleted, currentAction, rubricStatus, 
     handleTaskFileSelect, handleCandidateFileSelect,
-    handleEvaluateAll, handleGenerateRubric, handleRetryPage: processSinglePage, 
+    handleEvaluateAll, handleGenerateRubric, handleRetryPage: (p: Page) => processSinglePage(p, activeProject?.rubric), 
     handleSmartCleanup, updateActiveProject 
   };
 };
