@@ -1,6 +1,6 @@
-# Teknisk Standard & Algoritmer (v5.5.7)
+# Teknisk Standard & Algoritmer (v5.5.9)
 
-Dette dokumentet er systemets "Grunnlov". Ved alle fremtidige oppdateringer SKAL disse 21 reglene følges for å hindre regresjon og funksjonell degenerasjon.
+Dette dokumentet er systemets "Grunnlov". Ved alle fremtidige oppdateringer SKAL disse 23 reglene følges for å hindre regresjon og funksjonell degenerasjon.
 
 ## 1. Bildebehandling: "Rotate-then-Bisect"
 **CRITICAL: REGRESSION_GUARD** - Rekkefølgen her er matematisk låst:
@@ -22,7 +22,7 @@ Dette dokumentet er systemets "Grunnlov". Ved alle fremtidige oppdateringer SKAL
 * **Regel:** React-tilstand (state) skal kun oppdateres ETTER at database-skriving (IndexedDB) er bekreftet (`await`). Dette forhindrer tap av elevdata ved rask prosessering.
 
 ## 5. Rubric-Strict Whitelisting
-* **Regel:** Systemet skal kun identifisere oppgaver som finnes i den opplastede rettemanualen. Alt annet markeres som "UKJENT". Dette fjerner støy-oppgaver som "1I" eller "1III" generert fra punktlister.
+* **Regel:** Systemet skal kun identifisere oppgaver som finnes i den opplastede rettemanualen. Alt annet markeres som "UKJENT". Dette fjerner støy-oppgaver som "1I" eller "1III" generert fra punkt lister.
 
 ## 6. Deep Word Extraction (XML Headers)
 * **Regel:** For Word-filer (.docx) skal tekst hentes fra `word/header*.xml` via `jszip` i tillegg til hovedinnholdet. Dette er kritisk for å fange opp Kandidatnummer som ligger i toppteksten.
@@ -77,5 +77,11 @@ Dette dokumentet er systemets "Grunnlov". Ved alle fremtidige oppdateringer SKAL
 ## 20. Visual Evidence Separation
 * **Regel:** All transkribert data fra bilder (CAS-utklipp, grafer, geometriske figurer) skal lagres i feltet `visualEvidence` separat fra `transcription`. Dette gjelder både for skannede besvarelser og digitale dokumenter med innlimte bilder.
 
-## 21. CAS Mandatory Reconstruction (v5.5.7 Updated)
-* **Regel:** All digital bevisføring (CAS/GeoGebra) SKAL rekonstrueres i et teknisk format (linje-for-linje) i `visualEvidence`. Det er strengt forbudt å bare oppsummere innholdet; nøyaktige kommandoer og svar skal gjengis. I brukergrensesnittet skal dette feltet vises *integrert* i den blå transkripsjonsboksen for å sikre pedagogisk nærhet til elevens tekst.
+## 21. CAS Mandatory Reconstruction
+* **Regel:** All digital bevisføring (CAS/GeoGebra) SKAL rekonstrueres i et teknisk format (linje-for-linje) i `visualEvidence`. Det er strengt forbudt å bare oppsummere innholdet; nøyaktige kommandoer og svar skal gjengis.
+
+## 22. Interleaved Evidence Flow
+* **Regel:** For å sikre pedagogisk sammenheng SKAL visuelle bevis (CAS/Figurer) integreres direkte i `fullText` nøyaktig der de naturlig forekommer i besvarelsen ved bruk av tagen `[AI-TOLKNING AV FIGUR: ...]`. Dette sikrer at læreren ser beviset i kontekst av elevens øvrige tekst.
+
+## 23. Zero Conversational Filler
+* **Regel:** KI-en har et absolutt forbud mot å bruke naturlig språk ("forklarende tekst") for å beskrive sine handlinger, vurderinger eller mangler i transkripsjonsfeltene. Du skal være en "Silent Laborer". Ord som "refererer til", "indikerer", "sannsynligvis" eller "her er" skal ikke forekomme. Kun rådata (transkripsjon) og direkte rekonstruksjon (CAS) er tillatt.

@@ -8,9 +8,9 @@ export const Spinner: React.FC<{ size?: string; color?: string }> = ({ size = "w
 );
 
 /**
- * LatexRenderer v2.11: Forbedret for v5.5.0
- * Evidence Precision: Redesignet figurtolking for å vise linje-for-linje CAS-bevis.
- * Bruker nå en mer teknisk profil som ligner på terminal-output for digitalt arbeid.
+ * LatexRenderer v2.12: Forbedret for v5.5.8 "Interleaved Flow"
+ * Rendrer figur-bokser inline der de forekommer i tekststrømmen.
+ * Terminal-liknende profil for digitalt arbeid og CAS.
  */
 export const LatexRenderer: React.FC<{ content: string; className?: string }> = ({ content, className = "" }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -41,7 +41,8 @@ export const LatexRenderer: React.FC<{ content: string; className?: string }> = 
   }, [content]);
 
   const processContent = (text: string) => {
-    const figureRegex = /\[\s*(?:AI-TOLKNING AV FIGUR|FIGURTOLKNING|BESKRIVELSE AV BILDE)\s*:?\s*(.*?)\s*\]/gi;
+    // Regex som fanger opp ulike figur-tagger, nå inkludert inline i teksten
+    const figureRegex = /\[\s*(?:AI-TOLKNING AV FIGUR|FIGURTOLKNING|BESKRIVELSE AV BILDE|VISUAL-EVIDENCE)\s*:?\s*(.*?)\s*\]/gi;
     const parts = [];
     let lastIndex = 0;
     let match;
@@ -51,20 +52,29 @@ export const LatexRenderer: React.FC<{ content: string; className?: string }> = 
         parts.push(text.substring(lastIndex, match.index));
       }
       parts.push(
-        <div key={match.index} className="my-8 p-0 bg-slate-900 border-l-[6px] border-indigo-500 rounded-r-3xl shadow-2xl overflow-hidden ring-1 ring-white/10">
+        <div key={match.index} className="my-10 p-0 bg-slate-900 border-l-[6px] border-indigo-500 rounded-r-3xl shadow-2xl overflow-hidden ring-1 ring-white/10 animate-in fade-in zoom-in duration-300">
           <div className="bg-slate-800/80 px-6 py-3 flex items-center justify-between border-b border-white/5">
             <div className="text-[10px] font-black uppercase text-indigo-300 tracking-[0.2em] flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-pulse"></span>
               Visuelt bevis: CAS / Graf / Figur
             </div>
-            <div className="text-[8px] font-black text-slate-500 uppercase tracking-widest">v5.5.0 Precision</div>
+            <div className="text-[8px] font-black text-slate-500 uppercase tracking-widest">v5.5.8 Context Flow</div>
           </div>
-          <div className="p-7 text-[12px] text-slate-100 font-medium leading-[1.8] font-mono whitespace-pre-wrap">
-            {match[1].split('\n').map((line, i) => (
-              <div key={i} className={`flex gap-4 ${line.trim().startsWith('Linje') ? 'border-b border-white/5 pb-2 mb-2 last:border-0' : ''}`}>
-                <span className="flex-1">{line}</span>
-              </div>
-            ))}
+          <div className="p-8 text-[13px] text-slate-100 font-medium leading-[1.8] font-mono whitespace-pre-wrap">
+            {match[1].split('\n').map((line, i) => {
+              const trimmed = line.trim();
+              if (!trimmed) return <br key={i} />;
+              
+              // Marker CAS kommandoer (linjer som starter med $ eller In:)
+              const isCommand = /^(?:\$|In:|Linje|\d+:)/.test(trimmed);
+              const isResult = /^->/.test(trimmed);
+              
+              return (
+                <div key={i} className={`flex gap-4 ${isCommand ? 'text-indigo-300 mt-2 font-bold' : isResult ? 'text-emerald-400 pl-4 border-l border-white/10' : 'text-slate-300 opacity-80 italic'}`}>
+                  <span className="flex-1">{trimmed}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
       );

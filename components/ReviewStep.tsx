@@ -384,7 +384,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
               <header className="flex justify-between items-end mb-8">
                  <div>
                    <h2 className="text-3xl font-black text-slate-800 tracking-tighter">{currentReviewCandidate.name || 'Ukjent'}</h2>
-                   <p className="text-[10px] font-black uppercase text-indigo-500 tracking-[0.2em] mt-1">Kontrollerer transkripsjon v5.5.7</p>
+                   <p className="text-[10px] font-black uppercase text-indigo-500 tracking-[0.2em] mt-1">Kontrollerer transkripsjon v5.5.8</p>
                  </div>
               </header>
 
@@ -461,8 +461,8 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                             <div className="flex-1 relative z-10 custom-scrollbar overflow-y-auto">
                                {isEditing ? (
                                  <div className="flex flex-col gap-4 h-full">
-                                   <div className="flex-1">
-                                     <label className="text-[7px] font-black uppercase text-indigo-200 mb-1 block tracking-widest">Elevens Brødtekst</label>
+                                   <div className="flex-1 flex flex-col">
+                                     <label className="text-[7px] font-black uppercase text-indigo-200 mb-1 block tracking-widest">Hovedtranskripsjon (inkl. tagger for figur)</label>
                                      <textarea 
                                         autoFocus 
                                         value={p.transcription || ''} 
@@ -470,39 +470,40 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                                           const val = e.target.value;
                                           setActiveProject(prev => prev ? ({ ...prev, candidates: prev.candidates.map(c => c.id === currentReviewCandidate.id ? { ...c, pages: c.pages.map(pg => pg.id === p.id ? { ...pg, transcription: val } : pg) } : c) }) : null);
                                         }} 
-                                        className="w-full h-48 bg-indigo-700/40 text-white p-4 rounded-xl text-sm font-medium outline-none resize-none custom-scrollbar border border-indigo-500/30" 
+                                        className="w-full flex-1 bg-indigo-700/40 text-white p-4 rounded-xl text-sm font-medium outline-none resize-none custom-scrollbar border border-indigo-500/30" 
                                      />
                                    </div>
-                                   <div className="flex-1">
-                                     <label className="text-[7px] font-black uppercase text-indigo-200 mb-1 block tracking-widest">Visual Evidence (CAS / Figur)</label>
-                                     <textarea 
-                                        value={p.visualEvidence || ''} 
-                                        onChange={e => {
-                                          const val = e.target.value;
-                                          setActiveProject(prev => prev ? ({ ...prev, candidates: prev.candidates.map(c => c.id === currentReviewCandidate.id ? { ...c, pages: c.pages.map(pg => pg.id === p.id ? { ...pg, visualEvidence: val } : pg) } : c) }) : null);
-                                        }} 
-                                        className="w-full h-48 bg-slate-900/60 text-emerald-400 p-4 rounded-xl text-sm font-mono outline-none resize-none custom-scrollbar border border-indigo-500/30" 
-                                        placeholder="Rekonstruerte CAS-linjer..."
-                                     />
-                                   </div>
+                                   {p.visualEvidence && (
+                                     <div className="shrink-0">
+                                       <label className="text-[7px] font-black uppercase text-rose-300 mb-1 block tracking-widest">Legacy Bevisfelt (Vurder å flytte innholdet opp med tagen [AI-TOLKNING AV FIGUR: ...])</label>
+                                       <textarea 
+                                          value={p.visualEvidence || ''} 
+                                          onChange={e => {
+                                            const val = e.target.value;
+                                            setActiveProject(prev => prev ? ({ ...prev, candidates: prev.candidates.map(c => c.id === currentReviewCandidate.id ? { ...c, pages: c.pages.map(pg => pg.id === p.id ? { ...pg, visualEvidence: val } : pg) } : c) }) : null);
+                                          }} 
+                                          className="w-full h-24 bg-slate-900/60 text-slate-400 p-4 rounded-xl text-xs font-mono outline-none resize-none custom-scrollbar border border-rose-500/30" 
+                                       />
+                                     </div>
+                                   )}
                                  </div>
                                ) : (
                                  <div className="text-white space-y-6">
-                                   {/* VISUELT BEVISFELT INTEGRERT v5.5.7 */}
-                                   {p.visualEvidence && (
-                                     <div className="p-6 bg-slate-900 rounded-2xl border-l-4 border-indigo-500 shadow-lg animate-in slide-in-from-left-2 duration-300">
-                                       <div className="text-[8px] font-black uppercase text-indigo-400 tracking-[0.2em] mb-3 flex items-center gap-2">
-                                          <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
-                                          Transkribert CAS / Figurbevis
-                                       </div>
-                                       <div className="text-slate-100 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
-                                          {p.visualEvidence}
-                                       </div>
-                                     </div>
-                                   )}
-
                                    <div className="pl-1">
                                      <LatexRenderer content={p.transcription || ""} className="text-base text-white font-medium leading-relaxed" />
+                                     
+                                     {/* Viser legacy bevis kun hvis det ikke finnes tags i hovedteksten og beviset har innhold */}
+                                     {p.visualEvidence && !p.transcription?.includes('[AI-TOLKNING') && (
+                                        <div className="mt-8 p-6 bg-slate-900 rounded-2xl border-l-4 border-indigo-500 shadow-lg opacity-80">
+                                          <div className="text-[8px] font-black uppercase text-indigo-400 tracking-[0.2em] mb-3 flex items-center gap-2">
+                                             Legacy Bevis (Bør flyttes inline)
+                                          </div>
+                                          <div className="text-slate-100 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+                                             {p.visualEvidence}
+                                          </div>
+                                        </div>
+                                     )}
+
                                      {(!p.transcription || p.transcription.trim() === "") && !p.visualEvidence && (
                                        <div className="py-10 text-center opacity-40 italic font-black uppercase text-[9px] tracking-widest">Tom side</div>
                                      )}

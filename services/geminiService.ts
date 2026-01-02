@@ -30,23 +30,24 @@ export const transcribeAndAnalyzeImage = async (page: Page, rubric?: Rubric | nu
       parts: [{ inlineData: { mimeType: page.mimeType, data: page.base64Data || "" } }],
     },
     config: { 
-      systemInstruction: `EKSPERT PÅ ELEVBESVARELSER v5.5.7 "CAS Absolute Precision":
+      systemInstruction: `EKSPERT PÅ ELEVBESVARELSER v5.5.9 "Silent Laborer":
 
-1. ORIENTERING: Sjekk først om teksten står OPP-NED (180 grader).
+DU ER EN STUM ARBEIDER. DU SKAL KUN LEVERE RÅDATA. 
 
-2. VISUELLE BEVIS (CAS/GEOGEBRA/FIGUR):
-   - Dette er din VIKTIGSTE oppgave for poenggivning.
-   - Hvis bildet inneholder et CAS-utklipp, graf eller figur:
-   - Du SKAL utføre en nøyaktig linje-for-linje rekonstruksjon.
-   - DU SKAL IKKE OPPSUMMERE. Gjengi hver enkelt kommando og hvert enkelt svar nøyaktig.
-   - Bruk formatet: 
-     Linje 1: [Kommando] -> [Resultat]
-     Linje 2: ...
-   - Legg dette utelukkende i feltet 'visualEvidence'.
+1. FORBUD MOT FORKLARINGER: 
+   - IKKE bruk setninger som "Teksten refererer til...", "Dette indikerer...", "Her ser vi...".
+   - IKKE fortell læreren hva som mangler eller hva du tror.
+   - HVIS et bilde mangler, men er referert til, skriv KUN: [MANGLER VISUELT BEVIS]
 
-3. ELEVENS TEKST:
-   - Transkriber elevens håndskrevne tekst til 'fullText'.
-   - Bruk LaTeX aligned for alle utregninger.
+2. CAS-REKONSTRUKSJON:
+   - Integrer alle CAS-utklipp DIREKTE i 'fullText' ved bruk av tagen: [AI-TOLKNING AV FIGUR: <data>]
+   - FORMAT: Kun rå terminal-stil:
+     $1: f(x):=...
+     -> ...
+   - ALDRI forklar hva CAS-bildet viser i naturlig språk.
+
+3. ORIENTERING & LAYOUT:
+   - Sjekk først orientering (180 grader).
 
 4. WHITELIST:
 ${rubricContext}`,
@@ -96,10 +97,10 @@ export const analyzeTextContent = async (text: string, rubric?: Rubric | null): 
     model: 'gemini-3-pro-preview',
     contents: { parts: [{ text: `DOKUMENT:\n\n${text}` }] },
     config: { 
-      systemInstruction: `DIGITAL ANALYSE v5.5.7 "CAS-Hunter":
-1. CAS-IDENTIFISERING: Se etter blokker med kommandoer og svar (f.eks. f(x):=, Løs, $1, $2).
-2. REKONSTRUKSJON: Flytt ALL digital bevisføring fra brødteksten til 'visualEvidence' feltet. DU SKAL GJENGIE HVER LINJE NØYAKTIG.
-3. FORMAT: Bruk teknisk linje-for-linje oppstilling i 'visualEvidence'.
+      systemInstruction: `DIGITAL ANALYSE v5.5.9 "Silent Hunter":
+1. NULL PRATSOMHET: Fjern alle forklarende setninger om dokumentets innhold.
+2. CAS-INTEGRERING: Flytt blokker som ser ut som digital bevisføring inn i taggen [AI-TOLKNING AV FIGUR: ...] nøyaktig der de står.
+3. KUN RÅDATA: Lever kun transkripsjon og teknisk rekonstruksjon.
 4. WHITELIST:
 ${rubricContext}`,
       thinkingConfig: { thinkingBudget: 16000 },
@@ -178,14 +179,14 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promi
 
 export const evaluateCandidate = async (candidate: Candidate, rubric: Rubric): Promise<any> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const content = candidate.pages.map(p => `SIDE ${p.pageNumber}:\nTEKST:\n${p.transcription}\n\nVISUELLE BEVIS:\n${p.visualEvidence || 'Ingen'}`).join("\n\n---\n\n");
+  const content = candidate.pages.map(p => `SIDE ${p.pageNumber}:\nINNHOLD:\n${p.transcription}\n\nSEPARATE BEVIS (hvis noen):\n${p.visualEvidence || 'Ingen'}`).join("\n\n---\n\n");
   
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
-    contents: { parts: [{ text: `Vurder besvarelsen mot fasit. Bruk BÅDE tekst og visuelle bevis (CAS/Figurer).\n\nFASIT:\n${JSON.stringify(rubric)}\n\nELEV:\n${content}` }] },
+    contents: { parts: [{ text: `Vurder besvarelsen mot fasit. Innholdet inneholder både tekst og integrerte visuelle bevis (markerte med tagger).\n\nFASIT:\n${JSON.stringify(rubric)}\n\nELEV:\n${content}` }] },
     config: { 
-      systemInstruction: `PEDAGOGISK SENSOR v5.5.5:
-1. KILDE: Baser vurderingen KUN på det transkriberte innholdet (TEKST og VISUELLE BEVIS).
+      systemInstruction: `PEDAGOGISK SENSOR v5.5.8:
+1. KILDE: Baser vurderingen KUN på det transkriberte innholdet. Se spesielt etter tagger markerte som 'AI-TOLKNING AV FIGUR' for teknisk bevisføring.
 2. KOMMENTARPLIKT: Alle deloppgaver som ikke får FULL SCORE skal ha en begrunnelse.
 3. VEKSTPUNKTER: Lag 2-3 punkter.`,
       thinkingConfig: { thinkingBudget: 24000 },
