@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Project } from '../types';
 
@@ -23,7 +22,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         <div className="max-w-2xl">
           <h1 className="text-4xl md:text-5xl font-black text-slate-800 tracking-tighter">Vurderingshjelp</h1>
           <p className="text-slate-500 font-medium text-sm mt-4 leading-relaxed">
-            Digitalisering, gruppering og analyse av elevbesvarelser ved hjelp av Gemini 3 Pro.
+            Profesjonell digitalisering og analyse av elevbesvarelser.
           </p>
         </div>
         <div className="flex gap-3">
@@ -40,7 +39,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         {projects.length === 0 ? (
           <div className="col-span-full py-40 text-center opacity-20">
             <div className="text-6xl mb-4">📁</div>
-            <p className="font-black uppercase tracking-widest text-[10px]">Ingen prosjekter</p>
+            <p className="font-black uppercase tracking-widest text-[10px]">Ingen prosjekter ennå</p>
           </div>
         ) : (
           projects.map(p => (
@@ -48,19 +47,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <div className="absolute top-0 left-0 w-1.5 h-full bg-slate-50 group-hover:bg-indigo-600 transition-colors"></div>
               <h3 className="font-black text-lg mb-1 text-slate-800 truncate pr-6">{p.name}</h3>
               <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">{new Date(p.updatedAt).toLocaleDateString()}</p>
+              
               <div className="mt-6 flex justify-between items-center">
                 <span className="text-[8px] font-black bg-slate-50 px-2 py-0.5 rounded-md uppercase text-slate-500">{p.candidateCount || 0} elever</span>
                 <span className="text-indigo-600 font-black text-[10px] group-hover:translate-x-1 transition-transform">Åpne →</span>
               </div>
-              <button className="absolute top-6 right-6 opacity-0 group-hover:opacity-100 text-rose-300 hover:text-rose-500 transition-all" onClick={(e) => { e.stopPropagation(); if(confirm('Slette?')) onDeleteProject(p.id); }}>✕</button>
+              <button className="absolute top-6 right-6 opacity-0 group-hover:opacity-100 text-rose-300 hover:text-rose-500 transition-all" onClick={(e) => { e.stopPropagation(); if(confirm('Slette prosjekt?')) onDeleteProject(p.id); }}>✕</button>
             </div>
           ))
         )}
       </div>
-
-      <footer className="max-w-6xl mx-auto mt-20 pt-6 border-t border-slate-100 flex justify-between items-center opacity-40">
-        <span className="text-[9px] font-black uppercase tracking-[0.2em]">Versjon 4.6.3</span>
-      </footer>
 
       {showSettings && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100] flex items-center justify-center p-6 animate-in fade-in">
@@ -69,14 +65,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <h2 className="text-2xl font-black text-slate-800 mb-6">Informasjon</h2>
               <div className="space-y-6 text-sm text-slate-600 leading-relaxed overflow-y-auto max-h-[60vh] pr-2 custom-scrollbar">
                  <section>
-                   <h4 className="font-black uppercase text-[9px] tracking-widest text-indigo-600 mb-2">Compact Content Focus (v4.6.3)</h4>
-                   <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                     <p>Optimalisert utnyttelse av skjermflaten ved å redusere padding og hjørneradius i alle moduler. Dette minimerer unødvendig skrolling og gir bedre oversikt over komplekse oppgaver og resultatlister.</p>
-                   </div>
+                   <h4 className="font-black uppercase text-[9px] tracking-widest text-indigo-600 mb-2">Google Drive Arbeidsflyt</h4>
+                   <p className="bg-slate-50 p-4 rounded-xl border border-slate-100 text-[11px]">
+                     Når du laster opp besvarelser til Google Drive, kan du lime inn mappelinken i prosjektoppsettet for referanse. På grunn av personvern må filene lastes opp direkte i appen fra din lokale maskin for analyse.
+                   </p>
                  </section>
-              </div>
-              <div className="mt-8 pt-6 border-t border-slate-50 text-[9px] font-bold text-slate-300 uppercase tracking-widest">
-                <span>Versjon 4.6.3</span>
+                 <section>
+                   <h4 className="font-black uppercase text-[9px] tracking-widest text-indigo-600 mb-2">Teknisk Status</h4>
+                   <p className="text-[11px]">Versjon 5.1.4 - Stabilisert oppstart og importmap.</p>
+                 </section>
               </div>
            </div>
         </div>

@@ -1,5 +1,5 @@
 {
-  "name": "Vurdering - V2",
-  "description": "Profesjonelt verktøy for transkribering og vurdering av store mengder elevbesvarelser. Grupperer sider per kandidat og tillater manuell kontroll av rådata.",
+  "name": "Vurderingshjelp v5.1.9",
+  "description": "Profesjonelt verktøy for transkribering og vurdering. Fikset CORS og base-path problemer.",
   "requestFramePermissions": []
 }

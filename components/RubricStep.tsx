@@ -32,7 +32,9 @@ export const RubricStep: React.FC<RubricStepProps> = ({
     criteria.forEach(c => {
       const part = c.part || "Del 1";
       const groupKey = part.toLowerCase().includes("2") ? "Del 2" : "Del 1";
-      groups[groupKey].add(c.taskNumber || c.name);
+      // Sanitiserer taskNumber for visning i sidebar
+      const cleanNum = String(c.taskNumber || "").replace(/[^0-9]/g, '');
+      if (cleanNum) groups[groupKey].add(cleanNum);
     });
     
     return {
@@ -45,7 +47,8 @@ export const RubricStep: React.FC<RubricStepProps> = ({
     if (!selectedTask) return criteria;
     return criteria.filter(c => {
       const groupKey = (c.part || "Del 1").toLowerCase().includes("2") ? "Del 2" : "Del 1";
-      return (c.taskNumber || c.name) === selectedTask.num && groupKey === selectedTask.part;
+      const cleanNum = String(c.taskNumber || "").replace(/[^0-9]/g, '');
+      return cleanNum === selectedTask.num && groupKey === selectedTask.part;
     });
   }, [selectedTask, criteria]);
 
@@ -83,7 +86,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-[#F8FAFC]">
-      {/* SIDEBAR - Mer kompakt */}
+      {/* SIDEBAR - Gjenopprettet v3.23.0 standard */}
       <aside className="w-56 bg-white border-r flex flex-col shrink-0 no-print shadow-sm h-full">
         <div className="p-4 border-b bg-white/80 shrink-0">
           <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Rettemanual</h3>
@@ -145,7 +148,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
         </div>
       </aside>
 
-      {/* HOVEDINNHOLD - Redusert padding og tette bokser */}
+      {/* HOVEDINNHOLD */}
       <main className="flex-1 overflow-y-auto custom-scrollbar p-6 h-full bg-[#F8FAFC]">
         <div className="max-w-5xl mx-auto space-y-6 pb-20">
           
@@ -154,7 +157,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
             <div className="flex flex-col md:flex-row justify-between items-center gap-4">
               <div className="min-w-0 flex-1">
                 <h2 className="text-xl font-black text-slate-800 leading-tight tracking-tighter">
-                  <LatexRenderer content={activeProject.rubric.title} />
+                   {activeProject.rubric.title}
                 </h2>
                 <div className="flex gap-2 mt-2">
                    <span className="text-[9px] font-black text-indigo-500 uppercase tracking-[0.1em] bg-indigo-50 px-3 py-1 rounded-full border border-indigo-100">
@@ -170,114 +173,113 @@ export const RubricStep: React.FC<RubricStepProps> = ({
           </header>
 
           <div className="space-y-6">
-            {filteredCriteria.length === 0 ? (
-              <div className="p-10 text-center border-2 border-dashed rounded-2xl opacity-30">
-                <p className="font-black uppercase tracking-widest text-[10px]">Ingen kriterier funnet</p>
-              </div>
-            ) : (
-              filteredCriteria.map((crit) => {
-                const isEditingHeader = editingHeaderId === crit.name;
-                const isEditingSolution = editingId === crit.name;
-                const isEditingErrors = editingErrorsId === crit.name;
-                const isDel2 = crit.part?.toLowerCase().includes('2');
-                const badgeLabel = `${crit.taskNumber}${crit.subTask || ''}`.toUpperCase();
+            {filteredCriteria.map((crit) => {
+              const isEditingHeader = editingHeaderId === crit.name;
+              const isEditingSolution = editingId === crit.name;
+              const isEditingErrors = editingErrorsId === crit.name;
+              const isDel2 = crit.part?.toLowerCase().includes('2');
+              
+              // Badge-sanitering: KUN selve nummeret og bokstaven, ingenting mer.
+              const cleanNum = String(crit.taskNumber || "").replace(/[^0-9]/g, '');
+              const cleanSub = String(crit.subTask || "").toUpperCase().replace(/[^A-Z]/g, '');
+              const badgeLabel = `${cleanNum}${cleanSub}`;
 
-                return (
-                  <div key={crit.name} className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-                    
-                    <div className="px-6 py-4 border-b border-slate-50 flex justify-between items-center bg-slate-50/20 flex-wrap gap-4">
-                      <div className="flex items-center gap-4 min-w-0 flex-1">
-                        <div className={`w-14 h-14 rounded-xl text-white flex flex-col items-center justify-center shadow-lg shrink-0 ${isDel2 ? 'bg-emerald-600' : 'bg-slate-800'}`}>
-                          <span className="text-[7px] font-black opacity-40 uppercase tracking-tighter mb-0.5">{crit.part}</span>
-                          <div className="text-base font-black leading-none">
-                            <LatexRenderer content={badgeLabel} />
-                          </div>
+              return (
+                <div key={crit.name} className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                  
+                  <div className="px-6 py-4 border-b border-slate-50 flex justify-between items-center bg-slate-50/20 flex-wrap gap-4">
+                    <div className="flex items-center gap-4 min-w-0 flex-1">
+                      {/* Badge-design v4.3.0 */}
+                      <div className={`w-12 h-12 rounded-xl text-white flex flex-col items-center justify-center shadow-lg shrink-0 ${isDel2 ? 'bg-emerald-600' : 'bg-slate-800'}`}>
+                        <span className="text-[6px] font-black opacity-40 uppercase tracking-tighter mb-0.5">{crit.part}</span>
+                        <div className="text-sm font-black leading-none">
+                           {badgeLabel}
                         </div>
-                        <div className="min-w-0 flex-1 group">
-                          <div className="flex items-center justify-between mb-0.5">
-                             <input 
-                               value={crit.tema || ""} 
-                               placeholder="Tema..." 
-                               onChange={e => handleFieldChange(crit.name, 'tema', e.target.value)} 
-                               className={`text-[9px] font-black uppercase tracking-widest bg-transparent border-none outline-none w-full ${isDel2 ? 'text-emerald-600' : 'text-indigo-500'}`} 
-                             />
-                             <button onClick={() => setEditingHeaderId(isEditingHeader ? null : crit.name)} className="opacity-0 group-hover:opacity-100 text-[8px] font-black uppercase text-indigo-400 hover:underline transition-all">
-                                {isEditingHeader ? 'Lagre' : 'Rediger'}
-                             </button>
+                      </div>
+                      <div className="min-w-0 flex-1 group">
+                        <div className="flex items-center justify-between mb-0.5">
+                           <input 
+                             value={crit.tema || ""} 
+                             placeholder="Tema..." 
+                             onChange={e => handleFieldChange(crit.name, 'tema', e.target.value)} 
+                             className={`text-[9px] font-black uppercase tracking-widest bg-transparent border-none outline-none w-full ${isDel2 ? 'text-emerald-600' : 'text-indigo-500'}`} 
+                           />
+                           <button onClick={() => setEditingHeaderId(isEditingHeader ? null : crit.name)} className="opacity-0 group-hover:opacity-100 text-[8px] font-black uppercase text-indigo-400 hover:underline transition-all">
+                              {isEditingHeader ? 'Lagre' : 'Rediger'}
+                           </button>
+                        </div>
+                        {isEditingHeader ? (
+                          <input 
+                            autoFocus
+                            value={crit.description} 
+                            onChange={e => handleFieldChange(crit.name, 'description', e.target.value)} 
+                            className="text-lg font-bold text-slate-700 bg-white ring-2 ring-indigo-50 outline-none w-full rounded-lg p-2 transition-all border border-indigo-100" 
+                          />
+                        ) : (
+                          <div className="text-lg font-bold text-slate-700 tracking-tight">
+                            <LatexRenderer content={crit.description} />
                           </div>
-                          {isEditingHeader ? (
-                            <input 
-                              autoFocus
-                              value={crit.description} 
-                              onChange={e => handleFieldChange(crit.name, 'description', e.target.value)} 
-                              className="text-lg font-bold text-slate-700 bg-white ring-2 ring-indigo-50 outline-none w-full rounded-lg p-2 transition-all border border-indigo-100" 
-                            />
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex gap-3 items-center shrink-0">
+                      <div className="text-center bg-white p-2 rounded-xl border shadow-sm">
+                        <input 
+                          type="number" 
+                          step="0.5"
+                          value={crit.maxPoints} 
+                          onChange={e => handleFieldChange(crit.name, 'maxPoints', Number(e.target.value) || 0)} 
+                          className={`text-xl font-black w-12 text-center bg-transparent outline-none ${isDel2 ? 'text-emerald-600' : 'text-indigo-600'}`} 
+                        />
+                        <div className="text-[8px] font-black text-slate-300 uppercase tracking-widest">Poeng</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="p-6">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-center">
+                          <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.1em] flex items-center gap-1.5">
+                            <div className="w-2 h-2 rounded-full bg-emerald-400"></div>
+                            Løsningsforslag
+                          </h4>
+                          <button onClick={() => setEditingId(isEditingSolution ? null : crit.name)} className="text-[9px] font-black uppercase text-indigo-500 hover:underline">
+                            {isEditingSolution ? 'Fullfør' : 'Rediger'}
+                          </button>
+                        </div>
+                        <div className={`rounded-xl p-6 border min-h-[150px] transition-all overflow-x-auto custom-scrollbar ${isEditingSolution ? 'bg-white border-indigo-200' : 'bg-slate-50 border-slate-100 shadow-inner'}`}>
+                          {isEditingSolution ? (
+                            <textarea value={crit.suggestedSolution} autoFocus onChange={e => handleFieldChange(crit.name, 'suggestedSolution', e.target.value)} className="w-full bg-transparent outline-none text-sm font-medium text-slate-600 resize-none h-48 leading-relaxed custom-scrollbar" />
                           ) : (
-                            <div className="text-lg font-bold text-slate-700 tracking-tight">
-                              <LatexRenderer content={crit.description} />
-                            </div>
+                            <LatexRenderer content={crit.suggestedSolution} className="text-slate-800 text-sm leading-relaxed" />
                           )}
                         </div>
                       </div>
-                      <div className="flex gap-3 items-center shrink-0">
-                        <div className="text-center bg-white p-2 rounded-xl border shadow-sm">
-                          <input 
-                            type="number" 
-                            step="0.5"
-                            value={crit.maxPoints} 
-                            onChange={e => handleFieldChange(crit.name, 'maxPoints', Number(e.target.value) || 0)} 
-                            className={`text-xl font-black w-12 text-center bg-transparent outline-none ${isDel2 ? 'text-emerald-600' : 'text-indigo-600'}`} 
-                          />
-                          <div className="text-[8px] font-black text-slate-300 uppercase tracking-widest">Poeng</div>
-                        </div>
-                      </div>
-                    </div>
 
-                    <div className="p-6">
-                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        <div className="space-y-3">
-                          <div className="flex justify-between items-center">
-                            <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.1em] flex items-center gap-1.5">
-                              <div className="w-2 h-2 rounded-full bg-emerald-400"></div>
-                              Løsningsforslag
-                            </h4>
-                            <button onClick={() => setEditingId(isEditingSolution ? null : crit.name)} className="text-[9px] font-black uppercase text-indigo-500 hover:underline">
-                              {isEditingSolution ? 'Fullfør' : 'Rediger'}
-                            </button>
-                          </div>
-                          <div className={`rounded-xl p-6 border min-h-[150px] transition-all overflow-x-auto custom-scrollbar ${isEditingSolution ? 'bg-white border-indigo-200' : 'bg-slate-50 border-slate-100 shadow-inner'}`}>
-                            {isEditingSolution ? (
-                              <textarea value={crit.suggestedSolution} autoFocus onChange={e => handleFieldChange(crit.name, 'suggestedSolution', e.target.value)} className="w-full bg-transparent outline-none text-sm font-medium text-slate-600 resize-none h-48 leading-relaxed custom-scrollbar" />
-                            ) : (
-                              <LatexRenderer content={crit.suggestedSolution} className="text-slate-800 text-sm leading-relaxed" />
-                            )}
-                          </div>
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-center">
+                          <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.1em] flex items-center gap-1.5">
+                            <div className="w-2 h-2 rounded-full bg-rose-400"></div>
+                            Retteveiledning
+                          </h4>
+                          <button onClick={() => setEditingErrorsId(isEditingErrors ? null : crit.name)} className="text-[9px] font-black uppercase text-rose-500 hover:underline">
+                            {isEditingErrors ? 'Fullfør' : 'Rediger'}
+                          </button>
                         </div>
-
-                        <div className="space-y-3">
-                          <div className="flex justify-between items-center">
-                            <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.1em] flex items-center gap-1.5">
-                              <div className="w-2 h-2 rounded-full bg-rose-400"></div>
-                              Retteveiledning
-                            </h4>
-                            <button onClick={() => setEditingErrorsId(isEditingErrors ? null : crit.name)} className="text-[9px] font-black uppercase text-rose-500 hover:underline">
-                              {isEditingErrors ? 'Fullfør' : 'Rediger'}
-                            </button>
-                          </div>
-                          <div className={`rounded-xl p-6 border min-h-[150px] transition-all overflow-x-auto custom-scrollbar ${isEditingErrors ? 'bg-white border-rose-200' : 'bg-rose-50/5 border-rose-100/30 shadow-inner'}`}>
-                            {isEditingErrors ? (
-                              <textarea value={crit.commonErrors || ""} autoFocus onChange={e => handleFieldChange(crit.name, 'commonErrors', e.target.value)} className="w-full bg-transparent outline-none text-sm font-bold text-slate-700 resize-none h-48 leading-relaxed custom-scrollbar" />
-                            ) : (
-                              <LatexRenderer content={crit.commonErrors || "Ingen spesifikk veiledning."} className="text-slate-700 font-bold text-sm leading-relaxed" />
-                            )}
-                          </div>
+                        <div className={`rounded-xl p-6 border min-h-[150px] transition-all overflow-x-auto custom-scrollbar ${isEditingErrors ? 'bg-white border-rose-200' : 'bg-rose-50/5 border-rose-100/30 shadow-inner'}`}>
+                          {isEditingErrors ? (
+                            <textarea value={crit.commonErrors || ""} autoFocus onChange={e => handleFieldChange(crit.name, 'commonErrors', e.target.value)} className="w-full bg-transparent outline-none text-sm font-bold text-slate-700 resize-none h-48 leading-relaxed custom-scrollbar" />
+                          ) : (
+                            <LatexRenderer content={crit.commonErrors || "Ingen spesifikk veiledning."} className="text-slate-700 font-bold text-sm leading-relaxed" />
+                          )}
                         </div>
                       </div>
                     </div>
                   </div>
-                );
-              })
-            )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </main>

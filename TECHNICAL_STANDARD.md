@@ -1,5 +1,5 @@
 
-# Teknisk Standard & Algoritmer (v4.99.0)
+# Teknisk Standard & Algoritmer (v5.1.0)
 
 Dette dokumentet beskriver de kritiske tekniske valgene i applikasjonen. Ved videreutvikling SKAL disse standardene følges for å unngå regelbrudd.
 
@@ -20,8 +20,11 @@ Dette er den eneste tillatte metoden for å håndtere A3-oppslag.
 ## 5. Selection-Sync Scrolling
 **Standard:** Hovedvisningen (`main`) SKAL automatisk nullstille scrollposisjon (`scrollTop = 0`) ved hvert kandidatbytte.
 
-## 6. Hard Whitelisting
-**Standard:** Applikasjonen SKAL filtrere `identifiedTasks` mot den aktive `rubric` før lagring.
+## 6. Hard Whitelisting & Semantisk Mapping (v5.1.0)
+**Standard:** 
+1. Applikasjonen SKAL filtrere `identifiedTasks` mot den aktive `rubric` før lagring.
+2. KI-instruksen SKAL prioritere semantisk innholdsanalyse over eksplisitte overskrifter (f.eks. hvis innholdet er en brøkregning beskrevet i oppgave 2, skal den mappes til 2 uavhengig av hva eleven skrev).
+3. Romertall (i, ii, iii) skal ALDRI betraktes som oppgavenummer med mindre de er eksplisitt i fasiten.
 
 ## 7. KI-Dokumentasjon
-**Standard:** Alle endringer i modellbruk eller instrukser SKAL dokumenteres i `MODEL_DOCUMENTATION.md` med oppdaterte kostnadsestimater.
+**Standard:** Alle endringer i modellbruk eller instrukser SKAL dokumenteres i `MODEL_DOCUMENTATION.md`.
