@@ -7,20 +7,43 @@ interface RubricStepProps {
   handleGenerateRubric: () => void;
   rubricStatus: { loading: boolean; text: string };
   updateActiveProject?: (updates: Partial<Project>) => void;
+  handleRegenerateCriterion: (name: string) => Promise<void>;
 }
 
 export const RubricStep: React.FC<RubricStepProps> = ({
   activeProject,
   handleGenerateRubric,
   rubricStatus,
-  updateActiveProject
+  updateActiveProject,
+  handleRegenerateCriterion
 }) => {
   const [selectedTask, setSelectedTask] = useState<{ num: string, part: string } | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingHeaderId, setEditingHeaderId] = useState<string | null>(null);
   const [editingErrorsId, setEditingErrorsId] = useState<string | null>(null);
+  const [localLoading, setLocalLoading] = useState<string | null>(null);
 
   const criteria = activeProject.rubric?.criteria || [];
+
+  const totals = useMemo(() => {
+    const partSums: Record<string, number> = { "Del 1": 0, "Del 2": 0 };
+    const taskSums: Record<string, number> = {};
+
+    criteria.forEach(c => {
+      const part = c.part || "Del 1";
+      const groupKey = part.toLowerCase().includes("2") ? "Del 2" : "Del 1";
+      const cleanNum = String(c.taskNumber || "").replace(/[^0-9]/g, '');
+      const points = Number(c.maxPoints || 0);
+
+      partSums[groupKey] += points;
+      if (cleanNum) {
+        const key = `${groupKey}-${cleanNum}`;
+        taskSums[key] = (taskSums[key] || 0) + points;
+      }
+    });
+
+    return { partSums, taskSums };
+  }, [criteria]);
 
   const groupedTaskNumbers = useMemo(() => {
     const groups: Record<string, Set<string>> = {
@@ -42,21 +65,14 @@ export const RubricStep: React.FC<RubricStepProps> = ({
   }, [criteria]);
 
   const filteredCriteria = useMemo(() => {
-    // Sortering v5.3.1: Del 1 ALLTID før Del 2, deretter numerisk oppgave
     const sortCriteria = (list: RubricCriterion[]) => {
       return [...list].sort((a, b) => {
         const partA = (a.part || "Del 1").toLowerCase().includes("2") ? 2 : 1;
         const partB = (b.part || "Del 1").toLowerCase().includes("2") ? 2 : 1;
-        
-        // 1. Sorter på del (Del 1 kommer før Del 2)
         if (partA !== partB) return partA - partB;
-        
-        // 2. Sorter på oppgavenummer (numerisk)
         const numA = parseInt(String(a.taskNumber).replace(/[^0-9]/g, '')) || 0;
         const numB = parseInt(String(b.taskNumber).replace(/[^0-9]/g, '')) || 0;
         if (numA !== numB) return numA - numB;
-        
-        // 3. Sorter på deloppgave (alfabetisk)
         return (a.subTask || "").localeCompare(b.subTask || "");
       });
     };
@@ -80,6 +96,12 @@ export const RubricStep: React.FC<RubricStepProps> = ({
     const newRubric = { ...activeProject.rubric, criteria: newCriteria };
     const totalMaxPoints = newCriteria.reduce((acc, c) => acc + Number(c.maxPoints || 0), 0);
     updateActiveProject({ rubric: { ...newRubric, totalMaxPoints } });
+  };
+
+  const onRegenerate = async (name: string) => {
+    setLocalLoading(name);
+    await handleRegenerateCriterion(name);
+    setLocalLoading(null);
   };
 
   if (rubricStatus.loading && !activeProject.rubric) {
@@ -106,7 +128,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-[#F8FAFC]">
-      <aside className="w-56 bg-white border-r flex flex-col shrink-0 no-print shadow-sm h-full">
+      <aside className="w-64 bg-white border-r flex flex-col shrink-0 no-print shadow-sm h-full">
         <div className="p-4 border-b bg-white/80 shrink-0">
           <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Navigasjon</h3>
         </div>
@@ -114,24 +136,32 @@ export const RubricStep: React.FC<RubricStepProps> = ({
         <nav className="flex-1 overflow-y-auto p-3 space-y-6 custom-scrollbar">
           <button 
             onClick={() => setSelectedTask(null)}
-            className={`w-full text-left px-4 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all ${!selectedTask ? 'bg-slate-800 text-white shadow-md' : 'text-slate-400 hover:bg-slate-50'}`}
+            className={`w-full text-left px-4 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all flex justify-between items-center ${!selectedTask ? 'bg-slate-800 text-white shadow-md' : 'text-slate-400 hover:bg-slate-50'}`}
           >
-            Alle Oppgaver
+            <span>Alle Oppgaver</span>
+            <span className={`px-2 py-0.5 rounded-full text-[8px] ${!selectedTask ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-400'}`}>
+              {activeProject.rubric.totalMaxPoints.toFixed(1)} p
+            </span>
           </button>
           
           {groupedTaskNumbers.del1.length > 0 && (
             <div className="space-y-2">
-               <h4 className="text-[9px] font-black text-indigo-400 uppercase tracking-[0.2em] px-2">Del 1</h4>
+               <div className="flex justify-between items-center px-2">
+                 <h4 className="text-[9px] font-black text-indigo-400 uppercase tracking-[0.2em]">Del 1</h4>
+                 <span className="text-[8px] font-black text-slate-300 uppercase">{totals.partSums["Del 1"].toFixed(1)} p</span>
+               </div>
                <div className="space-y-1">
                  {groupedTaskNumbers.del1.map(num => {
                    const isActive = selectedTask?.num === num && selectedTask?.part === "Del 1";
+                   const points = totals.taskSums[`Del 1-${num}`] || 0;
                    return (
                      <button 
                        key={`del1-${num}`}
                        onClick={() => setSelectedTask({ num, part: "Del 1" })}
-                       className={`w-full text-left px-4 py-2 rounded-lg font-black text-[10px] uppercase tracking-widest transition-all ${isActive ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:bg-indigo-50'}`}
+                       className={`w-full text-left px-4 py-2 rounded-lg font-black text-[10px] uppercase tracking-widest transition-all flex justify-between items-center ${isActive ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:bg-indigo-50'}`}
                      >
-                       Oppgave {num}
+                       <span>Oppgave {num}</span>
+                       <span className={`text-[8px] opacity-60 ${isActive ? 'text-white' : 'text-slate-400'}`}>{points.toFixed(1)} p</span>
                      </button>
                    );
                  })}
@@ -141,17 +171,22 @@ export const RubricStep: React.FC<RubricStepProps> = ({
 
           {groupedTaskNumbers.del2.length > 0 && (
             <div className="space-y-2">
-               <h4 className="text-[9px] font-black text-emerald-500 uppercase tracking-[0.2em] px-2">Del 2</h4>
+               <div className="flex justify-between items-center px-2">
+                 <h4 className="text-[9px] font-black text-emerald-500 uppercase tracking-[0.2em]">Del 2</h4>
+                 <span className="text-[8px] font-black text-slate-300 uppercase">{totals.partSums["Del 2"].toFixed(1)} p</span>
+               </div>
                <div className="space-y-1">
                  {groupedTaskNumbers.del2.map(num => {
                    const isActive = selectedTask?.num === num && selectedTask?.part === "Del 2";
+                   const points = totals.taskSums[`Del 2-${num}`] || 0;
                    return (
                      <button 
                        key={`del2-${num}`}
                        onClick={() => setSelectedTask({ num, part: "Del 2" })}
-                       className={`w-full text-left px-4 py-2 rounded-lg font-black text-[10px] uppercase tracking-widest transition-all ${isActive ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-500 hover:bg-emerald-50'}`}
+                       className={`w-full text-left px-4 py-2 rounded-lg font-black text-[10px] uppercase tracking-widest transition-all flex justify-between items-center ${isActive ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-500 hover:bg-emerald-50'}`}
                      >
-                       Oppgave {num}
+                       <span>Oppgave {num}</span>
+                       <span className={`text-[8px] opacity-60 ${isActive ? 'text-white' : 'text-slate-400'}`}>{points.toFixed(1)} p</span>
                      </button>
                    );
                  })}
@@ -161,8 +196,13 @@ export const RubricStep: React.FC<RubricStepProps> = ({
         </nav>
 
         <div className="p-3 border-t bg-slate-50/50 shrink-0">
-           <button onClick={handleGenerateRubric} disabled={rubricStatus.loading} className="w-full py-3 rounded-xl border border-dashed text-[9px] font-black uppercase text-slate-400 hover:text-indigo-600 hover:bg-white transition-all">
-             {rubricStatus.loading ? <Spinner size="w-3 h-3 mx-auto" /> : 'Regenerer ↻'}
+           <button 
+             onClick={handleGenerateRubric} 
+             disabled={rubricStatus.loading} 
+             title="Sletter alt og genererer en helt ny rettemanual fra oppgavefilene"
+             className="w-full py-3 rounded-xl border border-dashed text-[9px] font-black uppercase text-slate-400 hover:text-indigo-600 hover:bg-white transition-all"
+           >
+             {rubricStatus.loading ? <Spinner size="w-3 h-3 mx-auto" /> : 'Lag helt ny manual ↻'}
            </button>
         </div>
       </aside>
@@ -195,13 +235,20 @@ export const RubricStep: React.FC<RubricStepProps> = ({
               const isEditingHeader = editingHeaderId === crit.name;
               const isEditingSolution = editingId === crit.name;
               const isEditingErrors = editingErrorsId === crit.name;
+              const isLoading = localLoading === crit.name;
               const isDel2 = (crit.part || "").toLowerCase().includes('2');
               const cleanNum = String(crit.taskNumber || "").replace(/[^0-9]/g, '');
               const cleanSub = String(crit.subTask || "").toUpperCase().replace(/[^A-Z]/g, '');
               const badgeLabel = `${cleanNum}${cleanSub}`;
 
               return (
-                <div key={crit.name} className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                <div key={crit.name} className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden relative">
+                  {isLoading && (
+                    <div className="absolute inset-0 bg-white/80 z-20 flex flex-col items-center justify-center gap-3 backdrop-blur-[2px] animate-in fade-in duration-300">
+                      <Spinner size="w-10 h-10" />
+                      <p className="text-[10px] font-black uppercase tracking-[0.3em] text-indigo-600 animate-pulse">Oppdaterer oppgave...</p>
+                    </div>
+                  )}
                   <div className="px-6 py-4 border-b border-slate-50 flex justify-between items-center bg-slate-50/20 flex-wrap gap-4">
                     <div className="flex items-center gap-4 min-w-0 flex-1">
                       <div className={`w-12 h-12 rounded-xl text-white flex flex-col items-center justify-center shadow-lg shrink-0 ${isDel2 ? 'bg-emerald-600' : 'bg-slate-800'}`}>
@@ -214,13 +261,22 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                         <div className="flex items-center justify-between mb-0.5">
                            <input 
                              value={crit.tema || ""} 
-                             placeholder="Tema..." 
+                             placeholder="TEMA..." 
                              onChange={e => handleFieldChange(crit.name, 'tema', e.target.value)} 
-                             className={`text-[9px] font-black uppercase tracking-widest bg-transparent border-none outline-none w-full ${isDel2 ? 'text-emerald-600' : 'text-indigo-500'}`} 
+                             className={`text-[9px] font-black uppercase tracking-widest bg-transparent border-none outline-none w-full ${isDel2 ? 'text-emerald-600' : 'text-indigo-400'}`} 
                            />
-                           <button onClick={() => setEditingHeaderId(isEditingHeader ? null : crit.name)} className="opacity-0 group-hover:opacity-100 text-[8px] font-black uppercase text-indigo-400 hover:underline transition-all">
-                              {isEditingHeader ? 'Lagre' : 'Rediger'}
-                           </button>
+                           <div className="flex gap-3 items-center">
+                             <button 
+                               onClick={() => onRegenerate(crit.name)} 
+                               title="Be KI generere et nytt løsningsforslag for denne spesifikke oppgaven"
+                               className="text-[8px] font-black uppercase text-indigo-500 bg-indigo-50 px-2 py-1 rounded-md border border-indigo-100 hover:bg-indigo-100 transition-all flex items-center gap-1"
+                             >
+                               ↻ Last inn på nytt
+                             </button>
+                             <button onClick={() => setEditingHeaderId(isEditingHeader ? null : crit.name)} className="text-[8px] font-black uppercase text-slate-400 hover:underline transition-all">
+                                {isEditingHeader ? 'LAGRE' : 'REDIGER'}
+                             </button>
+                           </div>
                         </div>
                         {isEditingHeader ? (
                           <input 

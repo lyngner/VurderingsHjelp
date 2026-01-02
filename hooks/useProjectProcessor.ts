@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Project, Page, Candidate, IdentifiedTask } from '../types';
+import { Project, Page, Candidate, IdentifiedTask, RubricCriterion, Rubric } from '../types';
 import { processFileToImages, splitA3Spread, processImageRotation } from '../services/fileService';
 import { getMedia, saveMedia, saveCandidate, saveProject } from '../services/storageService';
 import { 
@@ -7,17 +7,28 @@ import {
   analyzeTextContent, 
   generateRubricFromTaskAndSamples, 
   evaluateCandidate,
-  reconcileProjectData
+  reconcileProjectData,
+  regenerateSingleCriterion
 } from '../services/geminiService';
 
 const sanitizeTaskPart = (val: string | undefined): string => {
   if (!val) return "";
   let cleaned = val.trim().toUpperCase().replace(/[\.\)\:\,]+$/, "");
-  if (cleaned.length > 5) {
+  if (cleaned.length > 5 || /TOTAL|SIDE|DEL|HELE|NONE|NULL/.test(cleaned)) {
     const match = cleaned.match(/(\d+[A-Z]?|[A-Z])/);
-    return match ? match[0] : cleaned.substring(0, 5);
+    return match ? match[0] : "";
   }
   return cleaned;
+};
+
+const validateTasksAgainstRubric = (tasks: IdentifiedTask[], rubric: Rubric | null): IdentifiedTask[] => {
+  if (!rubric) return tasks;
+  const validMap = new Set(rubric.criteria.map(c => `${c.taskNumber}${c.subTask || ''}`.toUpperCase()));
+  
+  return tasks.filter(t => {
+    const label = `${t.taskNumber}${t.subTask}`.toUpperCase();
+    return validMap.has(label);
+  });
 };
 
 const createThumbnailFromBase64 = async (base64: string): Promise<string> => {
@@ -55,7 +66,7 @@ export const useProjectProcessor = (
     setActiveProject(prev => prev ? { ...prev, ...updates, updatedAt: Date.now() } : null);
   }, [setActiveProject]);
 
-  const integratePageResults = async (originalPage: Page, results: any[]) => {
+  const integratePageResults = async (originalPage: Page, results: any[], rubric: Rubric | null) => {
     const isDigital = originalPage.mimeType === 'text/plain' || originalPage.isDigital;
     const processedPages: Page[] = [];
 
@@ -64,10 +75,12 @@ export const useProjectProcessor = (
       if (!originalMedia) return;
 
       for (const res of results) {
-        const tasks = (res.identifiedTasks || []).map((t: any) => ({
+        let tasks = (res.identifiedTasks || []).map((t: any) => ({
           taskNumber: sanitizeTaskPart(t.taskNumber),
           subTask: sanitizeTaskPart(t.subTask)
-        }));
+        })).filter((t: any) => t.taskNumber !== "");
+
+        tasks = validateTasksAgainstRubric(tasks, rubric);
         
         let candRaw = String(res.candidateId || "UKJENT").trim().toUpperCase();
         let candidateId = candRaw.replace(/\D/g, '');
@@ -86,7 +99,7 @@ export const useProjectProcessor = (
             candidateId, 
             part: res.part || originalPage.part || "Del 1",
             transcription: res.fullText, 
-            visualEvidence: res.visualEvidence, // Integrert v5.5.5
+            visualEvidence: res.visualEvidence, 
             identifiedTasks: tasks, 
             rotation: 0,
             status: 'completed' 
@@ -105,7 +118,7 @@ export const useProjectProcessor = (
             candidateId, 
             part: res.part || originalPage.part || "Del 1",
             transcription: res.fullText, 
-            visualEvidence: res.visualEvidence, // Integrert v5.5.5
+            visualEvidence: res.visualEvidence, 
             identifiedTasks: tasks, 
             rotation: 0,
             status: 'completed' 
@@ -114,10 +127,12 @@ export const useProjectProcessor = (
       }
     } else {
       for (const res of results) {
-        const tasks = (res.identifiedTasks || []).map((t: any) => ({
+        let tasks = (res.identifiedTasks || []).map((t: any) => ({
           taskNumber: sanitizeTaskPart(t.taskNumber),
           subTask: sanitizeTaskPart(t.subTask)
-        }));
+        })).filter((t: any) => t.taskNumber !== "");
+
+        tasks = validateTasksAgainstRubric(tasks, rubric);
         
         let candRaw = String(res.candidateId || "UKJENT").trim().toUpperCase();
         let candidateId = candRaw.replace(/\D/g, '');
@@ -128,7 +143,7 @@ export const useProjectProcessor = (
           candidateId, 
           part: res.part || originalPage.part || "Del 2", 
           transcription: res.fullText, 
-          visualEvidence: res.visualEvidence, // Integrert v5.5.5
+          visualEvidence: res.visualEvidence, 
           identifiedTasks: tasks, 
           status: 'completed',
           isDigital: true
@@ -169,7 +184,7 @@ export const useProjectProcessor = (
     });
   };
 
-  const processSinglePage = async (page: Page, rubric: any) => {
+  const processSinglePage = async (page: Page, rubric: Rubric | null, forceRescan: boolean = false) => {
     try {
       setActiveProject(prev => prev ? ({
         ...prev,
@@ -181,23 +196,74 @@ export const useProjectProcessor = (
       if (page.mimeType === 'text/plain' || page.isDigital) {
         const textToAnalyze = page.transcription || page.rawText || "";
         const res = await analyzeTextContent(textToAnalyze, rubric);
-        await integratePageResults(page, [res]);
+        await integratePageResults(page, [res], rubric);
       } else {
         const media = await getMedia(page.id);
         if (!media) throw new Error("Media missing");
-        const results = await transcribeAndAnalyzeImage({ ...page, base64Data: media.split(',')[1] || "" }, rubric);
-        await integratePageResults(page, results);
+        const results = await transcribeAndAnalyzeImage({ ...page, base64Data: media.split(',')[1] || "", forceRescan } as any, rubric);
+        await integratePageResults(page, results, rubric);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error("Prosessering feilet:", page.fileName, e);
+      const errorMsg = e?.message || String(e);
+      const isQuotaError = errorMsg.includes("429") || errorMsg.includes("quota");
+      
       setActiveProject(prev => prev ? ({ 
         ...prev, 
-        unprocessedPages: (prev.unprocessedPages || []).map(p => p.id === page.id ? { ...p, status: 'error' } : p) 
+        unprocessedPages: (prev.unprocessedPages || []).map(p => p.id === page.id ? { 
+          ...p, 
+          status: 'error', 
+          statusLabel: isQuotaError ? 'Kvote brukt opp' : 'Feil' 
+        } : p) 
       }) : null);
     } finally { 
       setBatchCompleted(prev => prev + 1);
       setProcessingCount(prev => Math.max(0, prev - 1)); 
     }
+  };
+
+  const handleRegenerateCriterion = async (criterionName: string) => {
+    if (!activeProject?.rubric) return;
+    const criterion = activeProject.rubric.criteria.find(c => c.name === criterionName);
+    if (!criterion) return;
+
+    setRubricStatus({ loading: true, text: `Regenererer ${criterionName}...` });
+    try {
+      const updates = await regenerateSingleCriterion(criterion);
+      setActiveProject(prev => {
+        if (!prev || !prev.rubric) return prev;
+        const newCriteria = prev.rubric.criteria.map(c => 
+          c.name === criterionName ? { ...c, ...updates } : c
+        );
+        return { ...prev, rubric: { ...prev.rubric, criteria: newCriteria } };
+      });
+    } catch (e) {
+      console.error("Regenerering feilet:", e);
+    } finally {
+      setRubricStatus({ loading: false, text: '' });
+    }
+  };
+
+  const handleRegeneratePage = async (candidateId: string, pageId: string) => {
+    if (!activeProject) return;
+    const candidate = activeProject.candidates.find(c => c.id === candidateId);
+    const page = candidate?.pages.find(p => p.id === pageId);
+    if (!page) return;
+
+    setActiveProject(prev => {
+      if (!prev) return null;
+      const updatedCands = prev.candidates.map(c => {
+        if (c.id === candidateId) {
+          return { ...c, pages: c.pages.filter(p => p.id !== pageId) };
+        }
+        return c;
+      });
+      return {
+        ...prev,
+        candidates: updatedCands,
+        unprocessedPages: [...(prev.unprocessedPages || []), { ...page, status: 'pending', forceRescan: true } as any]
+      };
+    });
   };
 
   useEffect(() => {
@@ -213,7 +279,7 @@ export const useProjectProcessor = (
       const runBatch = async () => {
         const pagesToProcess = [...pendingPages];
         for (const p of pagesToProcess) {
-          await processSinglePage(p, rubric);
+          await processSinglePage(p, rubric, (p as any).forceRescan);
         }
         isBatchProcessing.current = false;
         setCurrentAction('');
@@ -263,8 +329,11 @@ export const useProjectProcessor = (
       })));
       const rubric = await generateRubricFromTaskAndSamples(taskFilesWithMedia);
       updateActiveProject({ rubric });
-    } catch (e) { 
-      console.error(e); 
+    } catch (e: any) { 
+      console.error(e);
+      if (e?.message?.includes("429")) {
+        alert("Kvote overskredet for Gemini Pro. Vennligst vent litt eller sjekk faktureringsstatus i AI Studio.");
+      }
     } finally { 
       setRubricStatus({ loading: false, text: '' }); 
     }
@@ -289,8 +358,11 @@ export const useProjectProcessor = (
           candidates: prev.candidates.map(c => c.id === candidateId ? updatedCand : c)
         };
       });
-    } catch (e) {
+    } catch (e: any) {
       console.error("Evaluering feilet for kandidat:", candidateId, e);
+      if (e?.message?.includes("429")) {
+         alert("Vurderingen ble avbrutt fordi API-kvoten er brukt opp.");
+      }
     } finally {
       setRubricStatus({ loading: false, text: '' });
     }
@@ -299,7 +371,6 @@ export const useProjectProcessor = (
   const handleEvaluateAll = async (force: boolean = false) => {
     if (!activeProject?.rubric) return;
     
-    // Stopp-funksjonalitet v5.5.3
     if (rubricStatus.loading) {
       isStoppingEvaluation.current = true;
       return;
@@ -319,8 +390,12 @@ export const useProjectProcessor = (
         cands[i] = { ...cands[i], evaluation: res, status: 'evaluated' };
         await saveCandidate(cands[i]);
         setActiveProject(prev => prev ? { ...prev, candidates: [...cands] } : null);
-      } catch (e) {
+      } catch (e: any) {
         console.error("Evaluering feilet:", cands[i].name, e);
+        if (e?.message?.includes("429")) {
+          alert("Kvote brukt opp. Stopper videre vurdering.");
+          break;
+        }
       }
     }
     setRubricStatus({ loading: false, text: '' });
@@ -330,7 +405,7 @@ export const useProjectProcessor = (
 
   const handleSmartCleanup = async () => {
     if (!activeProject) return;
-    setRubricStatus({ loading: true, text: 'Rydder i prosjektet...' });
+    setRubricStatus({ loading: true, text: 'Unngår støy og rydder...' });
     try {
       const reconciliation = await reconcileProjectData(activeProject);
       setActiveProject(prev => {
@@ -354,7 +429,9 @@ export const useProjectProcessor = (
   return { 
     processingCount, batchTotal, batchCompleted, currentAction, rubricStatus, 
     handleTaskFileSelect, handleCandidateFileSelect,
-    handleEvaluateAll, handleEvaluateCandidate, handleGenerateRubric, handleRetryPage: (p: Page) => processSinglePage(p, activeProject?.rubric), 
+    handleEvaluateAll, handleEvaluateCandidate, handleGenerateRubric, 
+    handleRetryPage: (p: Page) => processSinglePage(p, activeProject?.rubric), 
+    handleRegenerateCriterion, handleRegeneratePage,
     handleSmartCleanup, updateActiveProject 
   };
 };

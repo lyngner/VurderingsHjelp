@@ -62,33 +62,17 @@ export const SetupStep: React.FC<SetupStepProps> = ({
   const stats = useMemo(() => {
     const candidates = activeProject?.candidates || [];
     const unprocessed = activeProject?.unprocessedPages || [];
+    const hasQuotaError = unprocessed.some(p => p.statusLabel === 'Kvote brukt opp');
+    
     return {
       totalCandidates: candidates.length,
       totalSider: candidates.reduce((acc, c) => acc + (c.pages?.length || 0), 0),
       processing: unprocessed.filter(p => p.status === 'processing').length,
       pending: unprocessed.filter(p => p.status === 'pending').length,
-      errors: unprocessed.filter(p => p.status === 'error').length
+      errors: unprocessed.filter(p => p.status === 'error').length,
+      hasQuotaError
     };
   }, [activeProject]);
-
-  const getGroupedTasks = (candidate: Candidate) => {
-    const groups: Record<string, Set<string>> = {
-      "Del 1": new Set<string>(),
-      "Del 2": new Set<string>()
-    };
-    candidate.pages.forEach(p => {
-      const part = p.part || "Del 1";
-      const groupKey = part.toLowerCase().includes("2") ? "Del 2" : "Del 1";
-      p.identifiedTasks?.forEach(t => {
-        const label = `${t.taskNumber}${t.subTask || ''}`;
-        if (label) groups[groupKey].add(label);
-      });
-    });
-    return {
-      del1: Array.from(groups["Del 1"]).sort((a,b) => a.localeCompare(b, undefined, {numeric: true})),
-      del2: Array.from(groups["Del 2"]).sort((a,b) => a.localeCompare(b, undefined, {numeric: true}))
-    };
-  };
 
   const handleConnectKey = async () => {
     if ((window as any).aistudio?.openSelectKey) {
@@ -115,6 +99,33 @@ export const SetupStep: React.FC<SetupStepProps> = ({
           >
             Koble til nøkkel
           </button>
+        </div>
+      )}
+
+      {stats.hasQuotaError && (
+        <div className="mb-6 bg-rose-600 text-white p-6 rounded-[32px] flex flex-col md:flex-row justify-between items-start md:items-center gap-6 animate-in slide-in-from-top-4 duration-500 shadow-2xl border-b-4 border-rose-800/50 relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-1.5 bg-rose-400/30"></div>
+          <div className="flex items-start gap-5 relative z-10">
+            <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center text-2xl shrink-0">🚨</div>
+            <div className="max-w-2xl">
+              <p className="text-[13px] font-black uppercase tracking-wider leading-none mb-2">Tier 1 Begrensning (250 RPD)</p>
+              <p className="text-[11px] font-medium opacity-95 leading-relaxed">
+                Google rapporterer at du har nådd grensen på <strong>250 forespørsler per dag</strong> for Pro-modellen. Dette er normalt for nye betalende prosjekter (Tier 1). 
+                <br /><br />
+                <strong>Løsning:</strong> Appen i v5.8.0 bruker nå Flash-modellen til nesten alt arbeid for å spare kvoten din til den endelige karaktersettingen. Sørg for at <strong>"Pay-as-you-go"</strong> er aktiv i AI Studio Plan Management.
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-3 w-full md:w-auto relative z-10">
+            <a 
+              href="https://aistudio.google.com/app/plan_management" 
+              target="_blank" 
+              rel="noopener noreferrer" 
+              className="flex-1 md:flex-none text-center bg-white text-rose-600 px-8 py-3.5 rounded-2xl font-black text-[11px] uppercase tracking-[0.1em] hover:bg-slate-50 transition-all hover:scale-105 shadow-xl ring-4 ring-rose-500/20"
+            >
+              Åpne Plan Management
+            </a>
+          </div>
         </div>
       )}
 
@@ -156,13 +167,6 @@ export const SetupStep: React.FC<SetupStepProps> = ({
           </div>
         </div>
       )}
-
-      <style>{`
-        @keyframes progress-bar-stripes {
-          from { background-position: 20px 0; }
-          to { background-position: 0 0; }
-        }
-      `}</style>
 
       <div className="grid grid-cols-1 md:grid-cols-12 gap-6 h-full overflow-hidden pb-10">
         
@@ -254,15 +258,14 @@ export const SetupStep: React.FC<SetupStepProps> = ({
                       {p.status === 'processing' ? <Spinner size="w-3 h-3" color="text-indigo-600" /> : <div className={`w-3 h-3 rounded-full ${p.status === 'pending' ? 'bg-slate-200' : 'bg-indigo-200'}`}></div>}
                     </div>
                     <span className="truncate flex-1">{p.fileName}</span>
-                    <span className="text-[8px] font-black uppercase opacity-60">
-                      {p.status === 'processing' ? 'Analyserer' : p.status === 'error' ? 'Feil' : !hasRubric ? 'I kø' : 'Klar'}
+                    <span className={`text-[8px] font-black uppercase ${p.statusLabel === 'Kvote brukt opp' ? 'text-rose-600 font-black' : 'opacity-60'}`}>
+                      {p.statusLabel || (p.status === 'processing' ? 'Analyserer' : p.status === 'error' ? 'Feil' : !hasRubric ? 'I kø' : 'Klar')}
                     </span>
                     {p.status === 'error' && <button onClick={() => handleRetryPage(p)} className="p-1 hover:bg-rose-100 rounded">↻</button>}
                   </div>
                 ))}
 
                 {(activeProject?.candidates || []).map(c => {
-                  const { del1, del2 } = getGroupedTasks(c);
                   const isDigital = c.pages.some(p => p.isDigital);
                   const pageCount = c.pages.filter(p => !p.isDigital).length;
                   
@@ -298,13 +301,6 @@ export const SetupStep: React.FC<SetupStepProps> = ({
                            <span className="text-indigo-500 font-black">✓</span>
                         </div>
                       </div>
-
-                      {(del1.length > 0 || del2.length > 0) && (
-                        <div className="flex flex-wrap gap-1 px-1">
-                          {del1.map(t => (<span key={t} className="text-[7px] font-black uppercase px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-500 border border-indigo-100/50">{t}</span>))}
-                          {del2.map(t => (<span key={t} className="text-[7px] font-black uppercase px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-600 border border-emerald-100/50">{t}</span>))}
-                        </div>
-                      )}
                     </button>
                   );
                 })}

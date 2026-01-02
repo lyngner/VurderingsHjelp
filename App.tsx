@@ -36,6 +36,8 @@ const App: React.FC = () => {
     handleCandidateFileSelect,
     handleEvaluateAll,
     handleGenerateRubric,
+    handleRegenerateCriterion,
+    handleRegeneratePage,
     handleRetryPage,
     handleSmartCleanup,
     updateActiveProject
@@ -60,7 +62,6 @@ const App: React.FC = () => {
     });
   }, [activeProject, view]);
 
-  // Lagrer kun metadata til prosjekt-storen, kandidater lagres separat i useProjectProcessor/saveCandidate
   useEffect(() => { 
     if (activeProject) saveProject(activeProject);
   }, [activeProject]);
@@ -117,33 +118,16 @@ const App: React.FC = () => {
   const handleDeletePage = (candidateId: string, pageId: string) => {
     setActiveProject(prev => {
       if (!prev) return null;
-      
-      // ISOLERT SLETTERUTINE v5.4.4: 
-      // Vi mapper gjennom eksisterende liste. 
-      // Hvis listen var i ferd med å endre seg (innlasting), garanterer prev-objektet integritet.
       const updatedCandidates = prev.candidates.map(c => {
         if (c.id !== candidateId) return c;
-        
-        // Finn siden som skal fjernes
         const pageToDelete = c.pages.find(p => p.id === pageId);
         if (!pageToDelete) return c;
-
-        // Lag ny liste uten denne siden
         const remainingPages = c.pages.filter(p => p.id !== pageId);
-        
-        // Oppdater objektet
         const updatedCand = { ...c, pages: remainingPages };
-        
-        // Lagre til databasen asynkront
         saveCandidate(updatedCand);
         return updatedCand;
       }).filter(c => c.pages.length > 0);
-
-      // Returner prosjektet med den oppdaterte kandidatlisten
-      return {
-        ...prev,
-        candidates: updatedCandidates
-      };
+      return { ...prev, candidates: updatedCandidates };
     });
   };
 
@@ -223,9 +207,9 @@ const App: React.FC = () => {
               />
             )}
             {currentStep === 'review' && (
-              <ReviewStep activeProject={activeProject} selectedReviewCandidateId={selectedReviewCandidateId} setSelectedReviewCandidateId={(id) => setSelectedReviewCandidateId(id)} reviewFilter={reviewFilter} setReviewFilter={setReviewFilter} filteredCandidates={filteredCandidates} currentReviewCandidate={activeProject.candidates.find(c => c.id === selectedReviewCandidateId) || null} rotatePage={handleRotatePage} deletePage={handleDeletePage} updatePageNumber={handleUpdatePageNumber} setActiveProject={setActiveProject} handleSmartCleanup={handleSmartCleanup} isCleaning={rubricStatus.loading} />
+              <ReviewStep activeProject={activeProject} selectedReviewCandidateId={selectedReviewCandidateId} setSelectedReviewCandidateId={(id) => setSelectedReviewCandidateId(id)} reviewFilter={reviewFilter} setReviewFilter={setReviewFilter} filteredCandidates={filteredCandidates} currentReviewCandidate={activeProject.candidates.find(c => c.id === selectedReviewCandidateId) || null} rotatePage={handleRotatePage} deletePage={handleDeletePage} updatePageNumber={handleUpdatePageNumber} setActiveProject={setActiveProject} handleSmartCleanup={handleSmartCleanup} isCleaning={rubricStatus.loading} handleRegeneratePage={handleRegeneratePage} />
             )}
-            {currentStep === 'rubric' && <RubricStep activeProject={activeProject} handleGenerateRubric={() => handleGenerateRubric()} rubricStatus={rubricStatus} updateActiveProject={updateActiveProject} />}
+            {currentStep === 'rubric' && <RubricStep activeProject={activeProject} handleGenerateRubric={() => handleGenerateRubric()} rubricStatus={rubricStatus} updateActiveProject={updateActiveProject} handleRegenerateCriterion={handleRegenerateCriterion} />}
             {currentStep === 'results' && <ResultsStep activeProject={activeProject} selectedResultCandidateId={selectedResultCandidateId} setSelectedResultCandidateId={setSelectedResultCandidateId} handleEvaluateAll={handleEvaluateAll} handleGenerateRubric={() => handleGenerateRubric()} rubricStatus={rubricStatus} />}
           </>
         )}

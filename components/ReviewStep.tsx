@@ -153,6 +153,7 @@ interface ReviewStepProps {
   setActiveProject: React.Dispatch<React.SetStateAction<Project | null>>;
   handleSmartCleanup?: () => Promise<void>;
   isCleaning: boolean;
+  handleRegeneratePage: (candidateId: string, pageId: string) => Promise<void>;
 }
 
 export const ReviewStep: React.FC<ReviewStepProps> = ({
@@ -168,10 +169,12 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
   updatePageNumber,
   setActiveProject,
   handleSmartCleanup,
-  isCleaning
+  isCleaning,
+  handleRegeneratePage
 }) => {
   const [editingPageIds, setEditingPageIds] = useState<Set<string>>(new Set());
   const [taskFilter, setTaskFilter] = useState<string | null>(null);
+  const [pageLoadingIds, setPageLoadingIds] = useState<Set<string>>(new Set());
   const mainScrollRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -185,6 +188,11 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
     if (next.has(pageId)) next.delete(pageId);
     else next.add(pageId);
     setEditingPageIds(next);
+  };
+
+  const onRescan = async (candidateId: string, pageId: string) => {
+    setPageLoadingIds(prev => new Set(prev).add(pageId));
+    await handleRegeneratePage(candidateId, pageId);
   };
   
   const getGroupedTasks = (candidate: Candidate) => {
@@ -311,7 +319,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
             <div className="flex justify-between items-center mb-3">
                <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Kandidater</h3>
                {handleSmartCleanup && (
-                 <button onClick={handleSmartCleanup} disabled={isCleaning} className="text-[8px] font-black uppercase text-indigo-600 px-2 py-1 rounded-md border border-indigo-100 hover:bg-indigo-50 transition-all">
+                 <button onClick={handleSmartCleanup} disabled={isCleaning} title="Kjører en global KI-rydding som slår sammen kandidater og flytter ukjente sider" className="text-[8px] font-black uppercase text-indigo-600 px-2 py-1 rounded-md border border-indigo-100 hover:bg-indigo-50 transition-all">
                    {isCleaning ? <Spinner size="w-2 h-2" /> : '✨ Rydd'}
                  </button>
                )}
@@ -384,15 +392,24 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
               <header className="flex justify-between items-end mb-8">
                  <div>
                    <h2 className="text-3xl font-black text-slate-800 tracking-tighter">{currentReviewCandidate.name || 'Ukjent'}</h2>
-                   <p className="text-[10px] font-black uppercase text-indigo-500 tracking-[0.2em] mt-1">Kontrollerer transkripsjon v5.5.8</p>
+                   <p className="text-[10px] font-black uppercase text-indigo-500 tracking-[0.2em] mt-1">Kontrollerer transkripsjon v5.6.8</p>
                  </div>
               </header>
 
               <div className="space-y-12">
                 {currentReviewCandidate.pages.sort((a,b) => (a.pageNumber || 0) - (b.pageNumber || 0)).map((p, idx) => {
                   const isEditing = editingPageIds.has(p.id);
+                  const isRefreshing = pageLoadingIds.has(p.id);
+                  
                   return (
-                    <div key={p.id} className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+                    <div key={p.id} className={`grid grid-cols-1 lg:grid-cols-2 gap-8 items-start relative ${isRefreshing ? 'opacity-50 pointer-events-none' : ''}`}>
+                      {isRefreshing && (
+                        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-white/40 backdrop-blur-[2px] rounded-3xl animate-in fade-in duration-300">
+                          <Spinner size="w-12 h-12" />
+                          <p className="text-[10px] font-black uppercase tracking-[0.3em] text-indigo-600 animate-pulse">Skanner side på nytt...</p>
+                        </div>
+                      )}
+                      
                       <div className="space-y-4">
                          <div className="flex justify-between items-center px-2">
                            <div className="flex items-center gap-4">
@@ -400,6 +417,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                                <span className="text-[7px] font-black uppercase text-slate-400 mb-0.5 tracking-widest">Side</span>
                                <input 
                                  type="number"
+                                 title="Endre sidetall for denne siden"
                                  value={p.pageNumber || idx + 1}
                                  onChange={e => handleMetadataChange(p.id, 'pageNumber', parseInt(e.target.value) || 0)}
                                  className="w-10 h-10 rounded-xl bg-slate-800 text-white flex items-center justify-center font-black text-xs text-center outline-none ring-indigo-500/30 focus:ring-2"
@@ -411,6 +429,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                                <div className="flex items-center gap-1.5">
                                   <input 
                                     type="text"
+                                    title="Flytt denne siden til et annet kandidatnummer"
                                     value={p.candidateId || ""}
                                     placeholder="ID"
                                     onChange={e => handleMetadataChange(p.id, 'candidateId', e.target.value)}
@@ -418,6 +437,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                                   />
                                   <select 
                                     value={p.part || "Del 1"}
+                                    title="Bytt mellom Del 1 og Del 2 for denne siden"
                                     onChange={e => handleMetadataChange(p.id, 'part', e.target.value)}
                                     className="h-7 bg-white border border-slate-200 rounded-md px-1 font-black text-[10px] outline-none"
                                   >
@@ -428,11 +448,33 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                              </div>
                            </div>
                            <div className="flex gap-2">
-                             <button onClick={() => rotatePage(p.id)} title="Roter" className="w-10 h-10 flex items-center justify-center bg-white border rounded-xl hover:bg-slate-50 transition-all">↻</button>
-                             <button onClick={() => { if(confirm('Slett?')) deletePage(currentReviewCandidate.id, p.id); }} title="Slett" className="w-10 h-10 flex items-center justify-center bg-white border rounded-xl hover:bg-rose-50 text-rose-400 transition-all">✕</button>
+                             <button onClick={() => rotatePage(p.id)} title="Roter bildet 90 grader med klokken" className="w-10 h-10 flex items-center justify-center bg-white border rounded-xl hover:bg-slate-50 transition-all text-xs">↻</button>
+                             <button 
+                               onClick={() => onRescan(currentReviewCandidate.id, p.id)} 
+                               title="Slett nåværende tekst og tving KI-en til å se på bildet helt på nytt (høyeste presisjon)" 
+                               className="h-10 px-3 flex items-center justify-center bg-white border rounded-xl hover:bg-indigo-50 text-indigo-600 transition-all text-[9px] font-black gap-1.5"
+                             >
+                               ↻ Last inn på nytt
+                             </button>
+                             <button onClick={() => { if(confirm('Slett denne siden permanent?')) deletePage(currentReviewCandidate.id, p.id); }} title="Slett denne siden" className="w-10 h-10 flex items-center justify-center bg-white border rounded-xl hover:bg-rose-50 text-rose-400 transition-all">✕</button>
                            </div>
                          </div>
                          <LazyImage page={p} />
+                         
+                         {/* Visual Evidence Fix: Lys grå styling også her for konsistens */}
+                         {p.visualEvidence && !p.transcription?.includes('[AI-TOLKNING AV FIGUR:') && (
+                           <div className="mt-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                             <div className="bg-slate-100 rounded-2xl overflow-hidden border border-indigo-400 shadow-lg">
+                               <div className="bg-slate-200/50 px-4 py-2 border-b border-slate-300 flex justify-between items-center">
+                                 <span className="text-[9px] font-black uppercase text-indigo-700 tracking-widest">Separat CAS / Figur Bevis</span>
+                                 <span className="text-[7px] font-black text-slate-400 uppercase">v5.6.8 Clear View</span>
+                               </div>
+                               <div className="p-6">
+                                 <LatexRenderer content={`[AI-TOLKNING AV FIGUR: ${p.visualEvidence}]`} />
+                               </div>
+                             </div>
+                           </div>
+                         )}
                       </div>
                       <div className="space-y-4">
                          <div className="flex items-center justify-between px-2 h-10">
@@ -462,7 +504,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                                {isEditing ? (
                                  <div className="flex flex-col gap-4 h-full">
                                    <div className="flex-1 flex flex-col">
-                                     <label className="text-[7px] font-black uppercase text-indigo-200 mb-1 block tracking-widest">Hovedtranskripsjon (inkl. tagger for figur)</label>
+                                     <label className="text-[7px] font-black uppercase text-indigo-200 mb-1 block tracking-widest">Hovedtranskripsjon</label>
                                      <textarea 
                                         autoFocus 
                                         value={p.transcription || ''} 
@@ -472,36 +514,27 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                                         }} 
                                         className="w-full flex-1 bg-indigo-700/40 text-white p-4 rounded-xl text-sm font-medium outline-none resize-none custom-scrollbar border border-indigo-500/30" 
                                      />
+                                     <label className="text-[7px] font-black uppercase text-indigo-200 mt-4 mb-1 block tracking-widest">CAS / Figurtolkning (visualEvidence)</label>
+                                     <textarea 
+                                        value={p.visualEvidence || ''} 
+                                        onChange={e => {
+                                          const val = e.target.value;
+                                          setActiveProject(prev => prev ? ({ ...prev, candidates: prev.candidates.map(c => c.id === currentReviewCandidate.id ? { ...c, pages: c.pages.map(pg => pg.id === p.id ? { ...pg, visualEvidence: val } : pg) } : c) }) : null);
+                                        }} 
+                                        className="w-full h-32 bg-indigo-700/40 text-white p-4 rounded-xl text-xs font-mono outline-none resize-none custom-scrollbar border border-indigo-500/30" 
+                                     />
                                    </div>
-                                   {p.visualEvidence && (
-                                     <div className="shrink-0">
-                                       <label className="text-[7px] font-black uppercase text-rose-300 mb-1 block tracking-widest">Legacy Bevisfelt (Vurder å flytte innholdet opp med tagen [AI-TOLKNING AV FIGUR: ...])</label>
-                                       <textarea 
-                                          value={p.visualEvidence || ''} 
-                                          onChange={e => {
-                                            const val = e.target.value;
-                                            setActiveProject(prev => prev ? ({ ...prev, candidates: prev.candidates.map(c => c.id === currentReviewCandidate.id ? { ...c, pages: c.pages.map(pg => pg.id === p.id ? { ...pg, visualEvidence: val } : pg) } : c) }) : null);
-                                          }} 
-                                          className="w-full h-24 bg-slate-900/60 text-slate-400 p-4 rounded-xl text-xs font-mono outline-none resize-none custom-scrollbar border border-rose-500/30" 
-                                       />
-                                     </div>
-                                   )}
                                  </div>
                                ) : (
                                  <div className="text-white space-y-6">
                                    <div className="pl-1">
                                      <LatexRenderer content={p.transcription || ""} className="text-base text-white font-medium leading-relaxed" />
                                      
-                                     {/* Viser legacy bevis kun hvis det ikke finnes tags i hovedteksten og beviset har innhold */}
-                                     {p.visualEvidence && !p.transcription?.includes('[AI-TOLKNING') && (
-                                        <div className="mt-8 p-6 bg-slate-900 rounded-2xl border-l-4 border-indigo-500 shadow-lg opacity-80">
-                                          <div className="text-[8px] font-black uppercase text-indigo-400 tracking-[0.2em] mb-3 flex items-center gap-2">
-                                             Legacy Bevis (Bør flyttes inline)
-                                          </div>
-                                          <div className="text-slate-100 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
-                                             {p.visualEvidence}
-                                          </div>
-                                        </div>
+                                     {/* Interleaved Fallback (lys grå boks inni indigo felt) */}
+                                     {!p.transcription?.includes('[AI-TOLKNING AV FIGUR:') && p.visualEvidence && (
+                                       <div className="mt-8">
+                                          <LatexRenderer content={`[AI-TOLKNING AV FIGUR: ${p.visualEvidence}]`} />
+                                       </div>
                                      )}
 
                                      {(!p.transcription || p.transcription.trim() === "") && !p.visualEvidence && (

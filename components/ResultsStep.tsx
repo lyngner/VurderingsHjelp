@@ -12,10 +12,6 @@ interface ResultsStepProps {
   rubricStatus: { loading: boolean; text: string };
 }
 
-/**
- * ResultsStep v5.5.5: "The Pedagogical Fortress"
- * Ultra-kompakt matrise med mangel-streker, dype elevrapporter og full kontroll.
- */
 export const ResultsStep: React.FC<ResultsStepProps> = ({
   activeProject,
   selectedResultCandidateId,
@@ -39,7 +35,6 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
     [candidates, selectedResultCandidateId]
   );
 
-  // Ferdighetsprofil-logikk: Grupperer mestring per Tema
   const ferdighetsprofil = useMemo(() => {
     if (!currentCandidate?.evaluation) return [];
     const breakdown = currentCandidate.evaluation.taskBreakdown;
@@ -91,7 +86,6 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
 
   return (
     <div className="flex h-full overflow-hidden bg-[#F8FAFC]">
-      {/* SIDEBAR */}
       <aside className="w-64 bg-white border-r overflow-y-auto p-4 shrink-0 no-print flex flex-col shadow-sm">
         <div className="space-y-3 mb-8">
            <button 
@@ -144,23 +138,21 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
         </div>
       </aside>
 
-      {/* HOVEDOMRÅDE */}
       <main className="flex-1 overflow-y-auto bg-slate-50/30 p-8 custom-scrollbar relative">
         {!selectedResultCandidateId ? (
-          /* ULTRA-KOMPAKT POENGMATRISE v5.5.5 */
           <div className="max-w-[1600px] mx-auto space-y-8 animate-in fade-in duration-500">
             <header className="flex justify-between items-center">
               <div>
                 <h2 className="text-3xl font-black text-slate-900 tracking-tighter">Gruppeoversikt</h2>
                 <div className="flex items-center gap-4 mt-2">
-                   <p className="text-[10px] font-black uppercase text-indigo-500 tracking-[0.2em]">Poengmatrise v5.5.5</p>
-                   <button onClick={() => handleEvaluateAll(true)} disabled={rubricStatus.loading} className="text-[8px] font-black uppercase text-slate-400 hover:text-indigo-600 transition-all flex items-center gap-1.5">
+                   <p className="text-[10px] font-black uppercase text-indigo-500 tracking-[0.2em]">Rapportmotor v5.6.6</p>
+                   <button onClick={() => handleEvaluateAll(true)} disabled={rubricStatus.loading} className="text-[8px] font-black uppercase text-slate-400 hover:text-indigo-600 transition-all flex items-center gap-1.5 no-print">
                     🔄 Re-evaluér alle
                    </button>
                 </div>
               </div>
-              <button onClick={() => window.print()} className="bg-white border border-slate-200 px-6 py-2.5 rounded-2xl font-black text-[10px] uppercase tracking-widest text-slate-600 shadow-sm hover:bg-slate-50 no-print flex items-center gap-2">
-                🖨️ Skriv ut
+              <button onClick={() => window.print()} className="bg-indigo-600 px-6 py-2.5 rounded-2xl font-black text-[10px] uppercase tracking-widest text-white shadow-xl hover:bg-indigo-700 no-print flex items-center gap-2 transition-all hover:scale-105">
+                📄 Eksporter Gruppe-PDF
               </button>
             </header>
 
@@ -211,8 +203,6 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
                           {sortedCriteria.map(crit => {
                             const taskLabel = `${crit.taskNumber}${crit.subTask}`;
                             const evalMatch = c.evaluation?.taskBreakdown.find(tb => `${tb.taskNumber}${tb.subTask}` === taskLabel);
-                            
-                            // Regel 19: Bruk '-' hvis oppgaven ikke er funnet i besvarelsen
                             const isIdentified = c.pages.some(p => p.identifiedTasks?.some(it => `${it.taskNumber}${it.subTask}` === taskLabel));
                             const score = evalMatch ? evalMatch.score : null;
                             const displayScore = (!isIdentified && score === null) ? '-' : (score !== null ? score.toString().replace('.', ',') : '-');
@@ -240,7 +230,6 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
             </div>
           </div>
         ) : (
-          /* PEDAGOGISK ELEVRAPPORT v5.5.5 */
           <div className="max-w-4xl mx-auto space-y-8 pb-32 animate-in slide-in-from-right-8 duration-500">
             <header className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100 flex justify-between items-center relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-1.5 bg-indigo-600"></div>
@@ -249,22 +238,21 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
                 <div className="flex items-center gap-4 mt-2">
                   <p className="text-slate-400 font-black uppercase text-[9px] tracking-[0.2em] flex items-center gap-2">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                    Vurderingsrapport v5.5.5
+                    Elevrapport v5.6.6
                   </p>
                   <button 
                     onClick={() => currentCandidate && handleEvaluateCandidate(currentCandidate.id)} 
                     disabled={rubricStatus.loading}
-                    className="text-[9px] font-black uppercase text-indigo-600 hover:underline transition-all flex items-center gap-1.5 disabled:opacity-50"
+                    className="text-[9px] font-black uppercase text-indigo-600 hover:underline transition-all flex items-center gap-1.5 disabled:opacity-50 no-print"
                   >
-                    🔄 Re-evaluér eleven
+                    🔄 Re-evaluér
                   </button>
                 </div>
               </div>
               <div className="flex gap-6 items-center">
-                <div className="text-right">
-                   <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Poengsum</div>
-                   <div className="text-2xl font-black text-slate-800">{currentCandidate?.evaluation?.score} / {activeProject.rubric?.totalMaxPoints}</div>
-                </div>
+                <button onClick={() => window.print()} className="bg-indigo-600 px-6 py-2.5 rounded-2xl font-black text-[10px] uppercase tracking-widest text-white shadow-xl hover:bg-indigo-700 no-print flex items-center gap-2 transition-all hover:scale-105">
+                  📄 PDF Rapport
+                </button>
                 <div className="text-center bg-slate-900 text-white px-8 py-5 rounded-[28px] shadow-2xl">
                   <div className="text-4xl font-black leading-none">{currentCandidate?.evaluation?.grade || '-'}</div>
                   <div className="text-[8px] font-black uppercase mt-2 tracking-widest text-slate-500">Karakter</div>
@@ -280,9 +268,8 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
             ) : currentCandidate?.status === 'evaluated' ? (
               <>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  {/* VEKSTPUNKTER */}
                   <section className="bg-emerald-50/50 p-10 rounded-[45px] border border-emerald-100 relative group overflow-hidden">
-                    <div className="absolute top-6 right-6 opacity-10 text-4xl group-hover:scale-110 transition-transform">🌱</div>
+                    <div className="absolute top-6 right-6 opacity-10 text-4xl group-hover:scale-110 transition-transform no-print">🌱</div>
                     <h3 className="font-black text-[11px] uppercase text-emerald-700 tracking-[0.2em] mb-8">Vekstpunkter & Mestring</h3>
                     <ul className="space-y-5">
                       {currentCandidate.evaluation?.vekstpunkter?.map((v, i) => (
@@ -294,9 +281,8 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
                     </ul>
                   </section>
 
-                  {/* FERDIGHETSPROFIL */}
                   <section className="bg-white p-10 rounded-[45px] border border-slate-100 shadow-sm relative group overflow-hidden">
-                    <div className="absolute top-6 right-6 opacity-10 text-4xl group-hover:scale-110 transition-transform">📈</div>
+                    <div className="absolute top-6 right-6 opacity-10 text-4xl group-hover:scale-110 transition-transform no-print">📈</div>
                     <h3 className="font-black text-[11px] uppercase text-slate-400 tracking-[0.2em] mb-8">Ferdighetsprofil</h3>
                     <div className="space-y-5">
                       {ferdighetsprofil.map((f, i) => (
@@ -314,16 +300,14 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
                   </section>
                 </div>
 
-                {/* HELHETLIG TILBAKEMELDING */}
                 <section className="bg-slate-900 p-12 rounded-[50px] text-white shadow-2xl relative overflow-hidden group">
-                   <div className="absolute top-8 right-8 text-7xl opacity-5 group-hover:scale-105 transition-transform">💬</div>
+                   <div className="absolute top-8 right-8 text-7xl opacity-5 group-hover:scale-105 transition-transform no-print">💬</div>
                    <h3 className="font-black text-[11px] uppercase text-indigo-400 tracking-[0.3em] mb-8">Helhetlig tilbakemelding</h3>
                    <div className="text-indigo-50 text-lg leading-relaxed font-medium pl-2">
                       <LatexRenderer content={currentCandidate.evaluation?.feedback || ""} />
                    </div>
                 </section>
 
-                {/* OPPGAVESPESIFIKKE KOMMENTARER */}
                 <section className="bg-white rounded-[50px] border border-slate-100 shadow-xl overflow-hidden">
                   <div className="px-10 py-6 border-b bg-slate-50/30 flex justify-between items-center">
                     <h3 className="font-black text-[10px] uppercase text-slate-500 tracking-[0.2em]">Spesifisert vurdering</h3>
@@ -332,7 +316,7 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
                     <thead>
                       <tr className="bg-slate-50/50 text-[10px] font-black uppercase text-slate-400 tracking-widest">
                         <th className="px-10 py-5 w-24">Oppgave</th>
-                        <th className="px-10 py-5">Tilbakemelding (Begrunnelse ved trekk)</th>
+                        <th className="px-10 py-5">Tilbakemelding</th>
                         <th className="px-10 py-5 text-right w-32">Poeng</th>
                       </tr>
                     </thead>
@@ -340,7 +324,7 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
                       {currentCandidate.evaluation?.taskBreakdown.map((t, i) => {
                         const isPerfect = t.score >= t.max;
                         return (
-                          <tr key={i} className={`group transition-colors ${isPerfect ? 'opacity-40 hover:opacity-70' : 'bg-rose-50/20'}`}>
+                          <tr key={i} className={`group transition-colors ${isPerfect ? 'opacity-50 hover:opacity-100' : 'bg-rose-50/20'}`}>
                             <td className="px-10 py-8">
                                <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-[11px] ring-1 ring-slate-200 shadow-sm transition-all ${isPerfect ? 'bg-slate-100 text-slate-500' : 'bg-indigo-600 text-white scale-110 shadow-indigo-100'}`}>
                                  {t.taskNumber}{t.subTask}
@@ -367,7 +351,7 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
                 <h3 className="text-xl font-black text-slate-800 uppercase tracking-tighter">Kandidaten er ikke vurdert</h3>
                 <button 
                   onClick={() => currentCandidate && handleEvaluateCandidate(currentCandidate.id)} 
-                  className="bg-indigo-600 text-white px-10 py-4 rounded-3xl font-black text-[11px] uppercase tracking-widest shadow-xl"
+                  className="bg-indigo-600 text-white px-10 py-4 rounded-3xl font-black text-[11px] uppercase tracking-widest shadow-xl no-print"
                 >
                   🚀 Start Vurdering
                 </button>

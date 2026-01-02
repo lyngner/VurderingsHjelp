@@ -1,8 +1,8 @@
-# Vurderingshjelp - Master Documentation (v5.5.7)
+# Vurderingshjelp - Master Documentation (v5.6.0)
 
 Profesjonelt verktøy for digitalisering og vurdering av elevbesvarelser.
 
-## 🛡️ De Hellige Reglene for Regresjonsvern (v5.5.7)
+## 🛡️ De Hellige Reglene for Regresjonsvern (v5.6.0)
 Disse reglene er absolutte. Endringer som bryter med disse vil føre til systemfeil:
 
 1.  **Fysisk Pipeline (Rotate-then-Bisect)**: Bilder skal roteres FYSISK (Canvas API) før de splittes eller lagres. Dette brenner orienteringen inn i pikslene.
@@ -10,7 +10,8 @@ Disse reglene er absolutte. Endringer som bryter med disse vil føre til systemf
 3.  **Clean Badges**: Visning i grensesnitt skal kun inneholde rene ID-er (f.eks "1A"). Ingen tekststøy i sirkler.
 4.  **Atomic Persistence**: Database-operasjoner SKAL avventes (`await`) før React-state oppdateres.
 5.  **Vertikal Matematikk**: Bruk konsekvent `aligned`-miljøer i LaTeX for alle utregninger over ett ledd.
-6.  **CAS Evidence Supremacy (Kritisk)**: All digital bevisføring (CAS/GeoGebra/Word-tabeller) SKAL skilles ut i `visualEvidence`. Det skal utføres en nøyaktig, linje-for-linje rekonstruksjon av kommandoer og resultat (DU SKAL IKKE OPPSUMMERE). I grensesnittet skal dette feltet vises integrert inni den blå transkripsjonsboksen.
+6.  **CAS Evidence Supremacy (Kritisk)**: All digital bevisføring (CAS/GeoGebra/Word-tabeller) SKAL skilles ut i `visualEvidence`. Det skal utføres en nøyaktig, linje-for-linje rekonstruksjon av kommandoer og resultat.
+7.  **Standard Point Policy**: Hver deloppgave SKAL default ha 2,0 poeng som maks. Dette er låst i KI-instruksjonen.
 
 ## 🛠️ Teknisk Standard
 Se [TECHNICAL_STANDARD.md](./TECHNICAL_STANDARD.md) for detaljert dokumentasjon av algoritmer.
