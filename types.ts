@@ -1,4 +1,4 @@
-export const SYSTEM_VERSION = "v5.3.5";
+export const SYSTEM_VERSION = "v5.5.7";
 
 export interface IdentifiedTask {
   taskNumber: string;
@@ -16,6 +16,7 @@ export interface Page {
   mimeType: string;
   rawText?: string;
   transcription?: string;
+  visualEvidence?: string; // Nytt felt for v5.5.5: CAS/Figur data
   candidateId?: string;
   part?: string;
   pageNumber?: number;

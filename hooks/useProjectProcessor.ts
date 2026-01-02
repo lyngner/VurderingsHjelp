@@ -49,6 +49,7 @@ export const useProjectProcessor = (
   const [rubricStatus, setRubricStatus] = useState<{ loading: boolean; text: string }>({ loading: false, text: '' });
   
   const isBatchProcessing = useRef(false);
+  const isStoppingEvaluation = useRef(false);
 
   const updateActiveProject = useCallback((updates: Partial<Project>) => {
     setActiveProject(prev => prev ? { ...prev, ...updates, updatedAt: Date.now() } : null);
@@ -85,6 +86,7 @@ export const useProjectProcessor = (
             candidateId, 
             part: res.part || originalPage.part || "Del 1",
             transcription: res.fullText, 
+            visualEvidence: res.visualEvidence, // Integrert v5.5.5
             identifiedTasks: tasks, 
             rotation: 0,
             status: 'completed' 
@@ -103,6 +105,7 @@ export const useProjectProcessor = (
             candidateId, 
             part: res.part || originalPage.part || "Del 1",
             transcription: res.fullText, 
+            visualEvidence: res.visualEvidence, // Integrert v5.5.5
             identifiedTasks: tasks, 
             rotation: 0,
             status: 'completed' 
@@ -125,6 +128,7 @@ export const useProjectProcessor = (
           candidateId, 
           part: res.part || originalPage.part || "Del 2", 
           transcription: res.fullText, 
+          visualEvidence: res.visualEvidence, // Integrert v5.5.5
           identifiedTasks: tasks, 
           status: 'completed',
           isDigital: true
@@ -203,14 +207,10 @@ export const useProjectProcessor = (
       isBatchProcessing.current = true;
       const rubric = activeProject.rubric;
       
-      // CRITICAL: Håndtering av batch-telling for å unngå "X/Y" feilen der X > Y.
-      // Vi setter batchTotal til det nåværende antallet, men bare hvis det er høyere enn nåværende total
-      // slik at vi bevarer progresjonen hvis flere filer ble lagt til midt i.
       setBatchTotal(prev => Math.max(prev, pendingPages.length + batchCompleted));
       setProcessingCount(pendingPages.length);
 
       const runBatch = async () => {
-        // Vi tar en kopi av pendingPages her for å unngå at listen endrer seg underveis i loopen
         const pagesToProcess = [...pendingPages];
         for (const p of pagesToProcess) {
           await processSinglePage(p, rubric);
@@ -218,7 +218,6 @@ export const useProjectProcessor = (
         isBatchProcessing.current = false;
         setCurrentAction('');
         
-        // Nullstill tellere kun når alt faktisk er ferdig (ingen pending igjen)
         const checkRemaining = activeProject?.unprocessedPages?.filter(p => p.status === 'pending') || [];
         if (checkRemaining.length === 0) {
           setTimeout(() => {
@@ -271,20 +270,62 @@ export const useProjectProcessor = (
     }
   };
 
-  const handleEvaluateAll = async () => {
+  const handleEvaluateCandidate = async (candidateId: string) => {
     if (!activeProject?.rubric) return;
+    const candIdx = activeProject.candidates.findIndex(c => c.id === candidateId);
+    if (candIdx === -1) return;
+
+    setRubricStatus({ loading: true, text: `Vurderer ${activeProject.candidates[candIdx].name}...` });
+    try {
+      const candidate = activeProject.candidates[candIdx];
+      const res = await evaluateCandidate(candidate, activeProject.rubric);
+      const updatedCand = { ...candidate, evaluation: res, status: 'evaluated' as const };
+      await saveCandidate(updatedCand);
+      
+      setActiveProject(prev => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          candidates: prev.candidates.map(c => c.id === candidateId ? updatedCand : c)
+        };
+      });
+    } catch (e) {
+      console.error("Evaluering feilet for kandidat:", candidateId, e);
+    } finally {
+      setRubricStatus({ loading: false, text: '' });
+    }
+  };
+
+  const handleEvaluateAll = async (force: boolean = false) => {
+    if (!activeProject?.rubric) return;
+    
+    // Stopp-funksjonalitet v5.5.3
+    if (rubricStatus.loading) {
+      isStoppingEvaluation.current = true;
+      return;
+    }
+
+    isStoppingEvaluation.current = false;
     setRubricStatus({ loading: true, text: 'Vurderer besvarelser...' });
     const cands = [...activeProject.candidates];
+    
     for (let i = 0; i < cands.length; i++) {
-      if (cands[i].status === 'evaluated') continue;
+      if (isStoppingEvaluation.current) break;
+      if (!force && cands[i].status === 'evaluated') continue;
+      
       setCurrentAction(`Vurderer ${cands[i].name}...`);
-      const res = await evaluateCandidate(cands[i], activeProject.rubric);
-      cands[i] = { ...cands[i], evaluation: res, status: 'evaluated' };
-      await saveCandidate(cands[i]);
-      setActiveProject(prev => prev ? { ...prev, candidates: [...cands] } : null);
+      try {
+        const res = await evaluateCandidate(cands[i], activeProject.rubric);
+        cands[i] = { ...cands[i], evaluation: res, status: 'evaluated' };
+        await saveCandidate(cands[i]);
+        setActiveProject(prev => prev ? { ...prev, candidates: [...cands] } : null);
+      } catch (e) {
+        console.error("Evaluering feilet:", cands[i].name, e);
+      }
     }
     setRubricStatus({ loading: false, text: '' });
     setCurrentAction('');
+    isStoppingEvaluation.current = false;
   };
 
   const handleSmartCleanup = async () => {
@@ -313,7 +354,7 @@ export const useProjectProcessor = (
   return { 
     processingCount, batchTotal, batchCompleted, currentAction, rubricStatus, 
     handleTaskFileSelect, handleCandidateFileSelect,
-    handleEvaluateAll, handleGenerateRubric, handleRetryPage: (p: Page) => processSinglePage(p, activeProject?.rubric), 
+    handleEvaluateAll, handleEvaluateCandidate, handleGenerateRubric, handleRetryPage: (p: Page) => processSinglePage(p, activeProject?.rubric), 
     handleSmartCleanup, updateActiveProject 
   };
 };

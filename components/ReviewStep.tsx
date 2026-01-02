@@ -231,7 +231,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
 
         if (pageToMove) {
           const targetCandidateId = String(value);
-          let targetCandidateIdx = newCandidates.findIndex(c => c.id === targetCandidateId);
+          let targetCandidateIdx = newCandidates.findIndex(c => String(c.id) === targetCandidateId);
           
           if (targetCandidateIdx === -1) {
             const newCand: Candidate = {
@@ -273,7 +273,6 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
   };
 
   const allUniqueTasks = useMemo(() => {
-    // Sorter oppgaver etter del (Del 1 før Del 2) og deretter ID
     const del1 = new Set<string>();
     const del2 = new Set<string>();
 
@@ -385,7 +384,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
               <header className="flex justify-between items-end mb-8">
                  <div>
                    <h2 className="text-3xl font-black text-slate-800 tracking-tighter">{currentReviewCandidate.name || 'Ukjent'}</h2>
-                   <p className="text-[10px] font-black uppercase text-indigo-500 tracking-[0.2em] mt-1">Kontrollerer transkripsjon</p>
+                   <p className="text-[10px] font-black uppercase text-indigo-500 tracking-[0.2em] mt-1">Kontrollerer transkripsjon v5.5.7</p>
                  </div>
               </header>
 
@@ -437,7 +436,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                       </div>
                       <div className="space-y-4">
                          <div className="flex items-center justify-between px-2 h-10">
-                            <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Transkripsjon</span>
+                            <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Elevens tekst & Bevis</span>
                             <button onClick={() => toggleEdit(p.id)} className={`text-[9px] font-black uppercase px-4 py-2 rounded-full border transition-all ${isEditing ? 'bg-emerald-600 text-white' : 'bg-white text-indigo-600 hover:bg-indigo-50'}`}>
                               {isEditing ? 'Lagre ✓' : 'Rediger ✎'}
                             </button>
@@ -461,21 +460,53 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                             </div>
                             <div className="flex-1 relative z-10 custom-scrollbar overflow-y-auto">
                                {isEditing ? (
-                                 <textarea 
-                                    autoFocus 
-                                    value={p.transcription || ''} 
-                                    onChange={e => {
-                                      const val = e.target.value;
-                                      setActiveProject(prev => prev ? ({ ...prev, candidates: prev.candidates.map(c => c.id === currentReviewCandidate.id ? { ...c, pages: c.pages.map(pg => pg.id === p.id ? { ...pg, transcription: val } : pg) } : c) }) : null);
-                                    }} 
-                                    className="w-full h-full min-h-[350px] bg-indigo-700/40 text-white p-4 rounded-xl text-sm font-medium outline-none resize-none custom-scrollbar" 
-                                 />
+                                 <div className="flex flex-col gap-4 h-full">
+                                   <div className="flex-1">
+                                     <label className="text-[7px] font-black uppercase text-indigo-200 mb-1 block tracking-widest">Elevens Brødtekst</label>
+                                     <textarea 
+                                        autoFocus 
+                                        value={p.transcription || ''} 
+                                        onChange={e => {
+                                          const val = e.target.value;
+                                          setActiveProject(prev => prev ? ({ ...prev, candidates: prev.candidates.map(c => c.id === currentReviewCandidate.id ? { ...c, pages: c.pages.map(pg => pg.id === p.id ? { ...pg, transcription: val } : pg) } : c) }) : null);
+                                        }} 
+                                        className="w-full h-48 bg-indigo-700/40 text-white p-4 rounded-xl text-sm font-medium outline-none resize-none custom-scrollbar border border-indigo-500/30" 
+                                     />
+                                   </div>
+                                   <div className="flex-1">
+                                     <label className="text-[7px] font-black uppercase text-indigo-200 mb-1 block tracking-widest">Visual Evidence (CAS / Figur)</label>
+                                     <textarea 
+                                        value={p.visualEvidence || ''} 
+                                        onChange={e => {
+                                          const val = e.target.value;
+                                          setActiveProject(prev => prev ? ({ ...prev, candidates: prev.candidates.map(c => c.id === currentReviewCandidate.id ? { ...c, pages: c.pages.map(pg => pg.id === p.id ? { ...pg, visualEvidence: val } : pg) } : c) }) : null);
+                                        }} 
+                                        className="w-full h-48 bg-slate-900/60 text-emerald-400 p-4 rounded-xl text-sm font-mono outline-none resize-none custom-scrollbar border border-indigo-500/30" 
+                                        placeholder="Rekonstruerte CAS-linjer..."
+                                     />
+                                   </div>
+                                 </div>
                                ) : (
-                                 <div className="text-white">
-                                   <LatexRenderer content={p.transcription || ""} className="text-base text-white font-medium leading-relaxed" />
-                                   {(!p.transcription || p.transcription.trim() === "") && (
-                                     <div className="py-10 text-center opacity-40 italic font-black uppercase text-[9px] tracking-widest">Tom side</div>
+                                 <div className="text-white space-y-6">
+                                   {/* VISUELT BEVISFELT INTEGRERT v5.5.7 */}
+                                   {p.visualEvidence && (
+                                     <div className="p-6 bg-slate-900 rounded-2xl border-l-4 border-indigo-500 shadow-lg animate-in slide-in-from-left-2 duration-300">
+                                       <div className="text-[8px] font-black uppercase text-indigo-400 tracking-[0.2em] mb-3 flex items-center gap-2">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
+                                          Transkribert CAS / Figurbevis
+                                       </div>
+                                       <div className="text-slate-100 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+                                          {p.visualEvidence}
+                                       </div>
+                                     </div>
                                    )}
+
+                                   <div className="pl-1">
+                                     <LatexRenderer content={p.transcription || ""} className="text-base text-white font-medium leading-relaxed" />
+                                     {(!p.transcription || p.transcription.trim() === "") && !p.visualEvidence && (
+                                       <div className="py-10 text-center opacity-40 italic font-black uppercase text-[9px] tracking-widest">Tom side</div>
+                                     )}
+                                   </div>
                                  </div>
                                )}
                             </div>

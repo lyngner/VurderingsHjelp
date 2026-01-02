@@ -1,7 +1,6 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { Project, Candidate } from './types';
-import { saveProject, getAllProjects, deleteProject as deleteProjectFromStorage, loadFullProject } from './services/storageService';
+import { saveProject, getAllProjects, deleteProject as deleteProjectFromStorage, loadFullProject, saveCandidate } from './services/storageService';
 import { useProjectProcessor } from './hooks/useProjectProcessor';
 
 import { Dashboard } from './components/Dashboard';
@@ -61,6 +60,7 @@ const App: React.FC = () => {
     });
   }, [activeProject, view]);
 
+  // Lagrer kun metadata til prosjekt-storen, kandidater lagres separat i useProjectProcessor/saveCandidate
   useEffect(() => { 
     if (activeProject) saveProject(activeProject);
   }, [activeProject]);
@@ -101,10 +101,15 @@ const App: React.FC = () => {
       if (!prev) return null;
       return {
         ...prev,
-        candidates: prev.candidates.map(c => ({
-          ...c,
-          pages: c.pages.map(p => p.id === pageId ? { ...p, rotation: ((p.rotation || 0) + 90) % 360 } : p)
-        }))
+        candidates: prev.candidates.map(c => {
+          if (!c.pages.some(p => p.id === pageId)) return c;
+          const updated = {
+            ...c,
+            pages: c.pages.map(p => p.id === pageId ? { ...p, rotation: ((p.rotation || 0) + 90) % 360 } : p)
+          };
+          saveCandidate(updated);
+          return updated;
+        })
       };
     });
   };
@@ -112,13 +117,32 @@ const App: React.FC = () => {
   const handleDeletePage = (candidateId: string, pageId: string) => {
     setActiveProject(prev => {
       if (!prev) return null;
+      
+      // ISOLERT SLETTERUTINE v5.4.4: 
+      // Vi mapper gjennom eksisterende liste. 
+      // Hvis listen var i ferd med å endre seg (innlasting), garanterer prev-objektet integritet.
+      const updatedCandidates = prev.candidates.map(c => {
+        if (c.id !== candidateId) return c;
+        
+        // Finn siden som skal fjernes
+        const pageToDelete = c.pages.find(p => p.id === pageId);
+        if (!pageToDelete) return c;
+
+        // Lag ny liste uten denne siden
+        const remainingPages = c.pages.filter(p => p.id !== pageId);
+        
+        // Oppdater objektet
+        const updatedCand = { ...c, pages: remainingPages };
+        
+        // Lagre til databasen asynkront
+        saveCandidate(updatedCand);
+        return updatedCand;
+      }).filter(c => c.pages.length > 0);
+
+      // Returner prosjektet med den oppdaterte kandidatlisten
       return {
         ...prev,
-        candidates: prev.candidates.map(c => {
-          if (c.id !== candidateId) return c;
-          const remainingPages = c.pages.filter(p => p.id !== pageId);
-          return { ...c, pages: remainingPages };
-        }).filter(c => c.pages.length > 0)
+        candidates: updatedCandidates
       };
     });
   };
@@ -130,7 +154,9 @@ const App: React.FC = () => {
         ...prev,
         candidates: prev.candidates.map(c => {
           if (c.id !== candidateId) return c;
-          return { ...c, pages: c.pages.map(p => p.id === pageId ? { ...p, pageNumber: newNum } : p) };
+          const updated = { ...c, pages: c.pages.map(p => p.id === pageId ? { ...p, pageNumber: newNum } : p) };
+          saveCandidate(updated);
+          return updated;
         })
       };
     });
