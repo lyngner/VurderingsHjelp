@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { Page, Candidate, Rubric, Project } from "../types";
 import { getFromGlobalCache, saveToGlobalCache } from "./storageService";
@@ -22,7 +21,7 @@ export const transcribeAndAnalyzeImage = async (page: Page, rubric?: Rubric | nu
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   const rubricContext = rubric 
-    ? rubric.criteria.map(c => `- OPPGAVE [${c.taskNumber}${c.subTask || ''}]: ${c.description} (Løsning: ${c.suggestedSolution.substring(0, 100)}...)`).join("\n") 
+    ? rubric.criteria.map(c => `- GYLDIG OPPGAVE [${c.taskNumber}${c.subTask || ''}]: ${c.description}`).join("\n") 
     : "Ingen fasit lastet opp.";
 
   const response = await ai.models.generateContent({
@@ -31,17 +30,22 @@ export const transcribeAndAnalyzeImage = async (page: Page, rubric?: Rubric | nu
       parts: [{ inlineData: { mimeType: page.mimeType, data: page.base64Data || "" } }],
     },
     config: { 
-      systemInstruction: `EKSPERT PÅ ELEVBESVARELSER v5.2.0:
-BRUK DENNE FASITEN SOM KART:
+      systemInstruction: `EKSPERT PÅ ELEVBESVARELSER v5.3.5 "The Final Geometric Lock":
+
+GEOMETRISK LOV (REGRESSION_GUARD):
+1. IDENTIFISERING: Se etter om bildet inneholder to (2) separate felter/sider med tekst (typisk et brettet A3-ark). Hvis du ser to sider, SKAL du behandle bildet som 'A3_SPREAD'.
+2. ROTASJON: Identifiser rotasjonen (0, 90, 180, 270) som trengs for å få teksten loddrett og lesbar. Dette er kritisk for at splittingen skal treffe margen.
+3. TVUNGEN DOBBEL-RETUR: For alle 'A3_SPREAD' SKAL du returnere nøyaktig TO (2) objekter i JSON-listen: Ett for 'LEFT' og ett for 'RIGHT'.
+4. FYSIKK: Hvis bildet er bredere enn det er høyt etter rotasjon, er det automatisk et A3_SPREAD.
+
+OPPGAVE-REGLER:
+- taskNumber: Kun siffer. subTask: Kun bokstav.
+- BRUK KUN oppgaver fra denne listen (Hard Whitelist):
 ${rubricContext}
 
-STRENGE REGLER FOR OPPGAVENAVN:
-- taskNumber skal kun være tallet (f.eks. "1")
-- subTask skal kun være bokstaven (f.eks. "a")
-- ALDRI inkluder teksten "Oppgave" eller "Del" i disse feltene.
-
-MATEMATIKK:
-- Bruk LaTeX aligned for alle utregninger over ett ledd.`,
+MATEMATIKK-REGLER:
+- Bruk LaTeX aligned for alle utregninger over ett ledd. 
+- Aligner likhetstegn vertikalt med &.`,
       thinkingConfig: { thinkingBudget: 16000 },
       responseMimeType: "application/json",
       responseSchema: {
@@ -85,14 +89,13 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promi
   });
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
-    contents: { parts: [...parts, { text: "Generer strukturert rettemanual i JSON. Sørg for at taskNumber er rent (f.eks '1') og subTask er rent (f.eks 'a')." }] },
+    contents: { parts: [...parts, { text: "Generer strukturert rettemanual i JSON. Sørg for at taskNumber er rent siffer og subTask er ren bokstav." }] },
     config: { 
-      systemInstruction: `RETTEMANUAL-EKSPERT v5.2.0:
+      systemInstruction: `RETTEMANUAL-EKSPERT v5.3.5:
 1. DEL oppgaver i Del 1 og Del 2.
 2. BRUK LaTeX aligned for alle løsningsforslag.
-3. taskNumber SKAL KUN være tallet.
-4. subTask SKAL KUN være bokstaven.
-5. MAKS 2.0 poeng per deloppgave.`,
+3. taskNumber: KUN siffer. subTask: KUN bokstav.
+4. MAKS 2.0 poeng per deloppgave.`,
       thinkingConfig: { thinkingBudget: 16000 },
       responseMimeType: "application/json",
       responseSchema: {
@@ -129,18 +132,18 @@ export const generateRubricFromTaskAndSamples = async (taskFiles: Page[]): Promi
 export const analyzeTextContent = async (text: string, rubric?: Rubric | null): Promise<any> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const rubricContext = rubric 
-    ? rubric.criteria.map(c => `- OPPGAVE [${c.taskNumber}${c.subTask || ''}]: ${c.description}`).join("\n") 
+    ? rubric.criteria.map(c => `- GYLDIG OPPGAVE [${c.taskNumber}${c.subTask || ''}]`).join("\n") 
     : "Ingen fasit lastet opp.";
   
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
     contents: { parts: [{ text: `DOKUMENT:\n\n${text}` }] },
     config: { 
-      systemInstruction: `DIGITAL ANALYSE v5.2.0:
-BRUK fasiten for å mappe oppgaver:
+      systemInstruction: `DIGITAL ANALYSE v5.3.5:
+Bruk fasiten for å mappe oppgaver:
 ${rubricContext}
 
-Sørg for rene taskNumber (1, 2, 3) og subTask (a, b, c).`,
+Sørg for rene taskNumber (1, 2, 3) og subTask (a, b, c). Sett Del 2 som default for digitale filer.`,
       thinkingConfig: { thinkingBudget: 16000 },
       responseMimeType: "application/json",
       responseSchema: {
@@ -172,7 +175,7 @@ export const evaluateCandidate = async (candidate: Candidate, rubric: Rubric): P
   const content = candidate.pages.map(p => `SIDE ${p.pageNumber}:\n${p.transcription}`).join("\n\n---\n\n");
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
-    contents: { parts: [{ text: `Vurder besvarelsen:\n${JSON.stringify(rubric)}\n\nELEV:\n${content}` }] },
+    contents: { parts: [{ text: `Vurder besvarelsen mot fasit. Bruk LaTeX aligned.\n\nFASIT:\n${JSON.stringify(rubric)}\n\nELEV:\n${content}` }] },
     config: { 
       thinkingConfig: { thinkingBudget: 24000 },
       responseMimeType: "application/json" 
@@ -185,7 +188,7 @@ export const reconcileProjectData = async (project: Project): Promise<any> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
-    contents: { parts: [{ text: `Rydd i IDer for PROSJEKT: ${JSON.stringify(project.candidates.map(c => ({ id: c.id, pages: c.pages.length })))}` }] },
+    contents: { parts: [{ text: `Finn duplikate kandidater og rydd i metadata for PROSJEKT: ${JSON.stringify(project.candidates.map(c => ({ id: c.id, pages: c.pages.length })))}` }] },
     config: { 
       thinkingConfig: { thinkingBudget: 8000 },
       responseMimeType: "application/json" 

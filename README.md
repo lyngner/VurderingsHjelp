@@ -1,18 +1,17 @@
+# Vurderingshjelp - Master Documentation (v5.3.0)
 
-# Vurderingshjelp - Master Documentation (v4.24.0)
+Profesjonelt verktøy for digitalisering og vurdering av elevbesvarelser.
 
-Profesjonelt verktøy for digitalisering og vurdering av elevbesvarelser ved bruk av Gemini 3 Pro Preview.
+## 🛡️ De Hellige Reglene for Regresjonsvern (v5.3.0)
+Disse reglene er absolutte. Endringer som bryter med disse vil føre til systemfeil:
 
-## 🛡️ Kritiske Regler for Regresjonsvern (Grunnloven)
-For å forhindre at applikasjonen degenererer, skal følgende regler ALLTID følges:
-
-1.  **Fysisk Pipeline (Rotate-then-Bisect)**: Alle rotasjoner og splittinger skal skje FYSISK via Canvas API før lagring. Se `TECHNICAL_STANDARD.md` for matematisk detaljering.
-2.  **Atomic Persistence**: Alle database-operasjoner SKAL avventes (`await`) før staten oppdateres. Dette hindrer race-conditions der kandidater forsvinner.
-3.  **Deterministisk A3-Splitting**: Landskapsbilder skal roteres til korrekt orientering FØR de splittes nøyaktig 50/50 vertikalt. Gemini SKAL returnere to objekter.
-4.  **API-Håndtering**: Bruk dynamisk klient-instansiering for Gemini 3 Pro for å fange opp aktiv API-nøkkel fra brukerdialogen.
-5.  **Anti-Crop**: Vis alltid full frame (A4). Ingen automatisert beskjæring av marger.
-6.  **Vertikal Matematikk**: Bruk konsekvent `aligned`-miljøer i LaTeX. Ingen horisontale kjede-likninger (A=B=C).
-7.  **Database Normalisering**: Respekter IndexedDB V4-strukturen (prosjekter, kandidater, media_blobs separert).
+1.  **Fysisk Pipeline (Rotate-then-Bisect)**: Bilder skal roteres FYSISK (Canvas API) før de splittes eller lagres. Dette brenner orienteringen inn i pikslene.
+2.  **A3 Force-Split**: Landskapsbilder skal alltid behandles som potensielle A3-oppslag og splittes 50/50 geometrisk.
+3.  **Clean Badges**: Visning i grensesnitt skal kun inneholde rene ID-er (f.eks "1A"). Ingen tekststøy i sirkler.
+4.  **Atomic Persistence**: Database-operasjoner SKAL avventes (`await`) før React-state oppdateres.
+5.  **Vertikal Matematikk**: Bruk konsekvent `aligned`-miljøer i LaTeX for alle utregninger over ett ledd.
 
 ## 🛠️ Teknisk Standard
-Se [TECHNICAL_STANDARD.md](./TECHNICAL_STANDARD.md) for detaljert dokumentasjon av "HVORDAN" systemet er bygget. Dette dokumentet er kritisk for å hindre kode-degenerasjon.
+Se [TECHNICAL_STANDARD.md](./TECHNICAL_STANDARD.md) for detaljert dokumentasjon av algoritmer.
+Se [DESIGN_CHOICES.md](./DESIGN_CHOICES.md) for stilguide.
+Se [DOCS_JSON_STRUCTURE.md](./DOCS_JSON_STRUCTURE.md) for dataspek.

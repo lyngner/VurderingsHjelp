@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Project, Candidate, Page } from '../types';
 import { LatexRenderer, Spinner } from './SharedUI';
@@ -175,7 +174,6 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
   const [taskFilter, setTaskFilter] = useState<string | null>(null);
   const mainScrollRef = useRef<HTMLElement>(null);
 
-  // CRITICAL UX v4.75.0: Auto-scroll til toppen ved kandidatbytte
   useEffect(() => {
     if (selectedReviewCandidateId && mainScrollRef.current) {
       mainScrollRef.current.scrollTo({ top: 0, behavior: 'auto' });
@@ -201,8 +199,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
         const taskNum = t.taskNumber || "";
         const subT = t.subTask || "";
         if (taskNum) {
-          const cleanSub = subT.toUpperCase().includes('UKJENT') ? 'UKJENT' : subT;
-          const label = `${taskNum}${cleanSub}`;
+          const label = `${taskNum}${subT}`;
           groups[groupKey].add(label);
         }
       });
@@ -276,26 +273,34 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
   };
 
   const allUniqueTasks = useMemo(() => {
-    const tasks = new Set<string>();
+    // Sorter oppgaver etter del (Del 1 før Del 2) og deretter ID
+    const del1 = new Set<string>();
+    const del2 = new Set<string>();
+
     activeProject.candidates.forEach(c => {
       c.pages.forEach(p => {
+        const part = p.part || "Del 1";
+        const isDel2 = part.toLowerCase().includes("2");
         p.identifiedTasks?.forEach(t => {
           if (t.taskNumber) {
-            const cleanSub = (t.subTask || "").toUpperCase().includes('UKJENT') ? 'UKJENT' : t.subTask || "";
-            tasks.add(`${t.taskNumber}${cleanSub}`);
+            const label = `${t.taskNumber}${t.subTask || ""}`;
+            if (isDel2) del2.add(label); else del1.add(label);
           }
         });
       });
     });
-    return Array.from(tasks).sort((a,b) => a.localeCompare(b, undefined, {numeric: true}));
+
+    return [
+      ...Array.from(del1).sort((a,b) => a.localeCompare(b, undefined, {numeric: true})).map(id => ({ id, part: 1 })),
+      ...Array.from(del2).sort((a,b) => a.localeCompare(b, undefined, {numeric: true})).map(id => ({ id, part: 2 }))
+    ];
   }, [activeProject.candidates]);
 
   const finalCandidates = useMemo(() => {
     return filteredCandidates.filter(c => {
       if (!taskFilter) return true;
       return c.pages.some(p => p.identifiedTasks?.some(t => {
-        const cleanSub = (t.subTask || "").toUpperCase().includes('UKJENT') ? 'UKJENT' : t.subTask || "";
-        return `${t.taskNumber}${cleanSub}` === taskFilter;
+        return `${t.taskNumber}${t.subTask || ""}` === taskFilter;
       }));
     });
   }, [filteredCandidates, taskFilter]);
@@ -318,15 +323,23 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
 
               {allUniqueTasks.length > 0 && (
                 <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto custom-scrollbar p-1">
-                  {allUniqueTasks.map(t => (
-                    <button 
-                      key={t}
-                      onClick={() => setTaskFilter(t === taskFilter ? null : t)}
-                      className={`text-[8px] font-black uppercase px-2 py-1 rounded-lg border transition-all ${taskFilter === t ? 'bg-slate-800 text-white' : 'bg-white text-slate-500'}`}
-                    >
-                      {t}
-                    </button>
-                  ))}
+                  {allUniqueTasks.map(t => {
+                    const isActive = taskFilter === t.id;
+                    const isDel2 = t.part === 2;
+                    return (
+                      <button 
+                        key={t.id}
+                        onClick={() => setTaskFilter(isActive ? null : t.id)}
+                        className={`text-[8px] font-black uppercase px-2 py-1 rounded-lg border transition-all ${
+                          isActive 
+                            ? (isDel2 ? 'bg-emerald-600 text-white border-emerald-700 shadow-sm' : 'bg-indigo-600 text-white border-indigo-700 shadow-sm') 
+                            : (isDel2 ? 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-100' : 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:bg-indigo-100')
+                        }`}
+                      >
+                        {t.id}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -435,12 +448,10 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                               {p.identifiedTasks && p.identifiedTasks.length > 0 && (
                                 <div className="flex flex-wrap justify-end gap-1 max-w-[60%]">
                                    {p.identifiedTasks.map(t => {
-                                     const cleanSub = (t.subTask || "").toUpperCase().includes('UKJENT') ? 'UKJENT' : t.subTask || "";
-                                     const label = `${t.taskNumber || ''}${cleanSub}`;
+                                     const label = `${t.taskNumber || ''}${t.subTask || ''}`;
                                      if (!label) return null;
-                                     const isUnknown = label.toLowerCase().includes('ukjent');
                                      return (
-                                       <span key={label} className={`text-[8px] font-black px-2 py-1 rounded-md uppercase ${isUnknown ? 'bg-rose-500 text-white' : 'bg-white/20 text-white'}`}>
+                                       <span key={label} className="text-[8px] font-black px-2 py-1 rounded-md uppercase bg-white/20 text-white">
                                          {label}
                                        </span>
                                      );

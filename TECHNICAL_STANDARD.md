@@ -1,30 +1,26 @@
+# Teknisk Standard & Algoritmer (v5.3.5)
 
-# Teknisk Standard & Algoritmer (v5.1.0)
-
-Dette dokumentet beskriver de kritiske tekniske valgene i applikasjonen. Ved videreutvikling SKAL disse standardene følges for å unngå regelbrudd.
+Dette dokumentet er systemets "lov". Ved alle fremtidige oppdateringer SKAL disse algoritmene følges for å hindre regresjon og funksjonell degenerasjon.
 
 ## 1. Bildebehandling: "Rotate-then-Bisect"
-Dette er den eneste tillatte metoden for å håndtere A3-oppslag.
-1. **Fysisk Rotasjon:** Bruk Canvas API til å "brenne inn" orientering.
-2. **Geometrisk Splitting:** Del bildet nøyaktig 50/50 på X-aksen ETTER rotasjon.
+**CRITICAL: REGRESSION_GUARD** - Rekkefølgen her er matematisk låst:
+1. **Identifisering:** Bruk KI til å identifisere to visuelle spalter med tekst. Dette trigger `A3_SPREAD` uavhengig av bildets filformat (portrett/landskap).
+2. **Fysisk Rotasjon:** Bruk Canvas API til å rotere det opprinnelige bildet basert på KI-deteksjon (0, 90, 180, 270 grader). Dette SKAL skje fysisk på pikselnivå FØR splitting.
+3. **A3 Force-Split:** Alle bilder som etter rotasjon inneholder to sider SKAL returnere to objekter (LEFT/RIGHT).
+4. **Geometrisk 50/50 kutt:** Del det roterte bildet nøyaktig på midten langs X-aksen. Ingen piksler skal forkastes, og ingen KI-basert "content detection" skal styre kuttet.
+5. **Kvalitet:** Lagre alle resulterende bilder i 95% JPEG for å bevare håndskrift.
 
-## 2. Greedy XML Extraction
-**Standard:** Bruk JSZip for å skanne ALLE filer i `word/` som inneholder tekstmetadata (headers/footers).
+## 2. Navngivning & Badges (Strikt Sanitering)
+* **taskNumber:** SKAL KUN inneholde siffer (f.eks. "1"). ALDRI ordet "Oppgave".
+* **subTask:** SKAL KUN inneholde bokstav (f.eks. "a"). 
+* **UI-Visning:** Kombiner disse til en ren ID i badges (f.eks. "1A", "4B"). Hvis en badge inneholder mer enn 3 tegn, er det et brudd på standarden og skal rettes umiddelbart.
 
-## 3. Mandatory Individualization
-**Standard:** Hvis en fil er "Ukjent", skal den tildeles en container med ID `UKJENT_[UNIQUE_ID]`. 
+## 3. Matematikk: "Vertical Pedagogical Flow"
+* **Krav:** All matematikk over ett ledd SKAL bruke LaTeX `aligned`-miljøet for vertikal oppstilling.
+* **Alignment:** Bruk `&` for å aligne likhetstegn vertikalt under hverandre. Dette er ikke valgfritt.
 
-## 4. Matematikk: "Vertical Pedagogical Flow"
-**Standard:** All matematikk over ett ledd SKAL bruke LaTeX-miljøet `aligned`.
+## 4. Atomic Persistence
+* **Regel:** React-tilstand (state) skal kun oppdateres ETTER at database-skriving (IndexedDB) er bekreftet (`await`). Dette forhindrer "race conditions" og tap av elevdata.
 
-## 5. Selection-Sync Scrolling
-**Standard:** Hovedvisningen (`main`) SKAL automatisk nullstille scrollposisjon (`scrollTop = 0`) ved hvert kandidatbytte.
-
-## 6. Hard Whitelisting & Semantisk Mapping (v5.1.0)
-**Standard:** 
-1. Applikasjonen SKAL filtrere `identifiedTasks` mot den aktive `rubric` før lagring.
-2. KI-instruksen SKAL prioritere semantisk innholdsanalyse over eksplisitte overskrifter (f.eks. hvis innholdet er en brøkregning beskrevet i oppgave 2, skal den mappes til 2 uavhengig av hva eleven skrev).
-3. Romertall (i, ii, iii) skal ALDRI betraktes som oppgavenummer med mindre de er eksplisitt i fasiten.
-
-## 7. KI-Dokumentasjon
-**Standard:** Alle endringer i modellbruk eller instrukser SKAL dokumenteres i `MODEL_DOCUMENTATION.md`.
+## 5. Diktatorisk A3-Splitting
+* **CRITICAL:** KI-modellen har ikke lov til å vurdere om et oppslag skal splittes. Den SKAL alltid returnere to sider (LEFT/RIGHT) for alle bilder identifisert som et A3-ark. Dette sikrer at brettede ark alltid blir til to A4-sider.

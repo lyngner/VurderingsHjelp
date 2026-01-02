@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Project, Page, Candidate, IdentifiedTask } from '../types';
 import { processFileToImages, splitA3Spread, processImageRotation } from '../services/fileService';
@@ -19,26 +18,6 @@ const sanitizeTaskPart = (val: string | undefined): string => {
     return match ? match[0] : cleaned.substring(0, 5);
   }
   return cleaned;
-};
-
-/**
- * HARD WHITELISTING v4.95.1
- * Fjerner oppgaver som ikke finnes i rettemanualen eller som er romertall-støy.
- */
-const filterTasksAgainstRubric = (tasks: IdentifiedTask[], project: Project | null): IdentifiedTask[] => {
-  if (!project || !project.rubric) return tasks;
-  const validTasks = new Set(project.rubric.criteria.map(c => `${c.taskNumber}${c.subTask || ''}`.toUpperCase()));
-  
-  return tasks.filter(t => {
-    const taskKey = `${t.taskNumber}${t.subTask || ''}`.toUpperCase();
-    
-    // Forkast romertall-støy (i, ii, iii, iv, v, vi, vii, viii, ix, x)
-    const isRoman = /^[IVXLCDM]+$/.test(t.subTask?.toUpperCase() || "");
-    if (isRoman && !validTasks.has(taskKey)) return false;
-
-    // Kun behold hvis den finnes i whitelisten
-    return validTasks.has(taskKey);
-  });
 };
 
 const createThumbnailFromBase64 = async (base64: string): Promise<string> => {
@@ -76,7 +55,7 @@ export const useProjectProcessor = (
   }, [setActiveProject]);
 
   const integratePageResults = async (originalPage: Page, results: any[]) => {
-    const isDigital = originalPage.mimeType === 'text/plain';
+    const isDigital = originalPage.mimeType === 'text/plain' || originalPage.isDigital;
     const processedPages: Page[] = [];
 
     if (!isDigital) {
@@ -84,13 +63,10 @@ export const useProjectProcessor = (
       if (!originalMedia) return;
 
       for (const res of results) {
-        const rawTasks = (res.identifiedTasks || []).map((t: any) => ({
+        const tasks = (res.identifiedTasks || []).map((t: any) => ({
           taskNumber: sanitizeTaskPart(t.taskNumber),
           subTask: sanitizeTaskPart(t.subTask)
         }));
-        
-        // HARD WHITELISTING
-        const tasks = filterTasksAgainstRubric(rawTasks, activeProject);
         
         let candRaw = String(res.candidateId || "UKJENT").trim().toUpperCase();
         let candidateId = candRaw.replace(/\D/g, '');
@@ -135,13 +111,10 @@ export const useProjectProcessor = (
       }
     } else {
       for (const res of results) {
-        const rawTasks = (res.identifiedTasks || []).map((t: any) => ({
+        const tasks = (res.identifiedTasks || []).map((t: any) => ({
           taskNumber: sanitizeTaskPart(t.taskNumber),
           subTask: sanitizeTaskPart(t.subTask)
         }));
-
-        // HARD WHITELISTING
-        const tasks = filterTasksAgainstRubric(rawTasks, activeProject);
         
         let candRaw = String(res.candidateId || "UKJENT").trim().toUpperCase();
         let candidateId = candRaw.replace(/\D/g, '');
@@ -153,12 +126,12 @@ export const useProjectProcessor = (
           part: res.part || originalPage.part || "Del 2", 
           transcription: res.fullText, 
           identifiedTasks: tasks, 
-          status: 'completed' 
+          status: 'completed',
+          isDigital: true
         });
       }
     }
 
-    // ATOMISK OPPDATERING
     setActiveProject(prev => {
       if (!prev) return null;
       const updatedCands = [...prev.candidates];
@@ -201,7 +174,7 @@ export const useProjectProcessor = (
 
       setCurrentAction(`Analyserer ${page.fileName}...`);
       
-      if (page.mimeType === 'text/plain') {
+      if (page.mimeType === 'text/plain' || page.isDigital) {
         const textToAnalyze = page.transcription || page.rawText || "";
         const res = await analyzeTextContent(textToAnalyze, rubric);
         await integratePageResults(page, [res]);
@@ -230,16 +203,29 @@ export const useProjectProcessor = (
       isBatchProcessing.current = true;
       const rubric = activeProject.rubric;
       
-      setBatchTotal(pendingPages.length);
-      setBatchCompleted(0);
+      // CRITICAL: Håndtering av batch-telling for å unngå "X/Y" feilen der X > Y.
+      // Vi setter batchTotal til det nåværende antallet, men bare hvis det er høyere enn nåværende total
+      // slik at vi bevarer progresjonen hvis flere filer ble lagt til midt i.
+      setBatchTotal(prev => Math.max(prev, pendingPages.length + batchCompleted));
       setProcessingCount(pendingPages.length);
 
       const runBatch = async () => {
-        for (const p of pendingPages) {
+        // Vi tar en kopi av pendingPages her for å unngå at listen endrer seg underveis i loopen
+        const pagesToProcess = [...pendingPages];
+        for (const p of pagesToProcess) {
           await processSinglePage(p, rubric);
         }
         isBatchProcessing.current = false;
         setCurrentAction('');
+        
+        // Nullstill tellere kun når alt faktisk er ferdig (ingen pending igjen)
+        const checkRemaining = activeProject?.unprocessedPages?.filter(p => p.status === 'pending') || [];
+        if (checkRemaining.length === 0) {
+          setTimeout(() => {
+            setBatchTotal(0);
+            setBatchCompleted(0);
+          }, 1500);
+        }
       };
       runBatch();
     }
@@ -248,13 +234,10 @@ export const useProjectProcessor = (
   const handleTaskFileSelect = async (files: FileList) => {
     if (!activeProject) return;
     const fileList = Array.from(files);
-    setBatchTotal(fileList.length);
-    setBatchCompleted(0);
     const allPages: Page[] = [];
     for (const f of fileList) {
       const pages = await processFileToImages(f);
       allPages.push(...pages);
-      setBatchCompleted(prev => prev + 1);
     }
     updateActiveProject({ taskFiles: [...activeProject.taskFiles, ...allPages] });
   };

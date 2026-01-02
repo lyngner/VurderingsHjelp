@@ -1,3 +1,4 @@
+export const SYSTEM_VERSION = "v5.3.5";
 
 export interface IdentifiedTask {
   taskNumber: string;
@@ -18,10 +19,12 @@ export interface Page {
   candidateId?: string;
   part?: string;
   pageNumber?: number;
-  layoutType?: PageLayout; // Detektert sideoppsett
+  layoutType?: PageLayout; 
   identifiedTasks?: IdentifiedTask[];
   status: 'pending' | 'processing' | 'completed' | 'error';
+  statusLabel?: string;
   rotation?: number;
+  isDigital?: boolean;
 }
 
 export interface TaskEvaluation {

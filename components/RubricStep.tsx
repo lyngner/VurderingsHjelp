@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo } from 'react';
 import { Project, Rubric, RubricCriterion } from '../types';
 import { LatexRenderer, Spinner } from './SharedUI';
@@ -32,7 +31,6 @@ export const RubricStep: React.FC<RubricStepProps> = ({
     criteria.forEach(c => {
       const part = c.part || "Del 1";
       const groupKey = part.toLowerCase().includes("2") ? "Del 2" : "Del 1";
-      // Sanitiserer taskNumber for visning i sidebar
       const cleanNum = String(c.taskNumber || "").replace(/[^0-9]/g, '');
       if (cleanNum) groups[groupKey].add(cleanNum);
     });
@@ -44,12 +42,34 @@ export const RubricStep: React.FC<RubricStepProps> = ({
   }, [criteria]);
 
   const filteredCriteria = useMemo(() => {
-    if (!selectedTask) return criteria;
-    return criteria.filter(c => {
+    // Sortering v5.3.1: Del 1 ALLTID før Del 2, deretter numerisk oppgave
+    const sortCriteria = (list: RubricCriterion[]) => {
+      return [...list].sort((a, b) => {
+        const partA = (a.part || "Del 1").toLowerCase().includes("2") ? 2 : 1;
+        const partB = (b.part || "Del 1").toLowerCase().includes("2") ? 2 : 1;
+        
+        // 1. Sorter på del (Del 1 kommer før Del 2)
+        if (partA !== partB) return partA - partB;
+        
+        // 2. Sorter på oppgavenummer (numerisk)
+        const numA = parseInt(String(a.taskNumber).replace(/[^0-9]/g, '')) || 0;
+        const numB = parseInt(String(b.taskNumber).replace(/[^0-9]/g, '')) || 0;
+        if (numA !== numB) return numA - numB;
+        
+        // 3. Sorter på deloppgave (alfabetisk)
+        return (a.subTask || "").localeCompare(b.subTask || "");
+      });
+    };
+
+    if (!selectedTask) return sortCriteria(criteria);
+    
+    const filtered = criteria.filter(c => {
       const groupKey = (c.part || "Del 1").toLowerCase().includes("2") ? "Del 2" : "Del 1";
       const cleanNum = String(c.taskNumber || "").replace(/[^0-9]/g, '');
       return cleanNum === selectedTask.num && groupKey === selectedTask.part;
     });
+    
+    return sortCriteria(filtered);
   }, [selectedTask, criteria]);
 
   const handleFieldChange = (criterionName: string, field: keyof RubricCriterion, value: any) => {
@@ -86,10 +106,9 @@ export const RubricStep: React.FC<RubricStepProps> = ({
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-[#F8FAFC]">
-      {/* SIDEBAR - Gjenopprettet v3.23.0 standard */}
       <aside className="w-56 bg-white border-r flex flex-col shrink-0 no-print shadow-sm h-full">
         <div className="p-4 border-b bg-white/80 shrink-0">
-          <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Rettemanual</h3>
+          <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Navigasjon</h3>
         </div>
         
         <nav className="flex-1 overflow-y-auto p-3 space-y-6 custom-scrollbar">
@@ -148,7 +167,6 @@ export const RubricStep: React.FC<RubricStepProps> = ({
         </div>
       </aside>
 
-      {/* HOVEDINNHOLD */}
       <main className="flex-1 overflow-y-auto custom-scrollbar p-6 h-full bg-[#F8FAFC]">
         <div className="max-w-5xl mx-auto space-y-6 pb-20">
           
@@ -177,21 +195,17 @@ export const RubricStep: React.FC<RubricStepProps> = ({
               const isEditingHeader = editingHeaderId === crit.name;
               const isEditingSolution = editingId === crit.name;
               const isEditingErrors = editingErrorsId === crit.name;
-              const isDel2 = crit.part?.toLowerCase().includes('2');
-              
-              // Badge-sanitering: KUN selve nummeret og bokstaven, ingenting mer.
+              const isDel2 = (crit.part || "").toLowerCase().includes('2');
               const cleanNum = String(crit.taskNumber || "").replace(/[^0-9]/g, '');
               const cleanSub = String(crit.subTask || "").toUpperCase().replace(/[^A-Z]/g, '');
               const badgeLabel = `${cleanNum}${cleanSub}`;
 
               return (
                 <div key={crit.name} className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-                  
                   <div className="px-6 py-4 border-b border-slate-50 flex justify-between items-center bg-slate-50/20 flex-wrap gap-4">
                     <div className="flex items-center gap-4 min-w-0 flex-1">
-                      {/* Badge-design v4.3.0 */}
                       <div className={`w-12 h-12 rounded-xl text-white flex flex-col items-center justify-center shadow-lg shrink-0 ${isDel2 ? 'bg-emerald-600' : 'bg-slate-800'}`}>
-                        <span className="text-[6px] font-black opacity-40 uppercase tracking-tighter mb-0.5">{crit.part}</span>
+                        <span className="text-[6px] font-black opacity-40 uppercase tracking-tighter mb-0.5">{isDel2 ? 'Del 2' : 'Del 1'}</span>
                         <div className="text-sm font-black leading-none">
                            {badgeLabel}
                         </div>
@@ -241,7 +255,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                       <div className="space-y-3">
                         <div className="flex justify-between items-center">
                           <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.1em] flex items-center gap-1.5">
-                            <div className="w-2 h-2 rounded-full bg-emerald-400"></div>
+                            <div className={`w-2 h-2 rounded-full ${isDel2 ? 'bg-emerald-400' : 'bg-indigo-400'}`}></div>
                             Løsningsforslag
                           </h4>
                           <button onClick={() => setEditingId(isEditingSolution ? null : crit.name)} className="text-[9px] font-black uppercase text-indigo-500 hover:underline">

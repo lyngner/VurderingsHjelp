@@ -1,6 +1,5 @@
-
 import React, { useMemo, useState, useEffect } from 'react';
-import { Project, Page } from '../types';
+import { Project, Page, Candidate } from '../types';
 import { Spinner } from './SharedUI';
 
 interface SetupStepProps {
@@ -50,10 +49,12 @@ export const SetupStep: React.FC<SetupStepProps> = ({
 
   const progressPercent = useMemo(() => {
     if (batchTotal === 0 && !isAiWorking) return 0;
-    const fileProgress = batchTotal > 0 ? (batchCompleted / batchTotal) * 100 : 0;
+    const safeTotal = Math.max(batchTotal, batchCompleted);
+    const fileProgress = safeTotal > 0 ? (batchCompleted / safeTotal) * 100 : 0;
+    
     if (isAiWorking) {
-      if (batchTotal > 0 && batchCompleted >= batchTotal) return 98;
-      if (batchTotal === 0) return 95;
+      if (safeTotal > 0 && batchCompleted >= safeTotal) return 98;
+      if (safeTotal === 0) return 95;
     }
     return Math.min(100, Math.round(fileProgress));
   }, [batchTotal, batchCompleted, isAiWorking]);
@@ -69,6 +70,25 @@ export const SetupStep: React.FC<SetupStepProps> = ({
       errors: unprocessed.filter(p => p.status === 'error').length
     };
   }, [activeProject]);
+
+  const getGroupedTasks = (candidate: Candidate) => {
+    const groups: Record<string, Set<string>> = {
+      "Del 1": new Set<string>(),
+      "Del 2": new Set<string>()
+    };
+    candidate.pages.forEach(p => {
+      const part = p.part || "Del 1";
+      const groupKey = part.toLowerCase().includes("2") ? "Del 2" : "Del 1";
+      p.identifiedTasks?.forEach(t => {
+        const label = `${t.taskNumber}${t.subTask || ''}`;
+        if (label) groups[groupKey].add(label);
+      });
+    });
+    return {
+      del1: Array.from(groups["Del 1"]).sort((a,b) => a.localeCompare(b, undefined, {numeric: true})),
+      del2: Array.from(groups["Del 2"]).sort((a,b) => a.localeCompare(b, undefined, {numeric: true}))
+    };
+  };
 
   const handleConnectKey = async () => {
     if ((window as any).aistudio?.openSelectKey) {
@@ -108,7 +128,7 @@ export const SetupStep: React.FC<SetupStepProps> = ({
                 </h4>
                 <div className="flex items-center gap-3">
                   <p className="text-xl font-black text-slate-800">
-                    {progressPercent}% <span className="text-slate-300 font-medium">({batchCompleted}/{batchTotal})</span>
+                    {progressPercent}% <span className="text-slate-300 font-medium">({batchCompleted}/{Math.max(batchTotal, batchCompleted)})</span>
                   </p>
                   {currentAction && (
                     <span className="text-[11px] font-bold text-indigo-500 bg-indigo-50 px-3 py-1 rounded-full animate-pulse border border-indigo-100/50">
@@ -149,7 +169,7 @@ export const SetupStep: React.FC<SetupStepProps> = ({
         <div className="md:col-span-4 bg-white rounded-[45px] shadow-sm border border-slate-100 flex flex-col overflow-hidden h-full">
           <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/20 shrink-0">
             <div>
-              <h3 className="font-black text-[10px] uppercase text-indigo-600 tracking-[0.2em]">1. Oppgave / Fasit</h3>
+              <h3 className="font-black text-[10px] uppercase text-indigo-600 tracking-[0.2em]">1. Oppgaver / prøver</h3>
             </div>
             {(activeProject?.taskFiles?.length || 0) > 0 && (
               <button onClick={() => updateActiveProject({ taskFiles: [], rubric: null })} className="text-[9px] font-black uppercase text-rose-400 hover:text-rose-600 transition-colors">Tøm ✕</button>
@@ -223,7 +243,7 @@ export const SetupStep: React.FC<SetupStepProps> = ({
               {!hasRubric && stats.pending > 0 && (
                 <div className="mb-4 bg-amber-50 border border-amber-100 p-4 rounded-2xl flex items-center gap-3 animate-pulse">
                    <span className="text-amber-500">⏳</span>
-                   <p className="text-[10px] font-black uppercase text-amber-700 tracking-widest">Venter på fasit før analyse starter...</p>
+                   <p className="text-[10px] font-black uppercase text-amber-700 tracking-widest">Venter på rettemanual før transkribering starter...</p>
                 </div>
               )}
 
@@ -241,25 +261,53 @@ export const SetupStep: React.FC<SetupStepProps> = ({
                   </div>
                 ))}
 
-                {(activeProject?.candidates || []).map(c => (
-                  <button 
-                    key={c.id} 
-                    onClick={() => onNavigateToCandidate?.(c.id)}
-                    className="group/card text-[11px] font-black bg-white p-4 rounded-2xl border border-slate-100 text-slate-700 flex justify-between items-center shadow-sm hover:border-indigo-600 hover:bg-indigo-50 transition-all text-left animate-in fade-in slide-in-from-bottom-2 duration-300"
-                  >
-                    <span className="truncate flex items-center gap-3">
-                      <span className="text-indigo-500 text-lg group-hover/card:scale-110 transition-transform">👤</span> 
-                      <div>
-                        <div className="truncate font-black text-slate-800">{c.name}</div>
-                        <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest group-hover/card:text-indigo-500">KLIKK FOR KONTROLL →</div>
+                {(activeProject?.candidates || []).map(c => {
+                  const { del1, del2 } = getGroupedTasks(c);
+                  const isDigital = c.pages.some(p => p.isDigital);
+                  const pageCount = c.pages.filter(p => !p.isDigital).length;
+                  
+                  return (
+                    <button 
+                      key={c.id} 
+                      onClick={() => onNavigateToCandidate?.(c.id)}
+                      className="group/card text-[11px] font-black bg-white p-4 rounded-2xl border border-slate-100 text-slate-700 flex flex-col gap-3 shadow-sm hover:border-indigo-600 hover:bg-indigo-50 transition-all text-left animate-in fade-in slide-in-from-bottom-2 duration-300"
+                    >
+                      <div className="flex justify-between items-center w-full">
+                        <span className="truncate flex items-center gap-3">
+                          <span className="text-indigo-500 text-lg group-hover/card:scale-110 transition-transform">👤</span> 
+                          <div>
+                            <div className="truncate font-black text-slate-800">{c.name}</div>
+                            <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest group-hover/card:text-indigo-500">KLIKK FOR KONTROLL →</div>
+                          </div>
+                        </span>
+                        <div className="flex items-center gap-2">
+                           <div className="flex flex-col items-end gap-1">
+                             <div className="flex gap-1">
+                               {pageCount > 0 && (
+                                 <span className="text-[8px] font-black bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full uppercase">
+                                   {pageCount} s
+                                 </span>
+                               )}
+                               {isDigital && (
+                                 <span className="text-[8px] font-black bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full uppercase">
+                                   Digital
+                                 </span>
+                               )}
+                             </div>
+                           </div>
+                           <span className="text-indigo-500 font-black">✓</span>
+                        </div>
                       </div>
-                    </span>
-                    <div className="flex items-center gap-2">
-                       <span className="text-[8px] font-black bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full uppercase">{c.pages.length} s</span>
-                       <span className="text-indigo-500 font-black">✓</span>
-                    </div>
-                  </button>
-                ))}
+
+                      {(del1.length > 0 || del2.length > 0) && (
+                        <div className="flex flex-wrap gap-1 px-1">
+                          {del1.map(t => (<span key={t} className="text-[7px] font-black uppercase px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-500 border border-indigo-100/50">{t}</span>))}
+                          {del2.map(t => (<span key={t} className="text-[7px] font-black uppercase px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-600 border border-emerald-100/50">{t}</span>))}
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>

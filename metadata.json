@@ -1,5 +1,5 @@
 {
-  "name": "Vurderingshjelp v5.1.9",
-  "description": "Profesjonelt verktøy for transkribering og vurdering. Fikset CORS og base-path problemer.",
+  "name": "Vurderingshjelp v5.3.0",
+  "description": "Restored Strict Architecture: Rotate-then-Bisect, A3 Force-Split og Vertical Math.",
   "requestFramePermissions": []
 }

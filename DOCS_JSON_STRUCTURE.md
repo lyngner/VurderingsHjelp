@@ -1,49 +1,26 @@
+# Teknisk Dokumentasjon: JSON & Database (v5.3.0)
 
-# Teknisk Dokumentasjon: JSON & Database (v4.16.0)
+## 🔍 KI-Kontrakt (Response Schemas)
 
-## 🏛️ Database-struktur (IndexedDB V4)
-Applikasjonen bruker en normalisert database for å håndtere store datamengder uten å krasje nettleseren.
-
-### 1. `projects` store
-Lagrer metadata om selve prosjektet.
-*   `id`: String (UUID)
-*   `name`: String
-*   `rubric`: Rubric-objekt (Fasit)
-*   `candidateCount`: Integer (Cache for dashboard)
-*   `taskFiles`: Array av Page-objekter (Oppgaveark)
-
-### 2. `candidates` store
-Lagrer normaliserte elevdata.
-*   `id`: String (Kandidatnummer)
-*   `projectId`: String (Fremmednøkkel med Index)
-*   `name`: String
-*   `pages`: Array av Page-objekter (UTEN base64Data)
-*   `evaluation`: Vurderingsresultat
-
-### 3. `media_blobs` store
-Lagrer tunge binærdata.
-*   `id`: String (Koblet til Page.id)
-*   `data`: Base64-streng (Full oppløsning)
-
-## 🔍 KI-Kontrakt (Response Schema)
-Alle API-kall mot Gemini 3 Pro skal bruke `responseSchema` for å garantere følgende struktur:
-
-### Bildeanalyse (OCR)
+### Rettemanual (RubricCriterion)
 ```json
 {
-  "layoutType": "A4_SINGLE" | "A3_SPREAD",
-  "candidateId": "KUN siffer",
-  "fullText": "LaTeX-transkripsjon uten systeminstruks",
-  "rotation": 0 | 90 | 180 | 270,
-  "identifiedTasks": [{ "taskNumber": "string", "subTask": "string" }]
+  "taskNumber": "1",        // Kun siffer
+  "subTask": "a",           // Kun bokstav
+  "part": "Del 1",          // "Del 1" eller "Del 2"
+  "suggestedSolution": "...", // LaTeX aligned miljø
+  "tema": "Brøkregning"      // Kort tittel
 }
 ```
 
-### Digital Analyse (Word)
-Søker etter `candidateId` i metadata/header og mapper tekstsekvenser til `identifiedTasks` basert på fasiten.
+### Elevbesvarelse (IdentifiedTask)
+```json
+{
+  "taskNumber": "1",
+  "subTask": "a"
+}
+```
 
-## 🧼 JSON Sanitering
-Funksjonen `cleanJson` i `geminiService.ts` er kritisk. Den må alltid:
-1. Fjerne Markdown-kodeblokker (```json).
-2. Finne første `{` eller `[` og siste `}` eller `]`.
-3. Håndtere asynkrone ufullstendige svar ved bruk av try/catch.
+## 🛡️ Valideringsregler
+1. **Hard Whitelisting:** Alle oppgaver detektert i elevbesvarelser som ikke finnes i rettemanualen skal forkastes umiddelbart.
+2. **Roman Numeral Guard:** Romertall (i, ii, iii) skal ALDRI tolkes som egne oppgaver, kun som punktlister i transkripsjonen.
