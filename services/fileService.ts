@@ -1,3 +1,4 @@
+
 import { Page } from '../types';
 import mammoth from 'mammoth';
 import JSZip from 'jszip';
@@ -34,6 +35,15 @@ const createThumbnail = async (base64: string): Promise<string> => {
   });
 };
 
+export const getImageDimensions = async (base64: string): Promise<{ width: number, height: number }> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.width, height: img.height });
+    img.onerror = () => reject(new Error("Kunne ikke laste bilde for dimensjonssjekk"));
+    img.src = base64;
+  });
+};
+
 const extractWordMetadata = async (arrayBuffer: ArrayBuffer): Promise<string> => {
   try {
     const zip = await JSZip.loadAsync(arrayBuffer);
@@ -50,6 +60,7 @@ const extractWordMetadata = async (arrayBuffer: ArrayBuffer): Promise<string> =>
     }
     return metaText.trim();
   } catch (e) {
+    console.warn("Klarte ikke å hente metadata fra Word-fil (header/footer):", e);
     return "";
   }
 };
@@ -109,18 +120,26 @@ export const splitA3Spread = async (base64: string, side: 'LEFT' | 'RIGHT', rota
 
 export const processFileToImages = async (file: File): Promise<Page[]> => {
   return new Promise(async (resolve) => {
-    if (file.name.endsWith('.docx')) {
+    const lowerName = file.name.toLowerCase();
+    
+    // 1. DOCX Processing
+    if (lowerName.endsWith('.docx')) {
       try {
+        console.log(`Starter behandling av Word-fil: ${file.name}`);
         const buffer = await file.arrayBuffer();
         const metaText = await extractWordMetadata(buffer);
         const result = await mammoth.extractRawText({ arrayBuffer: buffer });
         const combinedText = `[METADATA]:\n${metaText}\n\n[INNHOLD]:\n${result.value}`;
         const id = Math.random().toString(36).substring(7);
         resolve([{ id, fileName: file.name, contentHash: generateHash(combinedText), mimeType: 'text/plain', status: 'pending', rawText: combinedText, transcription: combinedText, candidateId: "UKJENT", rotation: 0 }]);
-      } catch (e) { resolve([]); }
+      } catch (e) { 
+        console.error(`Feil ved behandling av Word-fil ${file.name}:`, e);
+        resolve([]); 
+      }
       return;
     }
     
+    // 2. PDF Processing
     if (file.type === 'application/pdf') {
       try {
         const buffer = await file.arrayBuffer();
@@ -139,10 +158,14 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
           pages.push({ id, fileName: `${file.name} (S${i})`, imagePreview: thumb, contentHash: generateHash(b64), mimeType: 'image/jpeg', status: 'pending', rotation: 0 });
         }
         resolve(pages);
-      } catch (e) { resolve([]); }
+      } catch (e) { 
+        console.error(`Feil ved behandling av PDF ${file.name}:`, e);
+        resolve([]); 
+      }
       return;
     }
 
+    // 3. Image Processing
     if (file.type.startsWith('image/')) {
       const reader = new FileReader();
       reader.onload = (e) => {
@@ -157,9 +180,19 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
           const thumb = await createThumbnail(b64);
           resolve([{ id, fileName: file.name, imagePreview: thumb, contentHash: generateHash(b64), mimeType: 'image/jpeg', status: 'pending', rotation: 0 }]);
         };
+        img.onerror = () => {
+          console.error(`Kunne ikke lese bilde: ${file.name}`);
+          resolve([]);
+        };
         img.src = e.target?.result as string;
       };
+      reader.onerror = () => resolve([]);
       reader.readAsDataURL(file);
+      return;
     }
+
+    // 4. Fallback for unsupported files
+    console.warn(`Filtype støttes ikke: ${file.name} (${file.type})`);
+    resolve([]);
   });
 };

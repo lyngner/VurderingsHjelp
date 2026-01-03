@@ -1,4 +1,5 @@
-export const SYSTEM_VERSION = "v5.8.5";
+
+export const SYSTEM_VERSION = "v6.6.7";
 
 export interface IdentifiedTask {
   taskNumber: string;

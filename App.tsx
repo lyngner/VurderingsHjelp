@@ -1,6 +1,7 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { Project, Candidate } from './types';
-import { saveProject, getAllProjects, deleteProject as deleteProjectFromStorage, loadFullProject, saveCandidate } from './services/storageService';
+import { saveProject, getAllProjects, deleteProject as deleteProjectFromStorage, loadFullProject, saveCandidate, deleteMedia, deleteCandidate } from './services/storageService';
 import { useProjectProcessor } from './hooks/useProjectProcessor';
 
 import { Dashboard } from './components/Dashboard';
@@ -32,9 +33,12 @@ const App: React.FC = () => {
     batchCompleted,
     currentAction,
     rubricStatus,
+    useFlashFallback,
+    setUseFlashFallback,
     handleTaskFileSelect,
     handleCandidateFileSelect,
     handleEvaluateAll,
+    handleEvaluateCandidate,
     handleGenerateRubric,
     handleRegenerateCriterion,
     handleRegeneratePage,
@@ -48,13 +52,20 @@ const App: React.FC = () => {
   const [reviewFilter, setReviewFilter] = useState('');
 
   useEffect(() => {
-    if (activeProject && activeProject.taskFiles.length > 0 && !activeProject.rubric && !rubricStatus.loading && processingCount === 0) {
+    if (
+      activeProject && 
+      activeProject.taskFiles.length > 0 && 
+      !activeProject.rubric && 
+      !rubricStatus.loading && 
+      !rubricStatus.errorType && 
+      processingCount === 0
+    ) {
       const timer = setTimeout(() => {
         handleGenerateRubric();
       }, 1000);
       return () => clearTimeout(timer);
     }
-  }, [activeProject?.taskFiles, activeProject?.rubric, rubricStatus.loading, processingCount]);
+  }, [activeProject?.taskFiles, activeProject?.rubric, rubricStatus.loading, rubricStatus.errorType, processingCount]);
 
   useEffect(() => {
     getAllProjects().then(all => {
@@ -93,6 +104,12 @@ const App: React.FC = () => {
   };
 
   const handleDeleteProject = async (id: string) => {
+    // FIX v6.2.8: Hvis vi sletter det aktive prosjektet, må vi fjerne det fra state først.
+    // Ellers vil useEffect-en ovenfor prøve å lagre det på nytt (zombie-prosjekt).
+    if (activeProject && activeProject.id === id) {
+      setActiveProject(null);
+    }
+    
     await deleteProjectFromStorage(id);
     setProjects(prev => prev.filter(p => p.id !== id));
   };
@@ -115,18 +132,21 @@ const App: React.FC = () => {
     });
   };
 
-  const handleDeletePage = (candidateId: string, pageId: string) => {
+  const handleDeletePage = async (candidateId: string, pageId: string) => {
+    await deleteMedia(pageId);
+
     setActiveProject(prev => {
       if (!prev) return null;
       const updatedCandidates = prev.candidates.map(c => {
         if (c.id !== candidateId) return c;
-        const pageToDelete = c.pages.find(p => p.id === pageId);
-        if (!pageToDelete) return c;
         const remainingPages = c.pages.filter(p => p.id !== pageId);
+        
+        if (remainingPages.length === 0) return null;
+
         const updatedCand = { ...c, pages: remainingPages };
-        saveCandidate(updatedCand);
         return updatedCand;
-      }).filter(c => c.pages.length > 0);
+      }).filter((c): c is Candidate => c !== null);
+
       return { ...prev, candidates: updatedCandidates };
     });
   };
@@ -198,6 +218,8 @@ const App: React.FC = () => {
                 batchCompleted={batchCompleted} 
                 currentAction={currentAction}
                 rubricStatus={rubricStatus} 
+                useFlashFallback={useFlashFallback}
+                setUseFlashFallback={setUseFlashFallback}
                 handleTaskFileSelect={handleTaskFileSelect} 
                 handleGenerateRubric={() => handleGenerateRubric()} 
                 handleCandidateFileSelect={handleCandidateFileSelect} 
@@ -210,7 +232,7 @@ const App: React.FC = () => {
               <ReviewStep activeProject={activeProject} selectedReviewCandidateId={selectedReviewCandidateId} setSelectedReviewCandidateId={(id) => setSelectedReviewCandidateId(id)} reviewFilter={reviewFilter} setReviewFilter={setReviewFilter} filteredCandidates={filteredCandidates} currentReviewCandidate={activeProject.candidates.find(c => c.id === selectedReviewCandidateId) || null} rotatePage={handleRotatePage} deletePage={handleDeletePage} updatePageNumber={handleUpdatePageNumber} setActiveProject={setActiveProject} handleSmartCleanup={handleSmartCleanup} isCleaning={rubricStatus.loading} handleRegeneratePage={handleRegeneratePage} />
             )}
             {currentStep === 'rubric' && <RubricStep activeProject={activeProject} handleGenerateRubric={() => handleGenerateRubric()} rubricStatus={rubricStatus} updateActiveProject={updateActiveProject} handleRegenerateCriterion={handleRegenerateCriterion} />}
-            {currentStep === 'results' && <ResultsStep activeProject={activeProject} selectedResultCandidateId={selectedResultCandidateId} setSelectedResultCandidateId={setSelectedResultCandidateId} handleEvaluateAll={handleEvaluateAll} handleGenerateRubric={() => handleGenerateRubric()} rubricStatus={rubricStatus} />}
+            {currentStep === 'results' && <ResultsStep activeProject={activeProject} selectedResultCandidateId={selectedResultCandidateId} setSelectedResultCandidateId={setSelectedResultCandidateId} handleEvaluateAll={handleEvaluateAll} handleEvaluateCandidate={handleEvaluateCandidate} handleGenerateRubric={() => handleGenerateRubric()} rubricStatus={rubricStatus} />}
           </>
         )}
       </main>

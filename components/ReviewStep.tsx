@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Project, Candidate, Page } from '../types';
 import { LatexRenderer, Spinner } from './SharedUI';
@@ -43,6 +44,7 @@ const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
 
   useEffect(() => {
     let currentUrl: string | null = null;
+    let timeoutId: any;
 
     const loadFullRes = async () => {
       if (!isVisible) {
@@ -56,14 +58,26 @@ const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
 
       if (blobUrl) return;
 
+      // Timeout for å hindre evig spinner
+      timeoutId = setTimeout(() => {
+        if (!blobUrl && !error) {
+          setError(true);
+          console.warn(`Timeout: Kunne ikke hente bilde for side ${page.id}`);
+        }
+      }, 5000);
+
       try {
         const base64 = await getMedia(page.id);
+        clearTimeout(timeoutId);
         if (base64) {
           const blob = base64ToBlob(base64);
           currentUrl = URL.createObjectURL(blob);
           setBlobUrl(currentUrl);
+        } else {
+          setError(true);
         }
       } catch (e) {
+        clearTimeout(timeoutId);
         console.error("Feil ved lasting av bilde", e);
         setError(true);
       }
@@ -72,6 +86,7 @@ const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
     loadFullRes();
 
     return () => {
+      clearTimeout(timeoutId);
       if (currentUrl) {
         URL.revokeObjectURL(currentUrl);
       }
@@ -132,7 +147,7 @@ const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
       
       {error && (
         <div className="absolute inset-0 flex items-center justify-center bg-rose-50/90 text-rose-500 p-4 text-center">
-          <p className="text-[8px] font-black uppercase tracking-widest">Kunne ikke laste bildet.</p>
+          <p className="text-[8px] font-black uppercase tracking-widest">Fil mangler (Slett & Last opp på nytt)</p>
         </div>
       )}
     </div>
@@ -312,6 +327,17 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
     });
   }, [filteredCandidates, taskFilter]);
 
+  // SORTERING V6.6.4: Sorter først på Del (Del 1 < Del 2), deretter på sidetall.
+  const sortedReviewPages = useMemo(() => {
+    if (!currentReviewCandidate) return [];
+    return [...currentReviewCandidate.pages].sort((a, b) => {
+      const partA = (a.part || "Del 1").toLowerCase().includes("2") ? 2 : 1;
+      const partB = (b.part || "Del 1").toLowerCase().includes("2") ? 2 : 1;
+      if (partA !== partB) return partA - partB;
+      return (a.pageNumber || 0) - (b.pageNumber || 0);
+    });
+  }, [currentReviewCandidate]);
+
   return (
     <div className="flex h-full w-full overflow-hidden bg-[#F1F5F9]">
       <aside className="w-64 bg-white border-r flex flex-col shrink-0 no-print shadow-sm h-full">
@@ -392,12 +418,12 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
               <header className="flex justify-between items-end mb-8">
                  <div>
                    <h2 className="text-3xl font-black text-slate-800 tracking-tighter">{currentReviewCandidate.name || 'Ukjent'}</h2>
-                   <p className="text-[10px] font-black uppercase text-indigo-500 tracking-[0.2em] mt-1">Kontrollerer transkripsjon v5.6.8</p>
+                   <p className="text-[10px] font-black uppercase text-indigo-500 tracking-[0.2em] mt-1">Kontrollerer transkripsjon v6.6.4</p>
                  </div>
               </header>
 
               <div className="space-y-12">
-                {currentReviewCandidate.pages.sort((a,b) => (a.pageNumber || 0) - (b.pageNumber || 0)).map((p, idx) => {
+                {sortedReviewPages.map((p, idx) => {
                   const isEditing = editingPageIds.has(p.id);
                   const isRefreshing = pageLoadingIds.has(p.id);
                   
@@ -460,21 +486,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                            </div>
                          </div>
                          <LazyImage page={p} />
-                         
-                         {/* Visual Evidence Fix: Lys grå styling også her for konsistens */}
-                         {p.visualEvidence && !p.transcription?.includes('[AI-TOLKNING AV FIGUR:') && (
-                           <div className="mt-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                             <div className="bg-slate-100 rounded-2xl overflow-hidden border border-indigo-400 shadow-lg">
-                               <div className="bg-slate-200/50 px-4 py-2 border-b border-slate-300 flex justify-between items-center">
-                                 <span className="text-[9px] font-black uppercase text-indigo-700 tracking-widest">Separat CAS / Figur Bevis</span>
-                                 <span className="text-[7px] font-black text-slate-400 uppercase">v5.6.8 Clear View</span>
-                               </div>
-                               <div className="p-6">
-                                 <LatexRenderer content={`[AI-TOLKNING AV FIGUR: ${p.visualEvidence}]`} />
-                               </div>
-                             </div>
-                           </div>
-                         )}
+                         {/* Removed Left-Side Visual Evidence box here to avoid duplication. */}
                       </div>
                       <div className="space-y-4">
                          <div className="flex items-center justify-between px-2 h-10">

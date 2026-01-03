@@ -1,6 +1,8 @@
+
 import React, { useState, useMemo } from 'react';
 import { Project, Rubric, RubricCriterion } from '../types';
 import { LatexRenderer, Spinner } from './SharedUI';
+import { improveRubricWithStudentData } from '../services/geminiService';
 
 interface RubricStepProps {
   activeProject: Project;
@@ -22,6 +24,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
   const [editingHeaderId, setEditingHeaderId] = useState<string | null>(null);
   const [editingErrorsId, setEditingErrorsId] = useState<string | null>(null);
   const [localLoading, setLocalLoading] = useState<string | null>(null);
+  const [isImproving, setIsImproving] = useState(false);
 
   const criteria = activeProject.rubric?.criteria || [];
 
@@ -43,6 +46,14 @@ export const RubricStep: React.FC<RubricStepProps> = ({
     });
 
     return { partSums, taskSums };
+  }, [criteria]);
+
+  const uniqueThemes = useMemo(() => {
+    const themes = new Set<string>();
+    criteria.forEach(c => {
+      if (c.tema && c.tema.trim()) themes.add(c.tema.trim());
+    });
+    return Array.from(themes).sort();
   }, [criteria]);
 
   const groupedTaskNumbers = useMemo(() => {
@@ -102,6 +113,28 @@ export const RubricStep: React.FC<RubricStepProps> = ({
     setLocalLoading(name);
     await handleRegenerateCriterion(name);
     setLocalLoading(null);
+  };
+
+  const handleAnalyzeStudentErrors = async () => {
+    if (!activeProject.rubric || !updateActiveProject) return;
+    const completedCandidates = activeProject.candidates.filter(c => c.status === 'completed' || c.status === 'evaluated');
+    
+    if (completedCandidates.length === 0) {
+      alert("Du må transkribere/godkjenne noen kandidater (Kontroll-steget) før du kan analysere feil.");
+      return;
+    }
+
+    if (!confirm(`Vil du la KI analysere besvarelsene til ${completedCandidates.length} kandidater og oppdatere 'Vanlige feil' i rettemanualen? Dette kan ta litt tid.`)) return;
+
+    setIsImproving(true);
+    try {
+      const improvedRubric = await improveRubricWithStudentData(activeProject.rubric, activeProject.candidates);
+      updateActiveProject({ rubric: improvedRubric });
+    } catch (e: any) {
+      alert("Feil ved analyse: " + e.message);
+    } finally {
+      setIsImproving(false);
+    }
   };
 
   if (rubricStatus.loading && !activeProject.rubric) {
@@ -195,10 +228,19 @@ export const RubricStep: React.FC<RubricStepProps> = ({
           )}
         </nav>
 
-        <div className="p-3 border-t bg-slate-50/50 shrink-0">
+        <div className="p-3 border-t bg-slate-50/50 shrink-0 space-y-2">
+           <button 
+             onClick={handleAnalyzeStudentErrors} 
+             disabled={isImproving || rubricStatus.loading} 
+             title="Lar KI analysere alle transkriberte elevsvar for å finne vanlige feil og oppdatere rettemanualen automatisk."
+             className="w-full py-3 rounded-xl bg-purple-600 text-white font-black text-[9px] uppercase tracking-widest shadow-lg hover:bg-purple-700 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+           >
+             {isImproving ? <Spinner size="w-3 h-3" color="text-white" /> : '🧠 Analyser Elevfeil'}
+           </button>
+           
            <button 
              onClick={handleGenerateRubric} 
-             disabled={rubricStatus.loading} 
+             disabled={rubricStatus.loading || isImproving} 
              title="Sletter alt og genererer en helt ny rettemanual fra oppgavefilene"
              className="w-full py-3 rounded-xl border border-dashed text-[9px] font-black uppercase text-slate-400 hover:text-indigo-600 hover:bg-white transition-all"
            >
@@ -212,14 +254,23 @@ export const RubricStep: React.FC<RubricStepProps> = ({
           
           <header className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-1 bg-indigo-600"></div>
-            <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
               <div className="min-w-0 flex-1">
                 <h2 className="text-xl font-black text-slate-800 leading-tight tracking-tighter">
                    {activeProject.rubric.title}
                 </h2>
-                <div className="flex gap-2 mt-2">
-                   <span className="text-[9px] font-black text-indigo-500 uppercase tracking-[0.1em] bg-indigo-50 px-3 py-1 rounded-full border border-indigo-100">
-                      {selectedTask ? `Oppgave ${selectedTask.num} (${selectedTask.part})` : 'Full oversikt'}
+                {uniqueThemes.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    {uniqueThemes.map(t => (
+                      <span key={t} className="text-[9px] font-black text-indigo-500 uppercase tracking-wide bg-indigo-50 px-2 py-1 rounded-md border border-indigo-100/50">
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="flex gap-2 mt-3">
+                   <span className="text-[8px] font-black text-slate-400 uppercase tracking-[0.1em]">
+                      {selectedTask ? `Viser Oppgave ${selectedTask.num} (${selectedTask.part})` : 'Viser hele rettemanualen'}
                    </span>
                 </div>
               </div>
@@ -331,7 +382,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                         <div className="flex justify-between items-center">
                           <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.1em] flex items-center gap-1.5">
                             <div className="w-2 h-2 rounded-full bg-rose-400"></div>
-                            Retteveiledning
+                            Retteveiledning (Vanlige feil)
                           </h4>
                           <button onClick={() => setEditingErrorsId(isEditingErrors ? null : crit.name)} className="text-[9px] font-black uppercase text-rose-500 hover:underline">
                             {isEditingErrors ? 'Fullfør' : 'Rediger'}
@@ -341,7 +392,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                           {isEditingErrors ? (
                             <textarea value={crit.commonErrors || ""} autoFocus onChange={e => handleFieldChange(crit.name, 'commonErrors', e.target.value)} className="w-full bg-transparent outline-none text-sm font-bold text-slate-700 resize-none h-48 leading-relaxed custom-scrollbar" />
                           ) : (
-                            <LatexRenderer content={crit.commonErrors || "Ingen spesifikk veiledning."} className="text-slate-700 font-bold text-sm leading-relaxed" />
+                            <LatexRenderer content={crit.commonErrors || "Ingen spesifikke feil registrert ennå."} className="text-slate-700 font-bold text-sm leading-relaxed" />
                           )}
                         </div>
                       </div>

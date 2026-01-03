@@ -1,3 +1,4 @@
+
 import React, { useMemo, useState, useEffect } from 'react';
 import { Project, Page, Candidate } from '../types';
 import { Spinner } from './SharedUI';
@@ -8,13 +9,16 @@ interface SetupStepProps {
   batchTotal: number;
   batchCompleted: number;
   currentAction?: string;
-  rubricStatus: { loading: boolean; text: string };
+  rubricStatus: { loading: boolean; text: string; errorType?: 'PRO_QUOTA' | 'GENERIC' };
+  useFlashFallback?: boolean;
+  setUseFlashFallback?: (val: boolean) => void;
   handleTaskFileSelect: (files: FileList) => void;
   handleGenerateRubric: () => void;
   handleCandidateFileSelect: (files: FileList) => void;
   handleRetryPage: (page: Page) => void;
   updateActiveProject: (updates: Partial<Project>) => void;
   onNavigateToCandidate?: (id: string) => void;
+  handleDriveImport?: (url: string) => void;
 }
 
 export const SetupStep: React.FC<SetupStepProps> = ({
@@ -24,289 +28,371 @@ export const SetupStep: React.FC<SetupStepProps> = ({
   batchCompleted,
   currentAction,
   rubricStatus,
+  useFlashFallback,
+  setUseFlashFallback,
   handleTaskFileSelect,
   handleGenerateRubric,
   handleCandidateFileSelect,
   handleRetryPage,
   updateActiveProject,
-  onNavigateToCandidate
+  onNavigateToCandidate,
+  handleDriveImport
 }) => {
-  const [hasKey, setHasKey] = useState(true);
-  const isAiWorking = rubricStatus.loading;
   const hasRubric = !!activeProject.rubric;
+  const isProQuotaError = rubricStatus.errorType === 'PRO_QUOTA';
+  const [simulatedProgress, setSimulatedProgress] = useState(0);
+  const [driveUrl, setDriveUrl] = useState('');
 
+  // Simulert fremdrift for enkelt-operasjoner som tar tid (som Rubric Generation)
+  // for å unngå at baren hopper rett til 95% og stopper der.
   useEffect(() => {
-    const checkKey = async () => {
-      if ((window as any).aistudio?.hasSelectedApiKey) {
-        const selected = await (window as any).aistudio.hasSelectedApiKey();
-        setHasKey(selected);
-      }
-    };
-    checkKey();
-    const interval = setInterval(checkKey, 3000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const progressPercent = useMemo(() => {
-    if (batchTotal === 0 && !isAiWorking) return 0;
-    const safeTotal = Math.max(batchTotal, batchCompleted);
-    const fileProgress = safeTotal > 0 ? (batchCompleted / safeTotal) * 100 : 0;
-    
-    if (isAiWorking) {
-      if (safeTotal > 0 && batchCompleted >= safeTotal) return 98;
-      if (safeTotal === 0) return 95;
+    let interval: any;
+    if (rubricStatus.loading) {
+      setSimulatedProgress(5);
+      interval = setInterval(() => {
+        setSimulatedProgress(prev => {
+          // Logaritmisk tilnærming til 95%
+          if (prev >= 95) return prev;
+          const remaining = 95 - prev;
+          // Gå raskt i starten, saktere mot slutten
+          const jump = Math.max(0.2, remaining * 0.05); 
+          return prev + jump;
+        });
+      }, 150);
+    } else {
+      setSimulatedProgress(100);
+      const timeout = setTimeout(() => setSimulatedProgress(0), 800);
+      return () => clearTimeout(timeout);
     }
-    return Math.min(100, Math.round(fileProgress));
-  }, [batchTotal, batchCompleted, isAiWorking]);
+    return () => clearInterval(interval);
+  }, [rubricStatus.loading]);
+
+  const handleFlashFailover = () => {
+    if (setUseFlashFallback) {
+      setUseFlashFallback(true);
+      setTimeout(() => handleGenerateRubric(), 0);
+    }
+  };
+
+  const onDriveSubmit = () => {
+    if (handleDriveImport && driveUrl) {
+      handleDriveImport(driveUrl);
+      setDriveUrl('');
+    }
+  };
+
+  const handleDeleteTaskFile = (id: string) => {
+    if (confirm("Vil du fjerne denne oppgavefilen?")) {
+      updateActiveProject({
+        taskFiles: activeProject.taskFiles.filter(f => f.id !== id),
+        rubric: null
+      });
+    }
+  };
+
+  // Helper for badges (v6.5.8: Added Filter Backup)
+  const getCandidateTaskSummary = (candidate: Candidate) => {
+    const validTaskStrings = new Set(activeProject.rubric?.criteria.map(c => 
+      `${c.taskNumber}${c.subTask || ''}`.toUpperCase().replace(/[^A-Z0-9]/g, '')
+    ) || []);
+    
+    const shouldFilter = validTaskStrings.size > 0;
+
+    const tasks = new Set<string>();
+    candidate.pages.forEach(p => {
+      p.identifiedTasks?.forEach(t => {
+        if (t.taskNumber) {
+          // Extra Visual Filter v6.5.8: Double check against rubric if available
+          const rawLabel = `${t.taskNumber}${t.subTask || ''}`.toUpperCase().replace(/[^A-Z0-9]/g, '');
+          if (shouldFilter && !validTaskStrings.has(rawLabel)) {
+             return; 
+          }
+
+          const part = (p.part || "Del 1").toLowerCase().includes("2") ? "2" : "1";
+          tasks.add(`${part}:${t.taskNumber}${t.subTask || ''}`);
+        }
+      });
+    });
+    
+    // Sort logic
+    return Array.from(tasks).sort((a,b) => {
+      const [partA, labelA] = a.split(':');
+      const [partB, labelB] = b.split(':');
+      if (partA !== partB) return partA.localeCompare(partB);
+      return labelA.localeCompare(labelB, undefined, {numeric: true});
+    }).map(t => {
+      const [part, label] = t.split(':');
+      return { part, label };
+    });
+  };
 
   const stats = useMemo(() => {
     const candidates = activeProject?.candidates || [];
     const unprocessed = activeProject?.unprocessedPages || [];
-    const hasQuotaError = unprocessed.some(p => p.statusLabel === 'Kvote brukt opp');
     
+    // Samle alle sider for statistik
+    const allPages = [
+      ...candidates.flatMap(c => c.pages),
+      ...unprocessed
+    ];
+
+    const totalCandidates = candidates.length;
+    const totalPages = allPages.length;
+    const pending = unprocessed.filter(p => p.status === 'pending').length;
+    
+    // Beregn digitale vs håndskrevne
+    const digitalCount = allPages.filter(p => p.mimeType === 'text/plain').length;
+    const handwrittenCount = totalPages - digitalCount;
+
     return {
-      totalCandidates: candidates.length,
-      totalSider: candidates.reduce((acc, c) => acc + (c.pages?.length || 0), 0),
-      processing: unprocessed.filter(p => p.status === 'processing').length,
-      pending: unprocessed.filter(p => p.status === 'pending').length,
-      errors: unprocessed.filter(p => p.status === 'error').length,
-      hasQuotaError
+      totalCandidates,
+      totalPages,
+      pending,
+      digitalCount,
+      handwrittenCount
     };
   }, [activeProject]);
 
-  const handleConnectKey = async () => {
-    if ((window as any).aistudio?.openSelectKey) {
-      await (window as any).aistudio.openSelectKey();
-      setHasKey(true);
+  // Kalkuler visuell prosent
+  const displayProgress = useMemo(() => {
+    if (batchTotal > 0) {
+      // Batch processing (mange filer)
+      return (batchCompleted / batchTotal) * 100;
+    } else if (rubricStatus.loading) {
+      // Enkeltstående lang prosess (simulert)
+      return simulatedProgress;
     }
-  };
+    return 0;
+  }, [batchTotal, batchCompleted, rubricStatus.loading, simulatedProgress]);
+
+  const activeModelName = useFlashFallback ? 'Gemini 3 Flash' : 'Gemini 3 Pro';
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto h-full flex flex-col overflow-hidden">
       
-      {!hasKey && (
-        <div className="mb-6 bg-indigo-600 text-white p-4 rounded-3xl flex justify-between items-center animate-in slide-in-from-top-4 duration-500 shadow-xl border-4 border-white/10">
-          <div className="flex items-center gap-4">
-            <span className="text-2xl">🔑</span>
-            <div>
-              <p className="text-[11px] font-black uppercase tracking-widest">API-tilkobling mangler</p>
-              <p className="text-[10px] font-medium opacity-80">Du må velge en betalt API-nøkkel for å bruke Gemini 3 Pro-modellen.</p>
-            </div>
-          </div>
-          <button 
-            onClick={handleConnectKey}
-            className="bg-white text-indigo-600 px-6 py-2 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-slate-100 transition-colors"
-          >
-            Koble til nøkkel
-          </button>
-        </div>
-      )}
-
-      {stats.hasQuotaError && (
-        <div className="mb-6 bg-rose-600 text-white p-6 rounded-[32px] flex flex-col md:flex-row justify-between items-start md:items-center gap-6 animate-in slide-in-from-top-4 duration-500 shadow-2xl border-b-4 border-rose-800/50 relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-full h-1.5 bg-rose-400/30"></div>
-          <div className="flex items-start gap-5 relative z-10">
-            <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center text-2xl shrink-0">🚨</div>
-            <div className="max-w-2xl">
-              <p className="text-[13px] font-black uppercase tracking-wider leading-none mb-2">Tier 1 Begrensning (250 RPD)</p>
-              <p className="text-[11px] font-medium opacity-95 leading-relaxed">
-                Google rapporterer at du har nådd grensen på <strong>250 forespørsler per dag</strong> for Pro-modellen. Dette er normalt for nye betalende prosjekter (Tier 1). 
-                <br /><br />
-                <strong>Løsning:</strong> Appen i v5.8.0 bruker nå Flash-modellen til nesten alt arbeid for å spare kvoten din til den endelige karaktersettingen. Sørg for at <strong>"Pay-as-you-go"</strong> er aktiv i AI Studio Plan Management.
-              </p>
-            </div>
-          </div>
-          <div className="flex gap-3 w-full md:w-auto relative z-10">
-            <a 
-              href="https://aistudio.google.com/app/plan_management" 
-              target="_blank" 
-              rel="noopener noreferrer" 
-              className="flex-1 md:flex-none text-center bg-white text-rose-600 px-8 py-3.5 rounded-2xl font-black text-[11px] uppercase tracking-[0.1em] hover:bg-slate-50 transition-all hover:scale-105 shadow-xl ring-4 ring-rose-500/20"
-            >
-              Åpne Plan Management
-            </a>
-          </div>
-        </div>
-      )}
-
-      {(batchTotal > 0 || isAiWorking) && (
-        <div className="mb-8 animate-in fade-in slide-in-from-top-4 duration-500">
-          <div className="bg-white p-6 rounded-[35px] border border-slate-100 shadow-xl flex flex-col gap-4">
-            <div className="flex justify-between items-end">
+      {isProQuotaError && (
+        <div className="mb-6 bg-rose-600 text-white p-6 rounded-[32px] shadow-2xl border-b-4 border-rose-800 animate-in slide-in-from-top-4 duration-500 relative overflow-hidden shrink-0">
+          <div className="flex flex-col md:flex-row justify-between items-center gap-6 relative z-10">
+            <div className="flex items-center gap-5">
+              <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center text-2xl">⚠️</div>
               <div>
-                <h4 className={`text-[10px] font-black uppercase tracking-[0.2em] mb-1 ${isAiWorking ? 'text-indigo-600' : 'text-slate-400'}`}>
-                  {isAiWorking ? (progressPercent >= 95 ? 'Finaliserer rettemanual...' : 'KI-Analyse') : 'Prosesserer filer'}
-                </h4>
-                <div className="flex items-center gap-3">
-                  <p className="text-xl font-black text-slate-800">
-                    {progressPercent}% <span className="text-slate-300 font-medium">({batchCompleted}/{Math.max(batchTotal, batchCompleted)})</span>
-                  </p>
-                  {currentAction && (
-                    <span className="text-[11px] font-bold text-indigo-500 bg-indigo-50 px-3 py-1 rounded-full animate-pulse border border-indigo-100/50">
-                      {currentAction}
-                    </span>
-                  )}
-                </div>
+                <p className="text-[13px] font-black uppercase tracking-wider mb-1">Dagsgrense for Pro er nådd</p>
+                <p className="text-[11px] font-medium opacity-90 max-w-xl">
+                  Du har brukt opp dagens kvote for Gemini Pro. Vil du fortsette med **Gemini Flash** i stedet? 
+                  Flash er raskere og har ubegrenset kvote.
+                </p>
               </div>
-              {(isAiWorking || (batchTotal > 0 && batchCompleted < batchTotal)) && (
-                <div className="flex items-center gap-2 mb-1">
-                  <Spinner size="w-4 h-4" />
-                </div>
-              )}
             </div>
-            <div className="h-3 bg-slate-50 rounded-full overflow-hidden border border-slate-100 p-0.5 relative">
+            <button 
+              onClick={handleFlashFailover}
+              className="bg-white text-rose-600 px-8 py-3 rounded-2xl font-black text-[11px] uppercase tracking-widest hover:bg-slate-50 transition-all shadow-xl whitespace-nowrap active:scale-95"
+            >
+              Bruk Flash i stedet ⚡
+            </button>
+          </div>
+        </div>
+      )}
+
+      {useFlashFallback && !isProQuotaError && (
+        <div className="mb-6 bg-emerald-600 text-white p-3 rounded-2xl flex items-center justify-center gap-3 animate-in fade-in duration-500 shrink-0">
+          <span className="text-[10px] font-black uppercase tracking-widest">⚡ Flash-modus Aktiv (Ubegrenset kvote)</span>
+          <button onClick={() => setUseFlashFallback?.(false)} className="text-[10px] underline opacity-70 hover:opacity-100">Bytt tilbake til Pro</button>
+        </div>
+      )}
+
+      {(batchTotal > 0 || rubricStatus.loading) && (
+        <div className="mb-8 animate-in fade-in slide-in-from-top-4 duration-500 shrink-0">
+          <div className="bg-white p-6 rounded-[35px] border border-slate-100 shadow-xl">
+            <div className="flex justify-between items-end mb-2">
+               <div className="flex flex-col">
+                 <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-600">
+                   {rubricStatus.loading ? rubricStatus.text : (currentAction || 'Prosesserer filer...')}
+                 </h4>
+                 {rubricStatus.loading && (
+                   <span className="text-[8px] font-bold text-slate-400 mt-1 uppercase tracking-widest">
+                     Motor: {activeModelName}
+                   </span>
+                 )}
+               </div>
+               <span className="text-[10px] font-black text-slate-400">
+                 {batchTotal > 0 ? `${batchCompleted} / ${batchTotal}` : `${Math.round(displayProgress)}%`}
+               </span>
+            </div>
+            <div className="h-3 bg-slate-50 rounded-full overflow-hidden border border-slate-100 p-0.5">
               <div 
-                className={`h-full transition-all duration-700 ease-out rounded-full relative overflow-hidden ${isAiWorking ? 'bg-indigo-500 shadow-[0_0_15px_rgba(99,102,241,0.5)]' : 'bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.3)]'}`}
-                style={{ width: `${progressPercent}%` }}
-              >
-                {isAiWorking && (
-                  <div className="absolute inset-0 bg-[linear-gradient(45deg,rgba(255,255,255,0.15)_25%,transparent_25%,transparent_50%,rgba(255,255,255,0.15)_50%,rgba(255,255,255,0.15)_75%,transparent_75%,transparent)] bg-[length:20px_20px] animate-[progress-bar-stripes_1s_linear_infinite]"></div>
-                )}
-              </div>
+                className={`h-full transition-all duration-300 rounded-full ${rubricStatus.loading ? 'bg-indigo-500' : 'bg-emerald-500'}`}
+                style={{ width: `${displayProgress}%` }}
+              ></div>
             </div>
           </div>
         </div>
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-12 gap-6 h-full overflow-hidden pb-10">
-        
-        <div className="md:col-span-4 bg-white rounded-[45px] shadow-sm border border-slate-100 flex flex-col overflow-hidden h-full">
-          <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/20 shrink-0">
-            <div>
-              <h3 className="font-black text-[10px] uppercase text-indigo-600 tracking-[0.2em]">1. Oppgaver / prøver</h3>
-            </div>
-            {(activeProject?.taskFiles?.length || 0) > 0 && (
-              <button onClick={() => updateActiveProject({ taskFiles: [], rubric: null })} className="text-[9px] font-black uppercase text-rose-400 hover:text-rose-600 transition-colors">Tøm ✕</button>
-            )}
+        <div className="md:col-span-4 bg-white rounded-[45px] shadow-sm border border-slate-100 flex flex-col overflow-hidden">
+          <div className="p-8 border-b bg-slate-50/20 shrink-0">
+             <h3 className="font-black text-[10px] uppercase text-indigo-600 tracking-[0.2em]">1. Oppgaver / prøver</h3>
           </div>
-
-          <div className="p-8 flex-1 flex flex-col gap-6 overflow-hidden">
+          <div className="p-8 flex-1 overflow-y-auto custom-scrollbar flex flex-col gap-6">
             <div className="relative group h-24 shrink-0">
-              <input type="file" multiple accept=".pdf,.docx,.jpg,.jpeg,.png" onChange={e => e.target.files && handleTaskFileSelect(e.target.files)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
-              <div className="border-2 border-dashed border-slate-100 rounded-3xl h-full flex flex-col items-center justify-center p-2 text-center group-hover:border-indigo-200 transition-all bg-slate-50/30">
+              <input type="file" multiple onChange={e => e.target.files && handleTaskFileSelect(e.target.files)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
+              <div className="border-2 border-dashed border-slate-100 rounded-3xl h-full flex items-center justify-center text-center bg-slate-50/30 group-hover:border-indigo-200 transition-all">
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">+ Last opp oppgave</p>
               </div>
             </div>
+            
+            {hasRubric && (
+               <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-2xl flex items-center gap-3 shrink-0">
+                 <span className="text-emerald-500 text-xl">✅</span>
+                 <div className="text-[10px] font-black uppercase text-emerald-600 tracking-widest">Fasit Klar ({useFlashFallback ? 'Flash' : 'Pro'})</div>
+               </div>
+            )}
 
-            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-3">
-              {hasRubric && (
-                <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-2xl flex items-center gap-3 animate-in fade-in zoom-in duration-300">
-                  <span className="text-emerald-500 text-xl">✅</span>
-                  <div>
-                    <div className="text-[10px] font-black uppercase text-emerald-600 tracking-widest">Fasit Klar</div>
-                    <div className="text-[11px] font-bold text-emerald-800 truncate max-w-[180px]">{activeProject.rubric?.title}</div>
+            <div className="space-y-3">
+              {activeProject.taskFiles.map(f => (
+                <div key={f.id} className="flex justify-between items-center bg-slate-50/50 p-3 rounded-2xl border border-slate-100 group animate-in fade-in">
+                  <div className="flex items-center gap-3 overflow-hidden">
+                    <span className="text-lg shrink-0">📄</span>
+                    <span className="text-[10px] font-bold text-slate-600 truncate">{f.fileName}</span>
                   </div>
-                </div>
-              )}
-              {(activeProject?.taskFiles || []).map(f => (
-                <div key={f.id} className="text-[11px] font-bold bg-white p-4 rounded-2xl border border-slate-100 flex justify-between items-center shadow-sm">
-                  <span className="truncate flex-1 pr-3 text-slate-600">📄 {f.fileName}</span>
-                  <span className="text-emerald-500 font-black opacity-40">✓</span>
+                  <button onClick={() => handleDeleteTaskFile(f.id)} className="text-slate-300 hover:text-rose-500 transition-colors p-1 opacity-0 group-hover:opacity-100">✕</button>
                 </div>
               ))}
             </div>
           </div>
         </div>
-        
-        <div className="md:col-span-8 bg-white rounded-[45px] shadow-sm border border-slate-100 flex flex-col overflow-hidden h-full">
-          <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/20 shrink-0">
-            <div className="flex flex-col">
-              <h3 className="font-black text-[10px] uppercase text-emerald-600 tracking-[0.2em]">2. Elevbesvarelser</h3>
-            </div>
-            <div className="flex gap-6">
-              <div className="text-center">
-                  <div className="text-sm font-black text-slate-800 leading-none">{stats.totalCandidates}</div>
-                  <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest mt-1">Elever</div>
-              </div>
-              <div className="text-center border-l border-slate-100 pl-6">
-                  <div className="text-sm font-black text-emerald-600 leading-none">{stats.totalSider}</div>
-                  <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest mt-1">Sider</div>
-              </div>
-            </div>
-          </div>
 
-          <div className="p-8 flex-1 flex flex-col gap-6 overflow-hidden relative">
-            <div className="shrink-0">
-               <div className="relative group h-40">
-                 <input 
-                   type="file" 
-                   multiple 
-                   accept=".pdf,.docx,.jpg,.jpeg,.png" 
-                   onChange={e => e.target.files && handleCandidateFileSelect(e.target.files)} 
-                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" 
-                 />
-                 <div className="border-2 border-dashed border-slate-100 rounded-[35px] h-full flex flex-col items-center justify-center p-6 text-center group-hover:border-emerald-200 transition-all bg-slate-50/30 group-hover:bg-emerald-50/20">
-                   <div className="text-4xl mb-3">📥</div>
-                   <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Last opp elevfiler</p>
-                   <p className="text-[8px] font-bold text-slate-400 mt-2 uppercase tracking-widest">PDF, Word eller JPG (A3/A4)</p>
+        <div className="md:col-span-8 bg-white rounded-[45px] shadow-sm border border-slate-100 flex flex-col overflow-hidden">
+           <div className="p-8 border-b bg-slate-50/20 flex justify-between items-center shrink-0">
+              <h3 className="font-black text-[10px] uppercase text-emerald-600 tracking-[0.2em]">2. Besvarelser</h3>
+              <div className="flex gap-6 items-end">
+                 <div className="text-center">
+                   <div className="text-sm font-black text-slate-800">{stats.totalCandidates}</div>
+                   <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest mt-1">Kandidater</div>
                  </div>
-               </div>
-            </div>
+                 
+                 <div className="text-center border-l border-slate-200 pl-6">
+                   <div className="text-sm font-black text-slate-800">{stats.totalPages}</div>
+                   <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest mt-1">Sider</div>
+                 </div>
 
-            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2">
-              {!hasRubric && stats.pending > 0 && (
-                <div className="mb-4 bg-amber-50 border border-amber-100 p-4 rounded-2xl flex items-center gap-3 animate-pulse">
-                   <span className="text-amber-500">⏳</span>
-                   <p className="text-[10px] font-black uppercase text-amber-700 tracking-widest">Venter på rettemanual før transkribering starter...</p>
+                 {stats.pending > 0 && (
+                   <div className="text-center border-l border-slate-200 pl-6">
+                     <div className="text-sm font-black text-indigo-600 animate-pulse">{stats.pending}</div>
+                     <div className="text-[8px] font-black text-indigo-400 uppercase tracking-widest mt-1">I Kø</div>
+                   </div>
+                 )}
+
+                 {(stats.digitalCount > 0 || stats.handwrittenCount > 0) && (
+                   <div className="hidden md:block border-l border-slate-200 pl-6">
+                      <div className="flex gap-3 text-[10px] font-medium text-slate-500">
+                         <span title="Digitale dokumenter (Word/Tekst)">💻 {stats.digitalCount}</span>
+                         <span title="Håndskrevne/Skannede sider (Bilder/PDF)">📝 {stats.handwrittenCount}</span>
+                      </div>
+                      <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest mt-1 text-center">Typer</div>
+                   </div>
+                 )}
+              </div>
+           </div>
+           <div className="p-8 flex-1 overflow-y-auto custom-scrollbar">
+              <div className="flex gap-4 mb-8">
+                <div className="relative group h-40 flex-1 shrink-0">
+                  <input type="file" multiple onChange={e => e.target.files && handleCandidateFileSelect(e.target.files)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
+                  <div className="border-2 border-dashed border-slate-100 rounded-[35px] h-full flex flex-col items-center justify-center text-center bg-slate-50/30 group-hover:bg-emerald-50/20 transition-all">
+                    <div className="text-4xl mb-3">📥</div>
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Lokale filer</p>
+                    <p className="text-[8px] font-bold text-slate-400 mt-2">PDF, JPG, PNG ELLER DOCX</p>
+                  </div>
+                </div>
+                
+                {handleDriveImport && (
+                  <div className="w-1/3 flex flex-col gap-2 shrink-0">
+                    <div className="bg-slate-50 border border-slate-100 rounded-[35px] h-full flex flex-col items-center justify-center p-6 text-center">
+                      <div className="text-3xl mb-3">☁️</div>
+                      <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-3">Google Drive</p>
+                      <input 
+                        type="text" 
+                        placeholder="Lim inn mappe-link..." 
+                        value={driveUrl}
+                        onChange={e => setDriveUrl(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-[10px] outline-none focus:ring-2 focus:ring-emerald-100 mb-2"
+                      />
+                      <button 
+                        onClick={onDriveSubmit}
+                        disabled={!driveUrl}
+                        className="w-full bg-emerald-600 text-white text-[10px] font-black uppercase py-2 rounded-xl hover:bg-emerald-700 transition-all disabled:opacity-50"
+                      >
+                        Hent filer
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {!hasRubric && activeProject.taskFiles.length > 0 && (
+                <div className="mb-8 p-6 bg-indigo-50 border border-indigo-100 rounded-[35px] text-center animate-pulse">
+                   <p className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">Venter på rettemanual før transkribering starter...</p>
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {(activeProject?.unprocessedPages || []).map(p => (
-                  <div key={p.id} className={`text-[11px] font-bold p-4 rounded-2xl border flex gap-4 items-center transition-all ${p.status === 'error' ? 'bg-rose-50 border-rose-200 text-rose-700' : p.status === 'pending' && !hasRubric ? 'bg-slate-50 border-slate-200 text-slate-400' : 'bg-indigo-50/50 border-indigo-100 text-indigo-700 shadow-sm'}`}>
-                    <div className="shrink-0">
-                      {p.status === 'processing' ? <Spinner size="w-3 h-3" color="text-indigo-600" /> : <div className={`w-3 h-3 rounded-full ${p.status === 'pending' ? 'bg-slate-200' : 'bg-indigo-200'}`}></div>}
-                    </div>
-                    <span className="truncate flex-1">{p.fileName}</span>
-                    <span className={`text-[8px] font-black uppercase ${p.statusLabel === 'Kvote brukt opp' ? 'text-rose-600 font-black' : 'opacity-60'}`}>
-                      {p.statusLabel || (p.status === 'processing' ? 'Analyserer' : p.status === 'error' ? 'Feil' : !hasRubric ? 'I kø' : 'Klar')}
-                    </span>
-                    {p.status === 'error' && <button onClick={() => handleRetryPage(p)} className="p-1 hover:bg-rose-100 rounded">↻</button>}
-                  </div>
-                ))}
-
-                {(activeProject?.candidates || []).map(c => {
-                  const isDigital = c.pages.some(p => p.isDigital);
-                  const pageCount = c.pages.filter(p => !p.isDigital).length;
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {activeProject.candidates.map(c => {
+                  const isUnknown = c.name.toLowerCase().includes("ukjent");
+                  const tasks = getCandidateTaskSummary(c);
                   
                   return (
-                    <button 
+                    <div 
                       key={c.id} 
                       onClick={() => onNavigateToCandidate?.(c.id)}
-                      className="group/card text-[11px] font-black bg-white p-4 rounded-2xl border border-slate-100 text-slate-700 flex flex-col gap-3 shadow-sm hover:border-indigo-600 hover:bg-indigo-50 transition-all text-left animate-in fade-in slide-in-from-bottom-2 duration-300"
+                      className={`p-4 rounded-[28px] border transition-all cursor-pointer flex justify-between items-center group animate-in zoom-in-95 ${isUnknown ? 'bg-rose-50/30 border-rose-100' : 'bg-white border-slate-100 hover:border-indigo-200 shadow-sm'}`}
                     >
-                      <div className="flex justify-between items-center w-full">
-                        <span className="truncate flex items-center gap-3">
-                          <span className="text-indigo-500 text-lg group-hover/card:scale-110 transition-transform">👤</span> 
-                          <div>
-                            <div className="truncate font-black text-slate-800">{c.name}</div>
-                            <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest group-hover/card:text-indigo-500">KLIKK FOR KONTROLL →</div>
+                       <div className="flex items-center gap-3 overflow-hidden w-full">
+                          <div className={`shrink-0 w-10 h-10 rounded-2xl flex items-center justify-center text-lg ${isUnknown ? 'bg-rose-100' : 'bg-slate-50 group-hover:bg-indigo-50'}`}>
+                             {isUnknown ? '❓' : '👤'}
                           </div>
-                        </span>
-                        <div className="flex items-center gap-2">
-                           <div className="flex flex-col items-end gap-1">
-                             <div className="flex gap-1">
-                               {pageCount > 0 && (
-                                 <span className="text-[8px] font-black bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full uppercase">
-                                   {pageCount} s
-                                 </span>
-                               )}
-                               {isDigital && (
-                                 <span className="text-[8px] font-black bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full uppercase">
-                                   Digital
-                                 </span>
-                               )}
-                             </div>
-                           </div>
-                           <span className="text-indigo-500 font-black">✓</span>
-                        </div>
-                      </div>
-                    </button>
+                          <div className="overflow-hidden flex-1">
+                            <div className="flex justify-between items-center">
+                               <p className={`text-[11px] font-black truncate ${isUnknown ? 'text-rose-600' : 'text-slate-800'}`}>{c.name}</p>
+                               <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mt-0.5 shrink-0">{c.pages.length} s</p>
+                            </div>
+                            
+                            {/* BADGES RESTORED v6.2.8 */}
+                            {tasks.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-1.5 h-5 overflow-hidden">
+                                {tasks.slice(0, 6).map((t, idx) => (
+                                  <span key={idx} className={`text-[7px] font-black uppercase px-1 py-0.5 rounded-md leading-none ${t.part === '2' ? 'bg-emerald-50 text-emerald-600' : 'bg-indigo-50 text-indigo-500'}`}>
+                                    {t.label}
+                                  </span>
+                                ))}
+                                {tasks.length > 6 && <span className="text-[7px] font-black text-slate-300">...</span>}
+                              </div>
+                            )}
+                          </div>
+                       </div>
+                       <span className="text-indigo-600 text-[9px] font-black uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-all transform translate-x-2 group-hover:translate-x-0 ml-2">→</span>
+                    </div>
                   );
                 })}
+
+                {(activeProject.unprocessedPages || []).map(p => (
+                   <div key={p.id} className="p-4 rounded-[28px] border border-slate-100 bg-slate-50 flex justify-between items-center opacity-60">
+                      <div className="flex items-center gap-3">
+                         <Spinner size="w-4 h-4" />
+                         <div className="overflow-hidden">
+                            <p className="text-[10px] font-bold text-slate-500 truncate max-w-[120px]">{p.fileName}</p>
+                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Venter i kø...</p>
+                         </div>
+                      </div>
+                   </div>
+                ))}
               </div>
-            </div>
-          </div>
+
+              {activeProject.candidates.length === 0 && (activeProject.unprocessedPages || []).length === 0 && !isProcessing && (
+                <div className="py-20 text-center opacity-20">
+                   <p className="text-[10px] font-black uppercase tracking-[0.3em]">Ingen besvarelser lastet opp</p>
+                </div>
+              )}
+           </div>
         </div>
       </div>
     </div>

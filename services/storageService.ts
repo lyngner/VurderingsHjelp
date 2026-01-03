@@ -35,16 +35,31 @@ const openDB = (): Promise<IDBDatabase> => {
 export const clearAllData = async (): Promise<void> => {
   return new Promise((resolve, reject) => {
     const request = indexedDB.deleteDatabase(DB_NAME);
-    request.onsuccess = () => {
-      console.log("Database slettet.");
-      resolve();
-    };
+    request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
-    request.onblocked = () => {
-      alert("Sletting blokkert. Vennligst lukk andre faner med appen og prøv igjen.");
-      reject(new Error("Database blocked"));
-    };
   });
+};
+
+export const getStorageStats = async (): Promise<{ projects: number, candidates: number, media: number }> => {
+  const db = await openDB();
+  
+  const countStore = (storeName: string): Promise<number> => {
+    return new Promise((resolve) => {
+      const tx = db.transaction(storeName, "readonly");
+      const store = tx.objectStore(storeName);
+      const req = store.count();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(0);
+    });
+  };
+
+  const [projects, candidates, media] = await Promise.all([
+    countStore(STORE_NAME),
+    countStore(CANDIDATE_STORE),
+    countStore(MEDIA_STORE)
+  ]);
+
+  return { projects, candidates, media };
 };
 
 export const saveMedia = async (id: string, base64: string): Promise<void> => {
@@ -58,19 +73,52 @@ export const saveMedia = async (id: string, base64: string): Promise<void> => {
   });
 };
 
+export const deleteMedia = async (id: string): Promise<void> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(MEDIA_STORE, "readwrite");
+    transaction.objectStore(MEDIA_STORE).delete(id);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+};
+
 export const getMedia = async (id: string): Promise<string | null> => {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(MEDIA_STORE, "readonly");
-    const store = transaction.objectStore(MEDIA_STORE);
-    const request = store.get(id);
+    const request = transaction.objectStore(MEDIA_STORE).get(id);
     request.onsuccess = () => resolve(request.result ? request.result.data : null);
     request.onerror = () => reject(request.error);
   });
 };
 
+export const deleteCandidate = async (id: string): Promise<void> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(CANDIDATE_STORE, "readwrite");
+    transaction.objectStore(CANDIDATE_STORE).delete(id);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+};
+
+export const saveCandidate = async (candidate: Candidate): Promise<void> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(CANDIDATE_STORE, "readwrite");
+    const cleanCand = JSON.parse(JSON.stringify(candidate));
+    cleanCand.pages.forEach((p: Page) => { delete p.base64Data; });
+    transaction.objectStore(CANDIDATE_STORE).put(cleanCand);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+};
+
 export const saveProject = async (project: Project): Promise<void> => {
   const db = await openDB();
+  
+  // 1. Lagre/Oppdater eksisterende kandidater
   if (project.candidates && project.candidates.length > 0) {
     const candTx = db.transaction(CANDIDATE_STORE, "readwrite");
     const candStore = candTx.objectStore(CANDIDATE_STORE);
@@ -81,31 +129,35 @@ export const saveProject = async (project: Project): Promise<void> => {
     });
   }
 
+  // 2. RYDDING v6.2.1: Slett foreldreløse kandidater i databasen som ikke lenger er i prosjektet
+  const allStoredCandidates: Candidate[] = await new Promise((resolve) => {
+    const tx = db.transaction(CANDIDATE_STORE, "readonly");
+    const index = tx.objectStore(CANDIDATE_STORE).index("projectId");
+    const req = index.getAll(project.id);
+    req.onsuccess = () => resolve(req.result || []);
+  });
+
+  const currentIds = new Set(project.candidates.map(c => c.id));
+  const orphans = allStoredCandidates.filter(c => !currentIds.has(c.id));
+  
+  if (orphans.length > 0) {
+    const delTx = db.transaction(CANDIDATE_STORE, "readwrite");
+    const delStore = delTx.objectStore(CANDIDATE_STORE);
+    orphans.forEach(o => delStore.delete(o.id));
+  }
+
+  // 3. Lagre prosjekt-metadata
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE_NAME, "readwrite");
-    const store = transaction.objectStore(STORE_NAME);
     const cleanProject = JSON.parse(JSON.stringify(project));
     const stripData = (p: Page) => { delete p.base64Data; };
     cleanProject.taskFiles.forEach(stripData);
     cleanProject.unprocessedPages?.forEach(stripData);
     cleanProject.candidateCount = project.candidates?.length || 0;
     delete cleanProject.candidates;
-    const request = store.put({ ...cleanProject, updatedAt: Date.now() });
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
-  });
-};
-
-export const saveCandidate = async (candidate: Candidate): Promise<void> => {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(CANDIDATE_STORE, "readwrite");
-    const store = transaction.objectStore(CANDIDATE_STORE);
-    const cleanCand = JSON.parse(JSON.stringify(candidate));
-    cleanCand.pages.forEach((p: Page) => { delete p.base64Data; });
-    const request = store.put(cleanCand);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
+    transaction.objectStore(STORE_NAME).put({ ...cleanProject, updatedAt: Date.now() });
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
   });
 };
 
@@ -132,8 +184,7 @@ export const getAllProjects = async (): Promise<Project[]> => {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE_NAME, "readonly");
-    const store = transaction.objectStore(STORE_NAME);
-    const request = store.getAll();
+    const request = transaction.objectStore(STORE_NAME).getAll();
     request.onsuccess = () => resolve(request.result || []);
     request.onerror = () => reject(request.error);
   });
@@ -160,8 +211,7 @@ export const saveToGlobalCache = async (contentHash: string, data: any): Promise
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(CACHE_STORE, "readwrite");
-    const store = transaction.objectStore(CACHE_STORE);
-    store.put({ contentHash, data, updatedAt: Date.now() });
+    transaction.objectStore(CACHE_STORE).put({ contentHash, data, updatedAt: Date.now() });
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error);
   });
@@ -171,8 +221,7 @@ export const getFromGlobalCache = async (contentHash: string): Promise<any | nul
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(CACHE_STORE, "readonly");
-    const store = transaction.objectStore(CACHE_STORE);
-    const request = store.get(contentHash);
+    const request = transaction.objectStore(CACHE_STORE).get(contentHash);
     request.onsuccess = () => resolve(request.result ? request.result.data : null);
     request.onerror = () => reject(request.error);
   });
