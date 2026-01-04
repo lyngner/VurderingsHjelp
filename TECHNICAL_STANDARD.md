@@ -1,14 +1,16 @@
 
-# Teknisk Standard & Algoritmer (v6.6.5)
+# Teknisk Standard & Algoritmer (v7.9.31)
 
 Dette dokumentet er systemets "Grunnlov". Ved alle fremtidige oppdateringer SKAL disse reglene følges for å hindre regresjon.
 
-## 1. Bildebehandling: "Rotate-then-Bisect"
-**CRITICAL: REGRESSION_GUARD** - Rekkefølgen her er matematisk låst:
-1. **Identifisering:** Bruk KI (Flash) til å detektere orientering og spalter.
-2. **Fysisk Rotasjon:** Bruk Canvas API til å rotere bildet til PORTRETT (høykant) FØR splitting.
-3. **A3 Force-Split:** Alle landskapsbilder eller bilder med to spalter SKAL returnere to objekter (LEFT/RIGHT). Dette gjelder uansett modell (Flash/Pro).
-4. **Geometrisk 50/50 kutt:** Del det roterte bildet nøyaktig på midten.
+## 1. Bildebehandling: "Mandatory Universal Split"
+**CRITICAL: REGRESSION_GUARD** - Vi har fjernet AI-basert sjekk av layout for å garantere null ventetid og robust håndtering av alle skanne-retninger.
+1.  **Ingen AI-preflight:** Vi spør ikke Gemini om rotasjon eller layout før behandling.
+2.  **Lokal Geometri:** Vi måler dimensjonene på bildet lokalt.
+3.  **Tvungen Deling:**
+    *   **Landskap (Bredde > Høyde):** Klipp vertikalt (Venstre / Høyre). Antas å være A3-oppslag.
+    *   **Portrett (Høyde > Bredde):** Klipp horisontalt (Øvre / Nedre). Antas å være A3-oppslag skannet sidelengs.
+4.  **Transkribering:** De to halvdelene sendes deretter til AI for rotasjon og tekstlesing.
 
 ## 2. Symmetrisk Instruksjons-paritet
 * **Regel:** Både Flash og Pro-modeller SKAL motta identiske krav til pedagogisk innhold og layout.
@@ -29,12 +31,13 @@ Dette dokumentet er systemets "Grunnlov". Ved alle fremtidige oppdateringer SKAL
 ## 6. Zero Conversational Filler
 * **Regel:** KI-en har et absolutt forbud mot å bruke naturlig språk i transkripsjonsfeltene. Kun rådata og rekonstruksjon.
 
-## 7. Mandatory Rubric Whitelisting
-* **Regel:** Kun oppgaver som finnes i den gjeldende rettemanualen er tillatt detektert. Alt annet markeres som "UKJENT".
+## 7. Mandatory Rubric Whitelisting (v7.8.7 Enforced)
+* **Regel:** Kun oppgaver som finnes i den gjeldende rettemanualen er tillatt detektert. 
+* **API-Filter:** Alle "hallusinerte" oppgaver som ikke matcher fasiten SKAL slettes programmatisk i `geminiService` før de når frontend.
 
-## 8. Universal Layout Enforced
-* **Regel:** Alle håndskrevne JPG/Scan-bilder SKAL vises på høykant. 
-* **Regel:** Dersom bildet er Landscape, SKAL det deles i to vertikale A4-sider. Flash-modellen SKAL tvinges til denne logikken via systeminstrukser.
+## 8. Universal Splitting Enforced
+* **Regel:** Det finnes ikke lenger konseptet "Enkelt A4-side" i inntaks-pipelinen for bilder.
+* **Regel:** Alle bildefiler behandles som om de inneholder to logiske sider.
 
 ## 9. Del 1 / Del 2 Kontinuitet
 * **Regel:** Systemet skal aldri "glemme" hvilken del en side tilhører. Dette feltet er påkrevd i alle KI-skjemaer.
@@ -50,7 +53,7 @@ Dette dokumentet er systemets "Grunnlov". Ved alle fremtidige oppdateringer SKAL
 * **Regel:** Bruk `\[ ... \]` for display math og `\( ... \)` for inline math. Unngå `$$` da det kan skape problemer med asynkron rendering.
 
 ## 13. Orientation Guard
-* **Regel:** KI-en skal sjekke etter 180-graders rotasjon (opp-ned) ved å analysere bokstav-anatomi. Fysisk rotasjon skal utføres ved deteksjon.
+* **Regel:** KI-en skal sjekke etter 180-graders rotasjon (opp-ned) ved å analysere bokstav-anatomi i de splittede delene.
 
 ## 14. Explicit Empty Page
 * **Regel:** Tomme sider skal returnere strengen `[TOM SIDE]` i transkripsjonen, ikke være tomme strenger eller null.
@@ -91,7 +94,7 @@ Dette dokumentet er systemets "Grunnlov". Ved alle fremtidige oppdateringer SKAL
 * **Regel:** Sortering av sider skal primært baseres på visuelle sidetall (OCR) dersom fil-metadata er upålitelig.
 
 ## 26. Mandatory Column Check
-* **Regel:** A3-deteksjon skal trigges av innhold (to spalter) like mye som bildeformat.
+* **Regel:** (Erstattet av Regel 1: Mandatory Universal Split).
 
 ## 27. Literal CAS Transcription
 * **Regel:** 1:1 avskrift av tekst i CAS-vinduer. Ingen tolkning.
@@ -108,8 +111,8 @@ Dette dokumentet er systemets "Grunnlov". Ved alle fremtidige oppdateringer SKAL
 ## 31. Re-Scan Visual Feedback
 * **Regel:** Tydelig spinnere/loading-state lokalt på siden som re-skannes.
 
-## 32. Hard Whitelisting (Frontend)
-* **Regel:** Frontend skal filtrere bort alle oppgaver fra API-responsen som ikke finnes i den aktive rettemanualen.
+## 32. Hard Whitelisting (Frontend & API)
+* **Regel:** Både Frontend og API-tjenesten skal filtrere bort alle oppgaver fra API-responsen som ikke finnes i den aktive rettemanualen. Ingen unntak.
 
 ## 33. Dynamic Theme Extraction (v6.2.3)
 * **Regel:** Ferdighetsprofilen (Radar Chart) skal bygges dynamisk basert på unike verdier i "Tema"-feltet i rettemanualen. Ingen hardkodede kategorier er tillatt.
@@ -124,6 +127,28 @@ Dette dokumentet er systemets "Grunnlov". Ved alle fremtidige oppdateringer SKAL
 * **Regel:** Dersom en side inneholder en "ensom" underoppgave (f.eks. "c)") uten hovedtall, SKAL systemet sjekke forrige side hos samme kandidat.
 * **Arv:** Hvis forrige side sluttet med samme oppgavesekvens (f.eks. "3b"), skal den nye siden arve hovednummeret ("3c") og del-tilhørighet (Del 1/2) automatisk.
 
-## 37. Recursive Layout Re-evaluation (v6.6.5)
-* **Regel:** Hvis en side blir fysisk rotert av systemet basert på KI-anbefaling, SKAL dimensjonene sjekkes på nytt.
-* **Hensikt:** Dette fanger opp "Portrait-to-Landscape" scenarioer (A3 skannet sidelengs), som da SKAL splittes i to sider etter rotasjon.
+## 37. Ghost Cache Buster (v6.6.8)
+* **Regel:** Ved splitting av sider SKAL `contentHash` genereres på nytt basert på den *faktiske pikseldataen* i den nye filen. Det er strengt forbudt å arve hash fra originalfilen.
+
+## 38. Strict Deduction Scale (v7.8.2)
+* **Regel:** KI-sensor skal bruke følgende standardiserte trekk-satser ved retting, i formatet `[-X.X p]`:
+    *   **[-0.5 p]**: Slurvefeil, manglende benevning, fortegnsfeil i ellers riktig utregning.
+    *   **[-1.0 p]**: Konseptuell feil, men viser forståelse. Halvveis løst.
+    *   **[-2.0 p]**: Total skivebom eller manglende besvarelse.
+
+## 39. Network Resilience (v7.8.1)
+* **Regel:** Systemet skal ALDRI avbryte en pågående batch-prosessering på grunn av nettverksfeil (503, 504, fetch failed).
+* **Action:** Ved feil skal prosessen vente 5 sekunder og prøve samme side på nytt i det uendelige til nettet er tilbake.
+
+## 40. Natural Sorting Policy (v7.9.5)
+* **Regel:** All sortering av kandidater skal skje numerisk ("Natural Sort").
+* **Logikk:** Kandidat "2" kommer før "10". Kandidat "105" kommer før "1005".
+* **Ukjente:** Kandidater merket "Ukjent" skal alltid ligge nederst i listen.
+
+## 41. Literal Newline Sanitization (v7.9.6)
+* **Regel:** Transkripsjoner som inneholder literale `\n` tegn (escaped newlines) MÅ konverteres til faktiske linjeskift i både visnings- og redigeringsmodus.
+* **Editor:** Tekstbokser for redigering skal ha tilstrekkelig høyde til å vise innholdet uten overdreven intern skrolling.
+
+## 42. Strict Part-Aware Completion (v7.9.31)
+* **Regel:** "Komplett"-status (grønn hake) krever en eksakt match mot kombinasjonen av DEL (1/2) og OPPGAVE (Nr+Bokstav).
+* **Duplikater:** Hvis manualen inneholder "1a (Del 1)" og "1a (Del 2)", må kandidaten ha besvart BEGGE for å regnes som komplett.

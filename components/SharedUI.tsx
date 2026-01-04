@@ -10,8 +10,9 @@ export const Spinner: React.FC<{ size?: string; color?: string }> = ({ size = "w
 );
 
 /**
- * LatexRenderer v2.15: Multiline Regex Support (v6.5.2)
- * Fikser bug der figurtolkninger over flere linjer ikke ble fanget opp av regexen.
+ * LatexRenderer v2.17: Literal Newline Fix (v7.9.4)
+ * - Utvidet regex for å fange opp 'BILDEVEDLEGG'
+ * - Automatisk konvertering av literal '\n' strenger til faktiske linjeskift
  */
 export const LatexRenderer: React.FC<{ content: string; className?: string }> = ({ content, className = "" }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -42,22 +43,26 @@ export const LatexRenderer: React.FC<{ content: string; className?: string }> = 
   }, [content]);
 
   const processContent = (text: string) => {
-    // Regex oppdatert i v6.5.2 for å støtte multiline ([\s\S]*?) i stedet for (.)*
-    const figureRegex = /\[\s*(?:AI-TOLKNING AV FIGUR|FIGURTOLKNING|BESKRIVELSE AV BILDE|VISUAL-EVIDENCE)\s*:?\s*([\s\S]*?)\s*\]/gi;
+    // FIX v7.9.4: Erstatt litteære "\n" tegnsekvenser med faktiske linjeskift
+    // Dette retter problemet der KI returnerer dobbel-escaped newlines ("\\n")
+    const cleanText = text.replace(/\\n/g, '\n');
+
+    // Regex oppdatert i v7.8.8: Inkluderer 'BILDEVEDLEGG' som gyldig trigger
+    const figureRegex = /\[\s*(?:AI-TOLKNING AV FIGUR|FIGURTOLKNING|BESKRIVELSE AV BILDE|VISUAL-EVIDENCE|BILDEVEDLEGG)\s*:?\s*([\s\S]*?)\s*\]/gi;
     const parts = [];
     let lastIndex = 0;
     let match;
 
-    while ((match = figureRegex.exec(text)) !== null) {
+    while ((match = figureRegex.exec(cleanText)) !== null) {
       if (match.index > lastIndex) {
-        parts.push(text.substring(lastIndex, match.index));
+        parts.push(cleanText.substring(lastIndex, match.index));
       }
 
       const innerContent = match[1].trim();
       
       // REGEL v5.8.6: Skjul boks dersom den bare inneholder meldinger om fravær av figurer
       const isNegativeEvidence = 
-        innerContent.length < 5 || 
+        innerContent.length < 2 || // Ignorer hvis det bare er et tall (f.eks "[BILDEVEDLEGG 1]") uten tekst
         /^(?:ingen|ikke|nei|tom|mangler|fant ikke|no figures|no images|ingen bilder|ingen figurer|ingen cas)/i.test(innerContent) ||
         innerContent.toLowerCase().includes("er inkludert i tekstdokumentet");
 
@@ -93,11 +98,11 @@ export const LatexRenderer: React.FC<{ content: string; className?: string }> = 
       lastIndex = match.index + match[0].length;
     }
 
-    if (lastIndex < text.length) {
-      parts.push(text.substring(lastIndex));
+    if (lastIndex < cleanText.length) {
+      parts.push(cleanText.substring(lastIndex));
     }
 
-    return parts.length > 0 ? parts : [text];
+    return parts.length > 0 ? parts : [cleanText];
   };
 
   return (

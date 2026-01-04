@@ -1,12 +1,10 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Project, Page, Candidate, IdentifiedTask, RubricCriterion, Rubric } from '../types';
-import { processFileToImages, splitA3Spread, processImageRotation, getImageDimensions, generateHash } from '../services/fileService';
-import { getMedia, saveMedia, saveCandidate, saveProject } from '../services/storageService';
-import { extractFolderId, fetchImagesFromDriveFolder, downloadDriveFile } from '../services/driveService';
+import { processFileToImages, splitImageInHalf, getImageDimensions, generateHash, processImageRotation } from '../services/fileService';
+import { getMedia, saveMedia, saveCandidate, saveProject, deleteCandidate } from '../services/storageService';
 import { 
   transcribeAndAnalyzeImage, 
-  detectPageLayout,
   analyzeTextContent, 
   generateRubricFromTaskAndSamples, 
   evaluateCandidate,
@@ -24,11 +22,18 @@ export const useProjectProcessor = (
   const [batchTotal, setBatchTotal] = useState(0);
   const [batchCompleted, setBatchCompleted] = useState(0);
   const [currentAction, setCurrentAction] = useState<string>('');
+  const [activePageId, setActivePageId] = useState<string | null>(null); 
   const [rubricStatus, setRubricStatus] = useState<{ loading: boolean; text: string; errorType?: 'PRO_QUOTA' | 'GENERIC' }>({ loading: false, text: '' });
   const [useFlashFallback, setUseFlashFallback] = useState(false);
+  const [retryTrigger, setRetryTrigger] = useState(0);
+  const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
   
   const isBatchProcessing = useRef(false);
   const isStoppingEvaluation = useRef(false);
+  const retryCounts = useRef<Record<string, number>>({});
+  
+  // v7.9.33: Abort Controller for skipping pages
+  const abortControllerRef = useRef<AbortController | null>(null);
   
   const activeProjectRef = useRef(activeProject);
   const useFlashFallbackRef = useRef(useFlashFallback);
@@ -36,11 +41,32 @@ export const useProjectProcessor = (
   useEffect(() => { activeProjectRef.current = activeProject; }, [activeProject]);
   useEffect(() => { useFlashFallbackRef.current = useFlashFallback; }, [useFlashFallback]);
 
+  // v7.9.15: Auto-resume when network is restored
+  useEffect(() => {
+    const handleOnline = () => {
+      console.log("📶 Nettverk gjenopprettet. Forsøker å restarte kø...");
+      isBatchProcessing.current = false; 
+      retryCounts.current = {}; // Reset retries on network restore
+      setRetryTrigger(prev => prev + 1); 
+    };
+
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, []);
+
   const getActiveReasoningModel = () => useFlashFallbackRef.current ? OCR_MODEL : PRO_MODEL;
 
   const updateActiveProject = useCallback((updates: Partial<Project>) => {
     setActiveProject(prev => prev ? { ...prev, ...updates, updatedAt: Date.now() } : null);
   }, [setActiveProject]);
+
+  // v7.9.33: Manual Skip Function
+  const handleSkipFile = () => {
+    if (abortControllerRef.current) {
+      console.log("⏭️ Bruker ba om å hoppe over filen. Avbryter API-kall...");
+      abortControllerRef.current.abort();
+    }
+  };
 
   const handleTaskFileSelect = async (files: FileList) => {
     if (!activeProject) return;
@@ -87,58 +113,8 @@ export const useProjectProcessor = (
     setCurrentAction('');
   };
 
-  const handleDriveImport = async (url: string) => {
-    if (!activeProject) return;
-    const folderId = extractFolderId(url);
-    if (!folderId) {
-      alert("Ugyldig Google Drive lenke.");
-      return;
-    }
-
-    try {
-      setRubricStatus({ loading: true, text: 'Kobler til Google Drive...', errorType: undefined });
-      const files = await fetchImagesFromDriveFolder(folderId);
-      
-      if (files.length === 0) {
-        alert("Fant ingen bilder eller PDF-er i mappen.");
-        setRubricStatus({ loading: false, text: '' });
-        return;
-      }
-
-      setProcessingCount(prev => prev + files.length);
-      setRubricStatus({ loading: false, text: '' });
-
-      for (const f of files) {
-        setCurrentAction(`Laster ned fra Drive: ${f.name}...`);
-        try {
-          const blob = await downloadDriveFile(f.id);
-          const file = new File([blob], f.name, { type: f.mimeType });
-          const processed = await processFileToImages(file);
-
-          setActiveProject(prev => {
-            if (!prev) return null;
-            const currentUnprocessed = prev.unprocessedPages || [];
-            return { 
-              ...prev, 
-              unprocessedPages: [...currentUnprocessed, ...processed],
-              updatedAt: Date.now()
-            };
-          });
-        } catch (e) {
-          console.error(`Feil ved nedlasting av ${f.name}`, e);
-        }
-        setProcessingCount(prev => Math.max(0, prev - 1));
-      }
-      setCurrentAction('');
-
-    } catch (e: any) {
-      console.error(e);
-      setRubricStatus({ loading: false, text: '' });
-      alert(`Drive Feil: ${e.message}. Sjekk at API-nøkkelen har Drive API aktivert.`);
-    }
-  };
-
   const handleGenerateRubric = async (overrideProject?: Project) => {
+    // ... existing implementation ...
     const proj = overrideProject || activeProject;
     if (!proj || proj.taskFiles.length === 0) return;
     
@@ -164,7 +140,6 @@ export const useProjectProcessor = (
     }
   };
 
-  // UPDATED v6.6.4: Context-Aware Orphan Logic
   const integratePageResults = async (pageToSave: Page, results: any[], parentIdToRemove?: string) => {
     setActiveProject(prev => {
       if (!prev) return null;
@@ -189,7 +164,25 @@ export const useProjectProcessor = (
 
         const pageId = pageToSave.id + (results.length > 1 ? `_${idx}` : '');
         let finalPart = res.part;
-        let filteredTasks = (res.identifiedTasks || []).filter((t: IdentifiedTask) => {
+        let filteredTasks = (res.identifiedTasks || []).map((t: IdentifiedTask) => {
+           let cleanNum = t.taskNumber;
+           const isDoubleDigit = /^(\d)\1$/.test(cleanNum); 
+           
+           if (isDoubleDigit) {
+              const singleDigit = cleanNum[0];
+              const singleLabel = `${singleDigit}${t.subTask || ''}`.toUpperCase();
+              const doubleLabel = `${cleanNum}${t.subTask || ''}`.toUpperCase();
+              
+              if (hasRubric) {
+                 if (!validTaskStrings.has(doubleLabel) && validTaskStrings.has(singleLabel)) {
+                    cleanNum = singleDigit;
+                 }
+              } else {
+                 cleanNum = singleDigit;
+              }
+           }
+           return { ...t, taskNumber: cleanNum };
+        }).filter((t: IdentifiedTask) => {
           if (!t.taskNumber) return false; 
           if (hasRubric) {
              const taskLabel = `${t.taskNumber}${t.subTask || ''}`.toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -198,69 +191,85 @@ export const useProjectProcessor = (
           return true; 
         });
 
-        // REGEX RESCUE & SEQUENTIAL CONTEXT
-        const textToScan = res.fullText || res.transcription || "";
+        let rawId = res.candidateId === "UKJENT" ? `UKJENT_${pageToSave.id}` : res.candidateId;
+        if (rawId && !rawId.startsWith("UKJENT")) rawId = rawId.replace(/^Kandidat\s*:?\s*/i, "").trim();
+        let candId = rawId || `UKJENT_${pageToSave.id}`;
         
-        // 1. Check for standard badges (e.g. "1a")
-        const stdRegex = /(?:^|\n)\s*(\d+)\s*([a-zæøå])(?:\)|:|\.|\s|$)/gmi;
-        let match;
-        while ((match = stdRegex.exec(textToScan)) !== null) {
-           const num = match[1];
-           const letter = match[2];
-           const label = `${num}${letter}`.toUpperCase();
-           if (validTaskStrings.has(label)) {
-              const exists = filteredTasks.some((t: IdentifiedTask) => `${t.taskNumber}${t.subTask}`.toUpperCase() === label);
-              if (!exists) filteredTasks.push({ taskNumber: num, subTask: letter.toLowerCase() });
+        const cleanBaseName = (name: string) => name.replace(/\s*\([VHØN]\)$/i, "").replace(/\.[^/.]+$/, "").trim();
+        const currentBaseName = cleanBaseName(pageToSave.fileName);
+        const isUnknownStart = candId.startsWith("UKJENT");
+
+        if (isUnknownStart) {
+            const siblingCandidate = newCandidates.find(c => 
+                !c.id.startsWith("UKJENT") && 
+                c.pages.some(p => cleanBaseName(p.fileName) === currentBaseName)
+            );
+            if (siblingCandidate) {
+                candId = siblingCandidate.id;
+            }
+        }
+
+        const textToScan = res.fullText || res.transcription || "";
+        const existingCand = newCandidates.find(c => c.id === candId);
+        
+        let currentContextTaskNum: string | null = null;
+        if (existingCand) {
+           const prevPageNum = (res.pageNumber || pageToSave.pageNumber || 0) - 1;
+           const prevPage = existingCand.pages.find(p => p.pageNumber === prevPageNum);
+           if (prevPage && prevPage.identifiedTasks && prevPage.identifiedTasks.length > 0) {
+              currentContextTaskNum = prevPage.identifiedTasks[prevPage.identifiedTasks.length - 1].taskNumber;
+              if (prevPage.part === "Del 2" && finalPart !== "Del 2") finalPart = "Del 2"; 
            }
         }
 
-        // 2. ORPHAN LOGIC (Detect "c)" without number, link to previous page)
-        // Only run if we have a candidate context
-        let rawId = res.candidateId === "UKJENT" ? `UKJENT_${pageToSave.id}` : res.candidateId;
-        if (rawId && !rawId.startsWith("UKJENT")) rawId = rawId.replace(/^Kandidat\s*:?\s*/i, "").trim();
-        const candId = rawId || `UKJENT_${pageToSave.id}`;
+        const smartRegex = /(?:^|\n|\[)\s*(?:opg(?:ave)?\.?|oppg\.?)?(?:(\d+)(?:[\.\)\s]*)([a-zæøå]*)|([a-zæøå])(?:\)|:|\.))/gmi;
         
-        const existingCand = newCandidates.find(c => c.id === candId);
-        if (existingCand) {
-           // Find the previous page (physically preceding page)
-           const prevPageNum = (res.pageNumber || pageToSave.pageNumber || 0) - 1;
-           const prevPage = existingCand.pages.find(p => p.pageNumber === prevPageNum);
+        let match;
+        while ((match = smartRegex.exec(textToScan)) !== null) {
+           let explicitNum = match[1]; 
+           const explicitLetter = match[2]; 
+           const orphanLetter = match[3]; 
 
-           if (prevPage) {
-              // A: Inherit Part (If prev page was Del 2, and current is unclear, assume flow)
-              if (prevPage.part === "Del 2" && finalPart !== "Del 2") {
-                 // Check if text starts with orphan pattern, indicating flow
-                 if (/^(?:[a-zæøå])(?:\)|:|\.)/m.test(textToScan)) {
-                    finalPart = "Del 2";
+           if (explicitNum && /^(\d)\1$/.test(explicitNum)) {
+              if (hasRubric) {
+                 const single = explicitNum[0];
+                 const label = `${single}${explicitLetter || ''}`.toUpperCase();
+                 if (validTaskStrings.has(label)) explicitNum = single;
+              } else {
+                 explicitNum = explicitNum[0];
+              }
+           }
+
+           if (explicitNum) {
+              currentContextTaskNum = explicitNum; 
+              const letter = explicitLetter ? explicitLetter.toLowerCase() : "";
+              const label = `${explicitNum}${letter}`.toUpperCase();
+              if (validTaskStrings.has(label)) {
+                 const exists = filteredTasks.some((t: IdentifiedTask) => `${t.taskNumber}${t.subTask}`.toUpperCase() === label);
+                 if (!exists) {
+                    filteredTasks.push({ taskNumber: explicitNum, subTask: letter });
                  }
               }
-
-              // B: Link Orphan Tasks
-              const orphanRegex = /(?:^|\n)\s*([a-zæøå])(?:\)|:|\.)/gmi;
-              let orphanMatch;
-              while ((orphanMatch = orphanRegex.exec(textToScan)) !== null) {
-                 const letter = orphanMatch[1];
-                 const lastPrevTask = prevPage.identifiedTasks?.[prevPage.identifiedTasks.length - 1];
-                 
-                 if (lastPrevTask && lastPrevTask.taskNumber) {
-                    const inferredLabel = `${lastPrevTask.taskNumber}${letter}`;
-                    if (validTaskStrings.has(inferredLabel.toUpperCase())) {
-                       const exists = filteredTasks.some((t: IdentifiedTask) => `${t.taskNumber}${t.subTask}`.toUpperCase() === inferredLabel.toUpperCase());
-                       if (!exists) {
-                          filteredTasks.push({ taskNumber: lastPrevTask.taskNumber, subTask: letter.toLowerCase() });
-                          // Force part inheritance if we successfully linked a task
-                          if (prevPage.part) finalPart = prevPage.part;
-                       }
-                    }
+           } else if (orphanLetter && currentContextTaskNum) {
+              const letter = orphanLetter.toLowerCase();
+              const label = `${currentContextTaskNum}${letter}`.toUpperCase();
+              if (validTaskStrings.has(label)) {
+                 const exists = filteredTasks.some((t: IdentifiedTask) => `${t.taskNumber}${t.subTask}`.toUpperCase() === label);
+                 if (!exists) {
+                    filteredTasks.push({ taskNumber: currentContextTaskNum, subTask: letter });
                  }
               }
            }
+        }
+
+        if (textToScan.includes("Del 2") || textToScan.includes("Med hjelpemidler")) {
+           finalPart = "Del 2";
         }
 
         const newPage: Page = {
           ...pageToSave,
           id: pageId,
-          candidateId: res.candidateId || "UKJENT",
+          candidateId: candId.startsWith("UKJENT") ? "UKJENT" : candId,
           pageNumber: res.pageNumber || pageToSave.pageNumber,
           part: finalPart,
           transcription: textToScan,
@@ -282,12 +291,33 @@ export const useProjectProcessor = (
           };
           newCandidates.push(newCand);
           saveCandidate(newCand);
+          candIdx = newCandidates.length - 1;
         } else {
           newCandidates[candIdx] = {
             ...newCandidates[candIdx],
             pages: [...newCandidates[candIdx].pages, newPage].sort((a,b) => (a.pageNumber || 0) - (b.pageNumber || 0))
           };
           saveCandidate(newCandidates[candIdx]);
+        }
+
+        if (!candId.startsWith("UKJENT")) {
+             const unknownSiblingIndex = newCandidates.findIndex(c => 
+                c.id.startsWith("UKJENT") && 
+                c.pages.some(p => cleanBaseName(p.fileName) === currentBaseName)
+             );
+
+             if (unknownSiblingIndex !== -1) {
+                 const unknownCand = newCandidates[unknownSiblingIndex];
+                 const rescuedPages = unknownCand.pages.map(p => ({ ...p, candidateId: candId }));
+                 
+                 const updatedCand = newCandidates[candIdx];
+                 updatedCand.pages = [...updatedCand.pages, ...rescuedPages].sort((a,b) => (a.pageNumber || 0) - (b.pageNumber || 0));
+                 newCandidates[candIdx] = updatedCand;
+                 saveCandidate(updatedCand);
+                 
+                 newCandidates = newCandidates.filter(c => c.id !== unknownCand.id);
+                 deleteCandidate(unknownCand.id);
+             }
         }
       });
 
@@ -298,11 +328,9 @@ export const useProjectProcessor = (
   useEffect(() => {
     if (isBatchProcessing.current || !activeProject) return;
     
-    const initialPending = (activeProject.unprocessedPages || []).filter(p => p.status === 'pending');
-    if (initialPending.length === 0) return;
-
-    // Safety Lock v6.6.1: Ikke start prosessering hvis fasiten er tom (hindrer "ghost runs")
-    if (!activeProject.rubric || activeProject.rubric.criteria.length === 0) {
+    const hasPending = (activeProject.unprocessedPages || []).some(p => p.status === 'pending');
+    if (!hasPending) {
+      setEtaSeconds(null);
       return;
     }
 
@@ -312,137 +340,161 @@ export const useProjectProcessor = (
       const failedIds = new Set<string>();
       const processedIds = new Set<string>();
       
-      setBatchTotal(initialPending.length); 
+      const batchStartTime = Date.now();
+      let localProcessedCount = 0;
+      let localBatchCompleted = 0;
+      
+      const pendingCount = (activeProjectRef.current?.unprocessedPages || []).filter(p => p.status === 'pending').length;
+      setBatchTotal(prev => Math.max(prev, pendingCount)); 
       setBatchCompleted(0);
 
       while (hasMore) {
-        const currentPending = (activeProjectRef.current?.unprocessedPages || [])
-          .filter(p => p.status === 'pending' && !failedIds.has(p.id) && !processedIds.has(p.id));
+        const currentProject = activeProjectRef.current;
+        if (!currentProject) break;
+
+        const pendingPages = (currentProject.unprocessedPages || []).filter(p => p.status === 'pending');
+        const remaining = pendingPages.length;
+        setBatchTotal(prevTotal => {
+           const realTotal = localBatchCompleted + remaining;
+           return Math.max(prevTotal, realTotal);
+        });
+
+        const page = pendingPages.find(p => !failedIds.has(p.id) && !processedIds.has(p.id));
         
-        if (currentPending.length === 0) {
+        if (!page) {
           hasMore = false;
           break;
         }
 
-        setBatchTotal(prev => Math.max(prev, batchCompleted + currentPending.length));
-        const page = currentPending[0];
-        processedIds.add(page.id); 
+        setActivePageId(page.id);
+        processedIds.add(page.id);
         
+        // v7.9.33: Initialize AbortController for this file
+        abortControllerRef.current = new AbortController();
+        const signal = abortControllerRef.current.signal;
+
         try {
-          if (page.mimeType === 'text/plain') {
-            setCurrentAction(`Analyserer tekst: ${page.fileName}...`);
-            const res = await analyzeTextContent(page.rawText || "", activeProjectRef.current?.rubric);
-            await integratePageResults(page, [res]);
-          } else {
-            // DETERMINISTIC LANDSCAPE SPLIT v6.6.5 (Recursive Logic)
-            const base64 = await getMedia(page.id);
-            if (!base64) throw new Error("Mangler bildedata");
+          // STEP 1: FORCE SPLIT & ORIENTATION
+          if (page.mimeType.startsWith('image/') && !page.layoutType) {
+             setCurrentAction(`Geometri-sjekk: ${page.fileName}...`);
+             const base64 = await getMedia(page.id);
+             if (!base64) throw new Error("Mangler bildedata");
 
-            const dimensions = await getImageDimensions(base64);
-            const isLandscape = dimensions.width > dimensions.height;
-            
-            let finalPagesToTranscribe: Page[] = [];
+             let split1 = await splitImageInHalf(base64, 1);
+             let split2 = await splitImageInHalf(base64, 2);
+             
+             if (!split1.isLandscapeSplit) {
+                split1.fullRes = await processImageRotation(split1.fullRes, 90);
+                split2.fullRes = await processImageRotation(split2.fullRes, 90);
+             }
+             
+             const id1 = `${page.id}_1`;
+             const id2 = `${page.id}_2`;
+             
+             await Promise.all([saveMedia(id1, split1.fullRes), saveMedia(id2, split2.fullRes)]);
+             
+             const s1Suffix = split1.isLandscapeSplit ? '(V)' : '(Ø)';
+             const s2Suffix = split2.isLandscapeSplit ? '(H)' : '(N)';
 
-            // Helper to handle splitting
-            const performSplit = async (b64ToSplit: string) => {
-               const leftSplit = await splitA3Spread(b64ToSplit, 'LEFT', 0);
-               const rightSplit = await splitA3Spread(b64ToSplit, 'RIGHT', 0);
-               
-               const idL = `${page.id}_L`;
-               const idR = `${page.id}_R`;
-               
-               const leftB64 = leftSplit.fullRes.split(',')[1];
-               const rightB64 = rightSplit.fullRes.split(',')[1];
+             const processedPages: Page[] = [
+               { ...page, id: id1, base64Data: undefined, contentHash: generateHash(split1.fullRes), fileName: `${page.fileName} ${s1Suffix}`, layoutType: 'A4_SINGLE', rotation: 0, mimeType: 'image/jpeg' },
+               { ...page, id: id2, base64Data: undefined, contentHash: generateHash(split2.fullRes), fileName: `${page.fileName} ${s2Suffix}`, layoutType: 'A4_SINGLE', rotation: 0, mimeType: 'image/jpeg' }
+             ];
 
-               await Promise.all([
-                 saveMedia(idL, leftSplit.fullRes),
-                 saveMedia(idR, rightSplit.fullRes)
-               ]);
-               
-               return [
-                 { 
-                   ...page, 
-                   id: idL, 
-                   base64Data: leftB64, 
-                   contentHash: generateHash(leftB64), 
-                   fileName: `${page.fileName} (V)` 
-                 },
-                 { 
-                   ...page, 
-                   id: idR, 
-                   base64Data: rightB64, 
-                   contentHash: generateHash(rightB64), 
-                   fileName: `${page.fileName} (H)` 
-                 }
-               ];
-            };
+             setActiveProject(prev => {
+                if (!prev) return null;
+                const oldList = prev.unprocessedPages || [];
+                const idx = oldList.findIndex(p => p.id === page.id);
+                if (idx === -1) return prev;
+                const newList = [...oldList];
+                newList.splice(idx, 1, ...processedPages);
+                return { ...prev, unprocessedPages: newList };
+             });
 
-            if (isLandscape) {
-              setCurrentAction(`Splitter A3-oppslag: ${page.fileName}...`);
-              finalPagesToTranscribe = await performSplit(base64);
-            } else {
-              setCurrentAction(`Sjekker orientering: ${page.fileName}...`);
-              const layout = await detectPageLayout({ ...page, base64Data: base64.split(',')[1] });
-              
-              let correctedBase64 = base64;
-              let wasRotated = false;
+             continue; 
+          }
 
-              if (layout.rotation !== 0) {
-                setCurrentAction(`Korrigerer rotasjon (${layout.rotation}°)...`);
-                correctedBase64 = await processImageRotation(base64, layout.rotation);
-                await saveMedia(page.id, correctedBase64); 
-                wasRotated = true;
-              }
+          // STEP 2: TRANSCRIPTION
+          if (currentProject.rubric && currentProject.rubric.criteria.length > 0) {
+             if (page.mimeType === 'text/plain') {
+                setCurrentAction(`Analyserer digital tekst: ${page.fileName}...`);
+                const res = await analyzeTextContent(page.rawText || "", activeProjectRef.current?.rubric, page.attachedImages, signal);
+                setCurrentAction(`Lagrer analyse for ${page.fileName}...`);
+                await integratePageResults(page, [res]);
+             } else {
+                setCurrentAction(`🚀 Sender til Google: ${page.fileName}...`);
+                const base64 = await getMedia(page.id);
+                if (base64) {
+                  // LOGGING DIAGNOSTICS FOR HEAVY FILES
+                  const sizeInMB = base64.length / 1024 / 1024;
+                  if (sizeInMB > 15) console.warn(`⚠️ Veldig stor fil (${sizeInMB.toFixed(1)} MB): ${page.fileName}. Kan forårsake timeouts.`);
 
-              // RECURSIVE CHECK v6.6.5: 
-              // Hvis bildet ble rotert, sjekk dimensjonene på nytt. Det kan ha blitt til et A3-oppslag (Landscape).
-              if (wasRotated || layout.isSpread) {
-                 const newDims = await getImageDimensions(correctedBase64);
-                 const isNowLandscape = newDims.width > newDims.height;
-                 
-                 if (isNowLandscape || layout.isSpread) {
-                    setCurrentAction(`Oppdaget A3 etter rotasjon: ${page.fileName}...`);
-                    finalPagesToTranscribe = await performSplit(correctedBase64);
-                 } else {
-                    const finalB64 = correctedBase64.split(',')[1];
-                    finalPagesToTranscribe.push({ ...page, base64Data: finalB64, contentHash: generateHash(finalB64) });
-                 }
-              } else {
-                 // Standard A4 Portrait
-                 const finalB64 = correctedBase64.split(',')[1];
-                 finalPagesToTranscribe.push({ ...page, base64Data: finalB64, contentHash: generateHash(finalB64) });
-              }
-            }
-
-            // PHASE 3: TRANSCRIPTION
-            for (const p of finalPagesToTranscribe) {
-              setCurrentAction(`Transkriberer ${p.id.endsWith('_L') ? '(Venstre)' : p.id.endsWith('_R') ? '(Høyre)' : ''}...`);
-              const results = await transcribeAndAnalyzeImage(p, activeProjectRef.current?.rubric);
-              await integratePageResults(p, results, page.id); 
-            }
+                  const pWithData = { ...page, base64Data: base64.split(',')[1] };
+                  // Venter på svar fra Google...
+                  const results = await transcribeAndAnalyzeImage(pWithData, activeProjectRef.current?.rubric, signal);
+                  setCurrentAction(`🧠 Tolker og lagrer: ${page.fileName}...`);
+                  await integratePageResults(page, results);
+                }
+             }
+             localBatchCompleted++;
+             setBatchCompleted(localBatchCompleted);
+             
+             localProcessedCount++;
+             const elapsedTime = Date.now() - batchStartTime;
+             const averageTimePerItem = elapsedTime / localProcessedCount;
+             setBatchTotal(currentTotal => {
+                const remaining = currentTotal - localBatchCompleted;
+                const estSeconds = (averageTimePerItem * remaining) / 1000;
+                setEtaSeconds(Math.round(estSeconds));
+                return currentTotal;
+             });
           }
           
-          setBatchCompleted(prev => prev + 1);
-          
-        } catch (e) {
-           console.error("Feil under prosessering av side (400/500):", e);
+        } catch (e: any) {
+           // v7.9.33: Handle Abort (User Skip)
+           if (e.name === 'AbortError' || e.message === 'Aborted') {
+             console.log(`Fil ${page.fileName} ble hoppet over av bruker.`);
+             updateActiveProject({ 
+               unprocessedPages: (activeProjectRef.current?.unprocessedPages || []).map(p => p.id === page.id ? { ...p, status: 'skipped', statusLabel: 'Hoppet over' } : p) 
+             });
+             continue; // Immediately go to next file
+           }
+
+           const msg = e?.message || String(e);
+           const isNetworkError = msg.includes("fetch failed") || msg.includes("NetworkError") || msg.includes("503") || msg.includes("504") || msg.includes("Failed to fetch") || msg.includes("timeout") || msg.includes("timed out");
+           
+           const currentRetries = retryCounts.current[page.id] || 0;
+           
+           if (isNetworkError && currentRetries < 3) { 
+              retryCounts.current[page.id] = currentRetries + 1;
+              console.warn(`Nettverksfeil/Timeout på side ${page.id}. Forsøk ${currentRetries + 1}/3.`);
+              setCurrentAction(`⚠️ Tidsavbrudd på ${page.fileName}. Forsøk ${currentRetries + 1}/3...`);
+              processedIds.delete(page.id); 
+              await new Promise(r => setTimeout(r, 5000));
+              continue; 
+           }
+
+           console.error(`Feil under prosessering av ${page.id} (Retries: ${currentRetries}):`, e);
            failedIds.add(page.id); 
            updateActiveProject({ 
-             unprocessedPages: (activeProjectRef.current?.unprocessedPages || []).map(p => p.id === page.id ? { ...p, status: 'error' } : p) 
+             unprocessedPages: (activeProjectRef.current?.unprocessedPages || []).map(p => p.id === page.id ? { ...p, status: 'error', statusLabel: isNetworkError ? 'Tidsavbrudd' : 'Feilet' } : p) 
            });
         }
         
-        await new Promise(r => setTimeout(r, 100)); 
+        await new Promise(r => setTimeout(r, 20)); 
       }
 
+      setActivePageId(null);
+      abortControllerRef.current = null;
       isBatchProcessing.current = false;
       setCurrentAction('');
       setBatchTotal(0);
       setBatchCompleted(0);
+      setEtaSeconds(null);
     };
 
     processQueue();
-  }, [activeProject?.unprocessedPages, activeProject?.rubric]);
+  }, [activeProject?.unprocessedPages, activeProject?.rubric, retryTrigger]);
 
   const handleRegeneratePage = async (candId: string, pageId: string) => {
     if (!activeProject) return;
@@ -474,11 +526,13 @@ export const useProjectProcessor = (
   };
 
   return { 
-    processingCount, batchTotal, batchCompleted, currentAction, rubricStatus, 
+    processingCount, batchTotal, batchCompleted, currentAction, activePageId, rubricStatus, 
     useFlashFallback, setUseFlashFallback,
+    etaSeconds, 
     handleTaskFileSelect,
     handleCandidateFileSelect,
-    handleDriveImport, 
+    // REMOVED handleDriveImport
+    handleSkipFile, 
     handleEvaluateAll: async (force: boolean = false) => {
       if (!activeProject?.rubric) return;
       isStoppingEvaluation.current = false;

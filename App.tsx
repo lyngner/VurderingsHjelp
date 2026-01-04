@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Project, Candidate } from './types';
+import { Project, Candidate, IdentifiedTask } from './types';
 import { saveProject, getAllProjects, deleteProject as deleteProjectFromStorage, loadFullProject, saveCandidate, deleteMedia, deleteCandidate } from './services/storageService';
 import { useProjectProcessor } from './hooks/useProjectProcessor';
 
@@ -32,9 +32,11 @@ const App: React.FC = () => {
     batchTotal,
     batchCompleted,
     currentAction,
+    activePageId,
     rubricStatus,
     useFlashFallback,
     setUseFlashFallback,
+    etaSeconds, // v7.9.28
     handleTaskFileSelect,
     handleCandidateFileSelect,
     handleEvaluateAll,
@@ -44,7 +46,8 @@ const App: React.FC = () => {
     handleRegeneratePage,
     handleRetryPage,
     handleSmartCleanup,
-    updateActiveProject
+    updateActiveProject,
+    handleSkipFile // v7.9.33: New skip handler
   } = useProjectProcessor(activeProject, setActiveProject);
 
   const [selectedResultCandidateId, setSelectedResultCandidateId] = useState<string | null>(null);
@@ -166,6 +169,30 @@ const App: React.FC = () => {
     });
   };
 
+  const handleUpdatePageTasks = (candidateId: string, pageId: string, taskString: string) => {
+    // Parse "1a, 1b" -> IdentifiedTask[]
+    const tasks: IdentifiedTask[] = taskString.split(/,| /).map(s => s.trim()).filter(s => s.length > 0).map(s => {
+      const match = s.match(/^(\d+)([a-zA-Z]*)$/);
+      if (match) {
+        return { taskNumber: match[1], subTask: match[2].toLowerCase() };
+      }
+      return null;
+    }).filter((t): t is IdentifiedTask => t !== null);
+
+    setActiveProject(prev => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        candidates: prev.candidates.map(c => {
+          if (c.id !== candidateId) return c;
+          const updated = { ...c, pages: c.pages.map(p => p.id === pageId ? { ...p, identifiedTasks: tasks } : p) };
+          saveCandidate(updated);
+          return updated;
+        })
+      };
+    });
+  };
+
   const handleNavigateToCandidate = (id: string) => {
     setSelectedReviewCandidateId(id);
     setCurrentStep('review');
@@ -174,15 +201,14 @@ const App: React.FC = () => {
   const filteredCandidates = useMemo(() => {
     if (!activeProject?.candidates) return [];
     let list = activeProject.candidates.filter(c => !reviewFilter || c.name.toLowerCase().includes(reviewFilter.toLowerCase()));
+    // v7.9.5: Global alfabetisk sortering, Ukjent til slutt
     return [...list].sort((a, b) => {
       const aName = a.name.toLowerCase();
       const bName = b.name.toLowerCase();
       const aIsUnknown = aName.includes("ukjent");
       const bIsUnknown = bName.includes("ukjent");
-      const aIsEmpty = a.pages.every(p => !p.transcription || p.transcription.includes("Ingen tekst"));
-      const bIsEmpty = b.pages.every(p => !p.transcription || p.transcription.includes("Ingen tekst"));
-      if ((aIsUnknown || aIsEmpty) && !(bIsUnknown || bIsEmpty)) return 1;
-      if (!(aIsUnknown || aIsEmpty) && (bIsUnknown || bIsEmpty)) return -1;
+      if (aIsUnknown && !bIsUnknown) return 1;
+      if (!aIsUnknown && bIsUnknown) return -1;
       return a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' });
     });
   }, [activeProject, reviewFilter]);
@@ -217,22 +243,52 @@ const App: React.FC = () => {
                 batchTotal={batchTotal} 
                 batchCompleted={batchCompleted} 
                 currentAction={currentAction}
+                activePageId={activePageId}
                 rubricStatus={rubricStatus} 
                 useFlashFallback={useFlashFallback}
                 setUseFlashFallback={setUseFlashFallback}
+                etaSeconds={etaSeconds}
                 handleTaskFileSelect={handleTaskFileSelect} 
                 handleGenerateRubric={() => handleGenerateRubric()} 
                 handleCandidateFileSelect={handleCandidateFileSelect} 
                 handleRetryPage={handleRetryPage} 
                 updateActiveProject={updateActiveProject} 
                 onNavigateToCandidate={handleNavigateToCandidate} 
+                handleSkipFile={handleSkipFile}
               />
             )}
             {currentStep === 'review' && (
-              <ReviewStep activeProject={activeProject} selectedReviewCandidateId={selectedReviewCandidateId} setSelectedReviewCandidateId={(id) => setSelectedReviewCandidateId(id)} reviewFilter={reviewFilter} setReviewFilter={setReviewFilter} filteredCandidates={filteredCandidates} currentReviewCandidate={activeProject.candidates.find(c => c.id === selectedReviewCandidateId) || null} rotatePage={handleRotatePage} deletePage={handleDeletePage} updatePageNumber={handleUpdatePageNumber} setActiveProject={setActiveProject} handleSmartCleanup={handleSmartCleanup} isCleaning={rubricStatus.loading} handleRegeneratePage={handleRegeneratePage} />
+              <ReviewStep 
+                activeProject={activeProject} 
+                selectedReviewCandidateId={selectedReviewCandidateId} 
+                setSelectedReviewCandidateId={(id) => setSelectedReviewCandidateId(id)} 
+                reviewFilter={reviewFilter} 
+                setReviewFilter={setReviewFilter} 
+                filteredCandidates={filteredCandidates} 
+                currentReviewCandidate={activeProject.candidates.find(c => c.id === selectedReviewCandidateId) || null} 
+                rotatePage={handleRotatePage} 
+                deletePage={handleDeletePage} 
+                updatePageNumber={handleUpdatePageNumber} 
+                updatePageTasks={handleUpdatePageTasks}
+                setActiveProject={setActiveProject} 
+                handleSmartCleanup={handleSmartCleanup} 
+                isCleaning={rubricStatus.loading} 
+                handleRegeneratePage={handleRegeneratePage} 
+              />
             )}
             {currentStep === 'rubric' && <RubricStep activeProject={activeProject} handleGenerateRubric={() => handleGenerateRubric()} rubricStatus={rubricStatus} updateActiveProject={updateActiveProject} handleRegenerateCriterion={handleRegenerateCriterion} />}
-            {currentStep === 'results' && <ResultsStep activeProject={activeProject} selectedResultCandidateId={selectedResultCandidateId} setSelectedResultCandidateId={setSelectedResultCandidateId} handleEvaluateAll={handleEvaluateAll} handleEvaluateCandidate={handleEvaluateCandidate} handleGenerateRubric={() => handleGenerateRubric()} rubricStatus={rubricStatus} />}
+            {currentStep === 'results' && (
+              <ResultsStep 
+                activeProject={activeProject} 
+                selectedResultCandidateId={selectedResultCandidateId} 
+                setSelectedResultCandidateId={setSelectedResultCandidateId} 
+                handleEvaluateAll={handleEvaluateAll} 
+                handleEvaluateCandidate={handleEvaluateCandidate} 
+                handleGenerateRubric={() => handleGenerateRubric()} 
+                rubricStatus={rubricStatus}
+                onNavigateToReview={handleNavigateToCandidate}
+              />
+            )}
           </>
         )}
       </main>

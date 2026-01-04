@@ -1,5 +1,5 @@
 
-export const SYSTEM_VERSION = "v6.6.7";
+export const SYSTEM_VERSION = "v7.9.36";
 
 export interface IdentifiedTask {
   taskNumber: string;
@@ -23,10 +23,11 @@ export interface Page {
   pageNumber?: number;
   layoutType?: PageLayout; 
   identifiedTasks?: IdentifiedTask[];
-  status: 'pending' | 'processing' | 'completed' | 'error';
+  status: 'pending' | 'processing' | 'completed' | 'error' | 'skipped';
   statusLabel?: string;
   rotation?: number;
   isDigital?: boolean;
+  attachedImages?: { data: string; mimeType: string }[];
 }
 
 export interface TaskEvaluation {

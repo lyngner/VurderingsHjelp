@@ -165,6 +165,7 @@ interface ReviewStepProps {
   rotatePage: (pageId: string) => void;
   deletePage: (candidateId: string, pageId: string) => void;
   updatePageNumber: (candidateId: string, pageId: string, newNum: number) => void;
+  updatePageTasks: (candidateId: string, pageId: string, tasks: string) => void;
   setActiveProject: React.Dispatch<React.SetStateAction<Project | null>>;
   handleSmartCleanup?: () => Promise<void>;
   isCleaning: boolean;
@@ -182,6 +183,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
   rotatePage,
   deletePage,
   updatePageNumber,
+  updatePageTasks,
   setActiveProject,
   handleSmartCleanup,
   isCleaning,
@@ -231,6 +233,36 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
       del1: Array.from(groups["Del 1"]).sort((a,b) => a.localeCompare(b, undefined, {numeric: true})),
       del2: Array.from(groups["Del 2"]).sort((a,b) => a.localeCompare(b, undefined, {numeric: true}))
     };
+  };
+
+  // FIX v7.9.31: Part-Aware Completion Check
+  const getCompletionStatus = (candidate: Candidate) => {
+    if (!activeProject.rubric) return { isComplete: false };
+    
+    // 1. Bygg fasit-sett med DEL-ID
+    const rubricTasks = new Set<string>();
+    activeProject.rubric.criteria.forEach(c => {
+      const part = (c.part || "Del 1").toLowerCase().includes("2") ? "2" : "1";
+      const label = `${c.taskNumber}${c.subTask || ''}`.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      rubricTasks.add(`${part}-${label}`);
+    });
+
+    // 2. Bygg funnet-sett med DEL-ID
+    const foundTasks = new Set<string>();
+    candidate.pages.forEach(p => {
+      const part = (p.part || "Del 1").toLowerCase().includes("2") ? "2" : "1";
+      p.identifiedTasks?.forEach(t => {
+        if (t.taskNumber) {
+          const label = `${t.taskNumber}${t.subTask || ''}`.toUpperCase().replace(/[^A-Z0-9]/g, '');
+          const key = `${part}-${label}`;
+          if (rubricTasks.has(key)) foundTasks.add(key);
+        }
+      });
+    });
+
+    // 3. Sjekk at ALLE rubric-oppgaver finnes i foundTasks
+    const isComplete = rubricTasks.size > 0 && Array.from(rubricTasks).every(t => foundTasks.has(t));
+    return { isComplete };
   };
 
   const handleMetadataChange = async (pageId: string, field: 'candidateId' | 'pageNumber' | 'part', value: string | number) => {
@@ -319,11 +351,23 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
   }, [activeProject.candidates]);
 
   const finalCandidates = useMemo(() => {
-    return filteredCandidates.filter(c => {
+    // Filtrer kandidater basert på filter og task-filter
+    let filtered = filteredCandidates.filter(c => {
       if (!taskFilter) return true;
       return c.pages.some(p => p.identifiedTasks?.some(t => {
         return `${t.taskNumber}${t.subTask || ""}` === taskFilter;
       }));
+    });
+
+    // v7.9.5: Global alfabetisk sortering, Ukjent til slutt
+    return filtered.sort((a, b) => {
+      const aName = a.name.toLowerCase();
+      const bName = b.name.toLowerCase();
+      const aIsUnknown = aName.includes("ukjent");
+      const bIsUnknown = bName.includes("ukjent");
+      if (aIsUnknown && !bIsUnknown) return 1;
+      if (!aIsUnknown && bIsUnknown) return -1;
+      return a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' });
     });
   }, [filteredCandidates, taskFilter]);
 
@@ -384,12 +428,16 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
            ) : (
              finalCandidates.map(c => {
                const { del1, del2 } = getGroupedTasks(c);
+               const { isComplete } = getCompletionStatus(c);
                const isSelected = selectedReviewCandidateId === c.id;
                const isUnknown = c.name.toLowerCase().includes('ukjent');
                return (
                  <button key={c.id} onClick={() => setSelectedReviewCandidateId(c.id)} className={`w-full text-left p-4 rounded-2xl border transition-all relative overflow-hidden ${isSelected ? 'bg-slate-900 text-white border-slate-900 shadow-lg' : isUnknown ? 'bg-rose-50/30 border-rose-100' : 'bg-white hover:border-indigo-100'}`}>
                    <div className="flex justify-between items-start mb-2">
-                     <div className={`font-black text-[12px] truncate max-w-[120px] ${isUnknown && !isSelected ? 'text-rose-600' : ''}`}>{c.name || 'Ukjent'}</div>
+                     <div className="flex items-center gap-1.5">
+                       <div className={`font-black text-[12px] truncate max-w-[100px] ${isUnknown && !isSelected ? 'text-rose-600' : ''}`}>{c.name || 'Ukjent'}</div>
+                       {isComplete && <span className="text-[10px]" title="Alle oppgaver funnet">✅</span>}
+                     </div>
                      <div className={`text-[7px] font-black uppercase px-1.5 py-0.5 rounded-full ${isSelected ? 'bg-white/20' : 'bg-slate-100 text-slate-400'}`}>{c.pages.length} s</div>
                    </div>
                    <div className="flex flex-col gap-1.5">
@@ -498,18 +546,28 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                          <div className="bg-indigo-600 rounded-2xl p-8 shadow-xl min-h-[400px] flex flex-col relative overflow-hidden group/trans">
                             <div className="flex justify-between items-center mb-6 border-b border-indigo-400/40 pb-4 relative z-10">
                               <span className="text-[9px] font-black uppercase text-indigo-100 tracking-[0.2em]">LaTeX Matematikk</span>
-                              {p.identifiedTasks && p.identifiedTasks.length > 0 && (
-                                <div className="flex flex-wrap justify-end gap-1 max-w-[60%]">
-                                   {p.identifiedTasks.map(t => {
-                                     const label = `${t.taskNumber || ''}${t.subTask || ''}`;
-                                     if (!label) return null;
-                                     return (
-                                       <span key={label} className="text-[8px] font-black px-2 py-1 rounded-md uppercase bg-white/20 text-white">
-                                         {label}
-                                       </span>
-                                     );
-                                   })}
-                                </div>
+                              {isEditing ? (
+                                <input 
+                                  type="text" 
+                                  defaultValue={p.identifiedTasks?.map(t => `${t.taskNumber}${t.subTask}`).join(", ") || ""}
+                                  placeholder="Oppgaver (f.eks 1a, 2b)..."
+                                  className="text-[10px] font-black bg-indigo-800 text-white px-3 py-1.5 rounded-lg border border-indigo-500 outline-none w-1/2 placeholder-indigo-400"
+                                  onBlur={(e) => updatePageTasks(currentReviewCandidate.id, p.id, e.target.value)}
+                                />
+                              ) : (
+                                p.identifiedTasks && p.identifiedTasks.length > 0 && (
+                                  <div className="flex flex-wrap justify-end gap-1 max-w-[60%]">
+                                     {p.identifiedTasks.map(t => {
+                                       const label = `${t.taskNumber || ''}${t.subTask || ''}`;
+                                       if (!label) return null;
+                                       return (
+                                         <span key={label} className="text-[8px] font-black px-2 py-1 rounded-md uppercase bg-white/20 text-white">
+                                           {label}
+                                         </span>
+                                       );
+                                     })}
+                                  </div>
+                                )
                               )}
                             </div>
                             <div className="flex-1 relative z-10 custom-scrollbar overflow-y-auto">
@@ -519,16 +577,16 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                                      <label className="text-[7px] font-black uppercase text-indigo-200 mb-1 block tracking-widest">Hovedtranskripsjon</label>
                                      <textarea 
                                         autoFocus 
-                                        value={p.transcription || ''} 
+                                        value={(p.transcription || '').replace(/\\n/g, '\n')} 
                                         onChange={e => {
                                           const val = e.target.value;
                                           setActiveProject(prev => prev ? ({ ...prev, candidates: prev.candidates.map(c => c.id === currentReviewCandidate.id ? { ...c, pages: c.pages.map(pg => pg.id === p.id ? { ...pg, transcription: val } : pg) } : c) }) : null);
                                         }} 
-                                        className="w-full flex-1 bg-indigo-700/40 text-white p-4 rounded-xl text-sm font-medium outline-none resize-none custom-scrollbar border border-indigo-500/30" 
+                                        className="w-full min-h-[600px] flex-1 bg-indigo-700/40 text-white p-4 rounded-xl text-sm font-medium outline-none resize-none custom-scrollbar border border-indigo-500/30" 
                                      />
                                      <label className="text-[7px] font-black uppercase text-indigo-200 mt-4 mb-1 block tracking-widest">CAS / Figurtolkning (visualEvidence)</label>
                                      <textarea 
-                                        value={p.visualEvidence || ''} 
+                                        value={(p.visualEvidence || '').replace(/\\n/g, '\n')} 
                                         onChange={e => {
                                           const val = e.target.value;
                                           setActiveProject(prev => prev ? ({ ...prev, candidates: prev.candidates.map(c => c.id === currentReviewCandidate.id ? { ...c, pages: c.pages.map(pg => pg.id === p.id ? { ...pg, visualEvidence: val } : pg) } : c) }) : null);

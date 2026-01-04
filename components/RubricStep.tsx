@@ -99,11 +99,24 @@ export const RubricStep: React.FC<RubricStepProps> = ({
     return sortCriteria(filtered);
   }, [selectedTask, criteria]);
 
-  const handleFieldChange = (criterionName: string, field: keyof RubricCriterion, value: any) => {
+  // Helper to generate a truly unique ID for editing state
+  const getUniqueId = (c: RubricCriterion) => {
+    return `${c.part || 'U'}-${c.taskNumber}-${c.subTask || ''}`;
+  };
+
+  const handleFieldChange = (crit: RubricCriterion, field: keyof RubricCriterion, value: any) => {
     if (!activeProject.rubric || !updateActiveProject) return;
-    const newCriteria = activeProject.rubric.criteria.map(c => 
-      c.name === criterionName ? { ...c, [field]: value } : c
-    );
+    
+    const newCriteria = activeProject.rubric.criteria.map(c => {
+      // Robust matching based on content, as name might be undefined
+      if (c.taskNumber === crit.taskNumber && 
+          c.subTask === crit.subTask && 
+          c.part === crit.part) {
+        return { ...c, [field]: value };
+      }
+      return c;
+    });
+
     const newRubric = { ...activeProject.rubric, criteria: newCriteria };
     const totalMaxPoints = newCriteria.reduce((acc, c) => acc + Number(c.maxPoints || 0), 0);
     updateActiveProject({ rubric: { ...newRubric, totalMaxPoints } });
@@ -282,10 +295,11 @@ export const RubricStep: React.FC<RubricStepProps> = ({
           </header>
 
           <div className="space-y-6">
-            {filteredCriteria.map((crit) => {
-              const isEditingHeader = editingHeaderId === crit.name;
-              const isEditingSolution = editingId === crit.name;
-              const isEditingErrors = editingErrorsId === crit.name;
+            {filteredCriteria.map((crit, idx) => {
+              const uniqueId = getUniqueId(crit);
+              const isEditingHeader = editingHeaderId === uniqueId;
+              const isEditingSolution = editingId === uniqueId;
+              const isEditingErrors = editingErrorsId === uniqueId;
               const isLoading = localLoading === crit.name;
               const isDel2 = (crit.part || "").toLowerCase().includes('2');
               const cleanNum = String(crit.taskNumber || "").replace(/[^0-9]/g, '');
@@ -293,7 +307,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
               const badgeLabel = `${cleanNum}${cleanSub}`;
 
               return (
-                <div key={crit.name} className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden relative">
+                <div key={uniqueId} className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden relative">
                   {isLoading && (
                     <div className="absolute inset-0 bg-white/80 z-20 flex flex-col items-center justify-center gap-3 backdrop-blur-[2px] animate-in fade-in duration-300">
                       <Spinner size="w-10 h-10" />
@@ -313,7 +327,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                            <input 
                              value={crit.tema || ""} 
                              placeholder="TEMA..." 
-                             onChange={e => handleFieldChange(crit.name, 'tema', e.target.value)} 
+                             onChange={e => handleFieldChange(crit, 'tema', e.target.value)} 
                              className={`text-[9px] font-black uppercase tracking-widest bg-transparent border-none outline-none w-full ${isDel2 ? 'text-emerald-600' : 'text-indigo-400'}`} 
                            />
                            <div className="flex gap-3 items-center">
@@ -324,7 +338,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                              >
                                ↻ Last inn på nytt
                              </button>
-                             <button onClick={() => setEditingHeaderId(isEditingHeader ? null : crit.name)} className="text-[8px] font-black uppercase text-slate-400 hover:underline transition-all">
+                             <button onClick={() => setEditingHeaderId(isEditingHeader ? null : uniqueId)} className="text-[8px] font-black uppercase text-slate-400 hover:underline transition-all">
                                 {isEditingHeader ? 'LAGRE' : 'REDIGER'}
                              </button>
                            </div>
@@ -333,7 +347,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                           <input 
                             autoFocus
                             value={crit.description} 
-                            onChange={e => handleFieldChange(crit.name, 'description', e.target.value)} 
+                            onChange={e => handleFieldChange(crit, 'description', e.target.value)} 
                             className="text-lg font-bold text-slate-700 bg-white ring-2 ring-indigo-50 outline-none w-full rounded-lg p-2 transition-all border border-indigo-100" 
                           />
                         ) : (
@@ -349,7 +363,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                           type="number" 
                           step="0.5"
                           value={crit.maxPoints} 
-                          onChange={e => handleFieldChange(crit.name, 'maxPoints', Number(e.target.value) || 0)} 
+                          onChange={e => handleFieldChange(crit, 'maxPoints', Number(e.target.value) || 0)} 
                           className={`text-xl font-black w-12 text-center bg-transparent outline-none ${isDel2 ? 'text-emerald-600' : 'text-indigo-600'}`} 
                         />
                         <div className="text-[8px] font-black text-slate-300 uppercase tracking-widest">Poeng</div>
@@ -365,13 +379,18 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                             <div className={`w-2 h-2 rounded-full ${isDel2 ? 'bg-emerald-400' : 'bg-indigo-400'}`}></div>
                             Løsningsforslag
                           </h4>
-                          <button onClick={() => setEditingId(isEditingSolution ? null : crit.name)} className="text-[9px] font-black uppercase text-indigo-500 hover:underline">
+                          <button onClick={() => setEditingId(isEditingSolution ? null : uniqueId)} className="text-[9px] font-black uppercase text-indigo-500 hover:underline">
                             {isEditingSolution ? 'Fullfør' : 'Rediger'}
                           </button>
                         </div>
                         <div className={`rounded-xl p-6 border min-h-[150px] transition-all overflow-x-auto custom-scrollbar ${isEditingSolution ? 'bg-white border-indigo-200' : 'bg-slate-50 border-slate-100 shadow-inner'}`}>
                           {isEditingSolution ? (
-                            <textarea value={crit.suggestedSolution} autoFocus onChange={e => handleFieldChange(crit.name, 'suggestedSolution', e.target.value)} className="w-full bg-transparent outline-none text-sm font-medium text-slate-600 resize-none h-48 leading-relaxed custom-scrollbar" />
+                            <textarea 
+                              value={(crit.suggestedSolution || "").replace(/\\\\/g, '\\\\\n')} 
+                              autoFocus 
+                              onChange={e => handleFieldChange(crit, 'suggestedSolution', e.target.value)} 
+                              className="w-full bg-transparent outline-none text-sm font-medium text-slate-600 resize-none h-48 leading-relaxed custom-scrollbar" 
+                            />
                           ) : (
                             <LatexRenderer content={crit.suggestedSolution} className="text-slate-800 text-sm leading-relaxed" />
                           )}
@@ -384,13 +403,18 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                             <div className="w-2 h-2 rounded-full bg-rose-400"></div>
                             Retteveiledning (Vanlige feil)
                           </h4>
-                          <button onClick={() => setEditingErrorsId(isEditingErrors ? null : crit.name)} className="text-[9px] font-black uppercase text-rose-500 hover:underline">
+                          <button onClick={() => setEditingErrorsId(isEditingErrors ? null : uniqueId)} className="text-[9px] font-black uppercase text-rose-500 hover:underline">
                             {isEditingErrors ? 'Fullfør' : 'Rediger'}
                           </button>
                         </div>
                         <div className={`rounded-xl p-6 border min-h-[150px] transition-all overflow-x-auto custom-scrollbar ${isEditingErrors ? 'bg-white border-rose-200' : 'bg-rose-50/5 border-rose-100/30 shadow-inner'}`}>
                           {isEditingErrors ? (
-                            <textarea value={crit.commonErrors || ""} autoFocus onChange={e => handleFieldChange(crit.name, 'commonErrors', e.target.value)} className="w-full bg-transparent outline-none text-sm font-bold text-slate-700 resize-none h-48 leading-relaxed custom-scrollbar" />
+                            <textarea 
+                              value={(crit.commonErrors || "").replace(/\\\\/g, '\\\\\n')} 
+                              autoFocus 
+                              onChange={e => handleFieldChange(crit, 'commonErrors', e.target.value)} 
+                              className="w-full bg-transparent outline-none text-sm font-bold text-slate-700 resize-none h-48 leading-relaxed custom-scrollbar" 
+                            />
                           ) : (
                             <LatexRenderer content={crit.commonErrors || "Ingen spesifikke feil registrert ennå."} className="text-slate-700 font-bold text-sm leading-relaxed" />
                           )}

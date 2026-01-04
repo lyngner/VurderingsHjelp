@@ -4,17 +4,40 @@ import mammoth from 'mammoth';
 import JSZip from 'jszip';
 import { saveMedia } from './storageService';
 
+// v7.9.30: Speed Optimization Strategy
+const COMPRESSION_QUALITY = 0.60; 
+const MAX_DIMENSION = 1600; 
+
 export const generateHash = (str: string): string => {
   if (!str) return Math.random().toString(36).substring(7);
-  const sample = str.length > 2000 
-    ? str.substring(500, 1000) + str.substring(str.length / 2, str.length / 2 + 500) + str.substring(str.length - 1000, str.length - 500)
-    : str;
+  
   let hash = 0;
-  for (let i = 0; i < sample.length; i++) {
-    hash = ((hash << 5) - hash) + sample.charCodeAt(i);
-    hash = hash & hash;
+  if (str.length === 0) return hash.toString(36);
+
+  hash = str.length;
+
+  if (str.length < 50000) {
+      for (let i = 0; i < str.length; i++) {
+          hash = ((hash << 5) - hash) + str.charCodeAt(i);
+          hash |= 0; 
+      }
+  } else {
+      const step = Math.max(32, Math.floor(str.length / 1000));
+      for (let i = 0; i < str.length; i += step) {
+          const end = Math.min(i + 10, str.length);
+          for (let j = i; j < end; j++) {
+             hash = ((hash << 5) - hash) + str.charCodeAt(j);
+             hash |= 0;
+          }
+      }
+      const tailStart = Math.max(0, str.length - 500);
+      for (let i = tailStart; i < str.length; i++) {
+          hash = ((hash << 5) - hash) + str.charCodeAt(i);
+          hash |= 0;
+      }
   }
-  return Math.abs(hash).toString(36);
+
+  return (hash >>> 0).toString(36) + "-" + str.length.toString(36);
 };
 
 const createThumbnail = async (base64: string): Promise<string> => {
@@ -29,7 +52,7 @@ const createThumbnail = async (base64: string): Promise<string> => {
       canvas.width = w; canvas.height = h;
       const ctx = canvas.getContext('2d');
       if (ctx) ctx.drawImage(img, 0, 0, w, h);
-      resolve(canvas.toDataURL('image/jpeg', 0.7));
+      resolve(canvas.toDataURL('image/jpeg', 0.7)); // Thumbnails can keep decent quality
     };
     img.src = base64;
   });
@@ -67,7 +90,6 @@ const extractWordMetadata = async (arrayBuffer: ArrayBuffer): Promise<string> =>
 
 /**
  * CRITICAL: Fysisk rotasjon brenner inn orientering i bildet.
- * Dette er påkrevd før splitting av A3-oppslag for å sikre geometrisk integritet.
  */
 export const processImageRotation = async (base64: string, rotation: number): Promise<string> => {
   if (rotation === 0 || !rotation) return base64;
@@ -80,10 +102,26 @@ export const processImageRotation = async (base64: string, rotation: number): Pr
       const is90or270 = rotation % 180 !== 0;
       canvas.width = is90or270 ? img.height : img.width;
       canvas.height = is90or270 ? img.width : img.height;
+      
+      // Ensure we don't create massive canvases during rotation
+      if (canvas.width > MAX_DIMENSION || canvas.height > MAX_DIMENSION) {
+         const ratio = Math.min(MAX_DIMENSION / canvas.width, MAX_DIMENSION / canvas.height);
+         canvas.width = Math.round(canvas.width * ratio);
+         canvas.height = Math.round(canvas.height * ratio);
+      }
+
       ctx.translate(canvas.width / 2, canvas.height / 2);
       ctx.rotate((rotation * Math.PI) / 180);
+      
+      // Draw image scaled to new canvas
+      const drawW = is90or270 ? img.height : img.width;
+      const drawH = is90or270 ? img.width : img.height;
+      
+      const scale = canvas.width / (is90or270 ? img.height : img.width);
+      ctx.scale(scale, scale);
+      
       ctx.drawImage(img, -img.width / 2, -img.height / 2);
-      resolve(canvas.toDataURL('image/jpeg', 0.95));
+      resolve(canvas.toDataURL('image/jpeg', COMPRESSION_QUALITY));
     };
     img.onerror = reject;
     img.src = base64;
@@ -91,50 +129,148 @@ export const processImageRotation = async (base64: string, rotation: number): Pr
 };
 
 /**
- * STRUKTURERT SPLITTING v5.3.0 ("Rotate-then-Bisect")
- * CRITICAL: Rekkefølgen (fysisk rotasjon -> geometrisk splitting) er matematisk kritisk.
+ * SPLIT IMAGE IN HALF v6.7.1
+ * Kutter alltid bildet i to på den lengste aksen.
  */
-export const splitA3Spread = async (base64: string, side: 'LEFT' | 'RIGHT', rotation: number = 0): Promise<{ fullRes: string }> => {
-  // 1. Fysisk rotasjon FØR splitting
-  const rotatedBase64 = rotation !== 0 ? await processImageRotation(base64, rotation) : base64;
-  
+export const splitImageInHalf = async (base64: string, part: 1 | 2): Promise<{ fullRes: string, isLandscapeSplit: boolean }> => {
   return new Promise((resolve, reject) => {
-    const rotatedImg = new Image();
-    rotatedImg.onload = () => {
-      const splitCanvas = document.createElement('canvas');
-      const sCtx = splitCanvas.getContext('2d');
-      if (!sCtx) return reject("Split error");
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return reject("Split error");
       
-      // 2. Alltid nøyaktig 50/50 kutt på midten ETTER rotasjon
-      splitCanvas.width = rotatedImg.width / 2;
-      splitCanvas.height = rotatedImg.height;
-      const offsetX = side === 'LEFT' ? 0 : rotatedImg.width / 2;
+      const isLandscape = img.width > img.height;
       
-      sCtx.drawImage(rotatedImg, offsetX, 0, rotatedImg.width / 2, rotatedImg.height, 0, 0, splitCanvas.width, splitCanvas.height);
-      resolve({ fullRes: splitCanvas.toDataURL('image/jpeg', 0.95) });
+      let targetWidth, targetHeight, sx, sy, sWidth, sHeight;
+
+      if (isLandscape) {
+        // LANDSKAP: Klipp vertikalt (Venstre / Høyre)
+        sWidth = Math.floor(img.width / 2);
+        sHeight = img.height;
+        sx = part === 1 ? 0 : sWidth;
+        sy = 0;
+      } else {
+        // PORTRETT: Klipp horisontalt (Topp / Bunn)
+        sWidth = img.width;
+        sHeight = Math.floor(img.height / 2);
+        sx = 0;
+        sy = part === 1 ? 0 : sHeight;
+      }
+      
+      // Scale down if target is still huge
+      let finalWidth = sWidth;
+      let finalHeight = sHeight;
+      
+      if (finalWidth > MAX_DIMENSION || finalHeight > MAX_DIMENSION) {
+         const ratio = Math.min(MAX_DIMENSION / finalWidth, MAX_DIMENSION / finalHeight);
+         finalWidth = Math.round(finalWidth * ratio);
+         finalHeight = Math.round(finalHeight * ratio);
+      }
+
+      canvas.width = finalWidth;
+      canvas.height = finalHeight;
+      
+      ctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, finalWidth, finalHeight);
+      resolve({ fullRes: canvas.toDataURL('image/jpeg', COMPRESSION_QUALITY), isLandscapeSplit: isLandscape });
     };
-    rotatedImg.onerror = reject;
-    rotatedImg.src = rotatedBase64;
+    img.onerror = reject;
+    img.src = base64;
   });
 };
 
+// v7.9.34: Filename Sanitizer (Removes extra dots like in 12.10.25.docx)
+const sanitizeFilename = (name: string): string => {
+  const lastDotIndex = name.lastIndexOf('.');
+  if (lastDotIndex === -1) return name;
+  const namePart = name.substring(0, lastDotIndex);
+  const extPart = name.substring(lastDotIndex);
+  // Replace dots in name part with underscore
+  return namePart.replace(/\./g, '_') + extPart;
+};
+
 export const processFileToImages = async (file: File): Promise<Page[]> => {
+  // v7.9.34: Use sanitized name for processing logic to avoid regex confusion
+  const safeName = sanitizeFilename(file.name);
+  const lowerName = safeName.toLowerCase();
+  
   return new Promise(async (resolve) => {
-    const lowerName = file.name.toLowerCase();
     
     // 1. DOCX Processing
     if (lowerName.endsWith('.docx')) {
       try {
-        console.log(`Starter behandling av Word-fil: ${file.name}`);
-        const buffer = await file.arrayBuffer();
-        const metaText = await extractWordMetadata(buffer);
-        const result = await mammoth.extractRawText({ arrayBuffer: buffer });
-        const combinedText = `[METADATA]:\n${metaText}\n\n[INNHOLD]:\n${result.value}`;
-        const id = Math.random().toString(36).substring(7);
-        resolve([{ id, fileName: file.name, contentHash: generateHash(combinedText), mimeType: 'text/plain', status: 'pending', rawText: combinedText, transcription: combinedText, candidateId: "UKJENT", rotation: 0 }]);
-      } catch (e) { 
+        console.log(`Starter behandling av Word-fil: ${file.name} (Sanitized: ${safeName})`);
+        
+        // v7.9.34: Local Watchdog - Timeout for local processing
+        const processPromise = async () => {
+            const buffer = await file.arrayBuffer();
+            const metaText = await extractWordMetadata(buffer);
+            
+            let attachedImages: { data: string, mimeType: string }[] = [];
+            
+            const options = {
+                convertImage: mammoth.images.inline((element) => {
+                    return element.read("base64").then((imageBuffer) => {
+                        const mime = element.contentType;
+                        attachedImages.push({ data: imageBuffer, mimeType: mime });
+                        return { src: "", alt: `[BILDEVEDLEGG ${attachedImages.length}]` };
+                    });
+                })
+            };
+            
+            const result = await mammoth.convertToHtml({ arrayBuffer: buffer }, options);
+            
+            let cleanText = result.value
+                .replace(/<img[^>]*alt="([^"]+)"[^>]*>/gi, "\n\n$1\n\n") 
+                .replace(/<\/p>/gi, "\n\n")
+                .replace(/<\/(li|div|tr|h[1-6]|pre|blockquote)>/gi, "\n")
+                .replace(/<br\s*\/?>/gi, "\n")
+                .replace(/<\/td>/gi, " \t ")
+                .replace(/<[^>]+>/g, "");
+                
+            let txt = new DOMParser().parseFromString(cleanText, 'text/html').body.textContent || "";
+            
+            // v7.9.34: Payload Safety Cap
+            if (txt.length > 500000) {
+               console.warn("Word-dokument for stort, kutter innhold.");
+               txt = txt.substring(0, 500000) + "\n\n[TEKST KUTTET - FOR LANG FIL]";
+            }
+
+            const combinedText = `[METADATA]:\n${metaText}\n\n[INNHOLD]:\n${txt}`;
+            const id = Math.random().toString(36).substring(7);
+            
+            return [{ 
+              id, 
+              fileName: safeName, // Use sanitized name
+              contentHash: generateHash(combinedText), 
+              mimeType: 'text/plain', 
+              status: 'pending', 
+              rawText: combinedText, 
+              transcription: combinedText, 
+              candidateId: "UKJENT", 
+              rotation: 0,
+              attachedImages: attachedImages.length > 0 ? attachedImages : undefined
+            } as Page];
+        };
+
+        const timeoutPromise = new Promise<Page[]>((_, reject) => 
+            setTimeout(() => reject(new Error("Timeout ved lesing av Word-fil (lokal)")), 10000)
+        );
+
+        const pages = await Promise.race([processPromise(), timeoutPromise]);
+        resolve(pages);
+
+      } catch (e: any) { 
         console.error(`Feil ved behandling av Word-fil ${file.name}:`, e);
-        resolve([]); 
+        resolve([{
+            id: Math.random().toString(36).substring(7),
+            fileName: safeName,
+            contentHash: generateHash(file.name),
+            mimeType: 'application/unknown',
+            status: 'error',
+            statusLabel: e.message?.includes("Timeout") ? 'Tidsavbrudd (Lokal)' : 'Filfeil (Word)',
+            rotation: 0
+        }]); 
       }
       return;
     }
@@ -147,15 +283,24 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
         const pages: Page[] = [];
         for (let i = 1; i <= pdf.numPages; i++) {
           const page = await pdf.getPage(i);
-          const viewport = page.getViewport({ scale: 2.5 });
+          const viewport = page.getViewport({ scale: 2.0 }); 
+          
+          let scale = 2.0;
+          if (viewport.width > MAX_DIMENSION || viewport.height > MAX_DIMENSION) {
+             const ratio = Math.min(MAX_DIMENSION / viewport.width, MAX_DIMENSION / viewport.height);
+             scale = 2.0 * ratio;
+          }
+          const finalViewport = page.getViewport({ scale });
+
           const canvas = document.createElement('canvas');
-          canvas.height = viewport.height; canvas.width = viewport.width;
-          await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise;
-          const b64 = canvas.toDataURL('image/jpeg', 0.95);
+          canvas.height = finalViewport.height; canvas.width = finalViewport.width;
+          await page.render({ canvasContext: canvas.getContext('2d')!, viewport: finalViewport }).promise;
+          
+          const b64 = canvas.toDataURL('image/jpeg', COMPRESSION_QUALITY);
           const id = Math.random().toString(36).substring(7);
           await saveMedia(id, b64);
           const thumb = await createThumbnail(b64);
-          pages.push({ id, fileName: `${file.name} (S${i})`, imagePreview: thumb, contentHash: generateHash(b64), mimeType: 'image/jpeg', status: 'pending', rotation: 0 });
+          pages.push({ id, fileName: `${safeName} (S${i})`, imagePreview: thumb, contentHash: generateHash(b64), mimeType: 'image/jpeg', status: 'pending', rotation: 0 });
         }
         resolve(pages);
       } catch (e) { 
@@ -172,13 +317,24 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
         const img = new Image();
         img.onload = async () => {
           const canvas = document.createElement('canvas');
-          canvas.width = img.width; canvas.height = img.height;
-          canvas.getContext('2d')!.drawImage(img, 0, 0);
-          const b64 = canvas.toDataURL('image/jpeg', 0.95);
+          
+          let width = img.width;
+          let height = img.height;
+          if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+             const ratio = Math.min(MAX_DIMENSION / width, MAX_DIMENSION / height);
+             width = Math.round(width * ratio);
+             height = Math.round(height * ratio);
+          }
+
+          canvas.width = width; 
+          canvas.height = height;
+          canvas.getContext('2d')!.drawImage(img, 0, 0, width, height);
+          
+          const b64 = canvas.toDataURL('image/jpeg', COMPRESSION_QUALITY);
           const id = Math.random().toString(36).substring(7);
           await saveMedia(id, b64);
           const thumb = await createThumbnail(b64);
-          resolve([{ id, fileName: file.name, imagePreview: thumb, contentHash: generateHash(b64), mimeType: 'image/jpeg', status: 'pending', rotation: 0 }]);
+          resolve([{ id, fileName: safeName, imagePreview: thumb, contentHash: generateHash(b64), mimeType: 'image/jpeg', status: 'pending', rotation: 0 }]);
         };
         img.onerror = () => {
           console.error(`Kunne ikke lese bilde: ${file.name}`);
@@ -193,6 +349,15 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
 
     // 4. Fallback for unsupported files
     console.warn(`Filtype støttes ikke: ${file.name} (${file.type})`);
-    resolve([]);
+    const id = Math.random().toString(36).substring(7);
+    resolve([{
+        id,
+        fileName: safeName,
+        contentHash: generateHash(file.name),
+        mimeType: file.type || 'application/unknown',
+        status: 'error',
+        statusLabel: 'Filtype støttes ikke',
+        rotation: 0
+    }]);
   });
 };
