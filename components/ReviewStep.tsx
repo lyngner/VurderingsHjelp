@@ -1,8 +1,9 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Project, Candidate, Page } from '../types';
+import { Project, Candidate, Page, Rubric } from '../types';
 import { LatexRenderer, Spinner } from './SharedUI';
 import { getMedia, saveCandidate } from '../services/storageService';
+import { cleanTaskPair } from '../services/geminiService';
 
 const base64ToBlob = (base64: string): Blob => {
   const parts = base64.split(';base64,');
@@ -16,6 +17,8 @@ const base64ToBlob = (base64: string): Blob => {
   return new Blob([uInt8Array], { type: contentType });
 };
 
+// v8.0.46: Sticky Loading LazyImage
+// Once visible, it stays visible. No more toggling off when scrolling away.
 const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [isVisible, setIsVisible] = useState(false);
@@ -28,11 +31,10 @@ const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
       ([entry]) => {
         if (entry.isIntersecting) {
           setIsVisible(true);
-        } else {
-          setIsVisible(false);
+          observer.disconnect(); // STOP observing once visible. Keep it loaded.
         }
       },
-      { rootMargin: '400px' }
+      { rootMargin: '600px' } // Increased margin to load earlier
     );
 
     if (containerRef.current) {
@@ -47,22 +49,16 @@ const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
     let timeoutId: any;
 
     const loadFullRes = async () => {
-      if (!isVisible) {
-        if (blobUrl) {
-          URL.revokeObjectURL(blobUrl);
-          setBlobUrl(null);
-          setIsLoaded(false);
-        }
-        return;
-      }
+      // If not visible yet, don't load. 
+      // NOTE: We do NOT unload if isVisible becomes false (because we disconnected the observer)
+      if (!isVisible) return;
 
       if (blobUrl) return;
 
-      // Timeout for å hindre evig spinner
       timeoutId = setTimeout(() => {
         if (!blobUrl && !error) {
-          setError(true);
-          console.warn(`Timeout: Kunne ikke hente bilde for side ${page.id}`);
+          // Do not set error on timeout, just keep trying or show loading
+          console.warn(`Slow loading for page ${page.id}`);
         }
       }, 5000);
 
@@ -147,7 +143,7 @@ const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
       
       {error && (
         <div className="absolute inset-0 flex items-center justify-center bg-rose-50/90 text-rose-500 p-4 text-center">
-          <p className="text-[8px] font-black uppercase tracking-widest">Fil mangler (Slett & Last opp på nytt)</p>
+          <p className="text-[8px] font-black uppercase tracking-widest Fil mangler">Fil mangler (Slett & Last opp på nytt)</p>
         </div>
       )}
     </div>
@@ -170,6 +166,7 @@ interface ReviewStepProps {
   handleSmartCleanup?: () => Promise<void>;
   isCleaning: boolean;
   handleRegeneratePage: (candidateId: string, pageId: string) => Promise<void>;
+  initialTaskFilter?: { id: string, part: 1 | 2 } | null; // v8.0.53
 }
 
 export const ReviewStep: React.FC<ReviewStepProps> = ({
@@ -187,10 +184,11 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
   setActiveProject,
   handleSmartCleanup,
   isCleaning,
-  handleRegeneratePage
+  handleRegeneratePage,
+  initialTaskFilter
 }) => {
   const [editingPageIds, setEditingPageIds] = useState<Set<string>>(new Set());
-  const [taskFilter, setTaskFilter] = useState<string | null>(null);
+  const [taskFilter, setTaskFilter] = useState<{ id: string, part: 1 | 2 } | null>(null);
   const [pageLoadingIds, setPageLoadingIds] = useState<Set<string>>(new Set());
   const mainScrollRef = useRef<HTMLElement>(null);
 
@@ -199,6 +197,13 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
       mainScrollRef.current.scrollTo({ top: 0, behavior: 'auto' });
     }
   }, [selectedReviewCandidateId]);
+
+  // v8.0.53: Apply deep link filter
+  useEffect(() => {
+    if (initialTaskFilter) {
+      setTaskFilter(initialTaskFilter);
+    }
+  }, [initialTaskFilter]);
 
   const toggleEdit = (pageId: string) => {
     const next = new Set(editingPageIds);
@@ -210,6 +215,11 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
   const onRescan = async (candidateId: string, pageId: string) => {
     setPageLoadingIds(prev => new Set(prev).add(pageId));
     await handleRegeneratePage(candidateId, pageId);
+    setPageLoadingIds(prev => {
+        const next = new Set(prev);
+        next.delete(pageId);
+        return next;
+    });
   };
   
   const getGroupedTasks = (candidate: Candidate) => {
@@ -235,36 +245,59 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
     };
   };
 
-  // FIX v7.9.31: Part-Aware Completion Check
-  const getCompletionStatus = (candidate: Candidate) => {
-    if (!activeProject.rubric) return { isComplete: false };
-    
-    // 1. Bygg fasit-sett med DEL-ID
-    const rubricTasks = new Set<string>();
-    activeProject.rubric.criteria.forEach(c => {
+  // v8.0.35: Enhanced Completion Status with Part-Check
+  // v8.2.12: Page existence check to avoid missing status if pages are submitted but no tasks found
+  const getCandidateStatus = (candidate: Candidate, rubric: Rubric | null) => {
+    if (!rubric) return { isComplete: false, d1Status: 'missing', d2Status: 'missing' };
+
+    const tasksD1 = new Set<string>();
+    const tasksD2 = new Set<string>();
+
+    rubric.criteria.forEach(c => {
       const part = (c.part || "Del 1").toLowerCase().includes("2") ? "2" : "1";
       const label = `${c.taskNumber}${c.subTask || ''}`.toUpperCase().replace(/[^A-Z0-9]/g, '');
-      rubricTasks.add(`${part}-${label}`);
+      if (part === "2") tasksD2.add(label);
+      else tasksD1.add(label);
     });
 
-    // 2. Bygg funnet-sett med DEL-ID
-    const foundTasks = new Set<string>();
+    const foundD1 = new Set<string>();
+    const foundD2 = new Set<string>();
+    
+    // Check if any pages exist for each part (regardless of task detection)
+    const hasPagesD1 = candidate.pages.some(p => !(p.part || "Del 1").toLowerCase().includes("2"));
+    const hasPagesD2 = candidate.pages.some(p => (p.part || "").toLowerCase().includes("2"));
+
     candidate.pages.forEach(p => {
       const part = (p.part || "Del 1").toLowerCase().includes("2") ? "2" : "1";
       p.identifiedTasks?.forEach(t => {
         if (t.taskNumber) {
-          const label = `${t.taskNumber}${t.subTask || ''}`.toUpperCase().replace(/[^A-Z0-9]/g, '');
-          const key = `${part}-${label}`;
-          if (rubricTasks.has(key)) foundTasks.add(key);
+           const label = `${t.taskNumber}${t.subTask || ''}`.toUpperCase().replace(/[^A-Z0-9]/g, '');
+           if (part === "2") foundD2.add(label);
+           else foundD1.add(label);
         }
       });
     });
 
-    // 3. Sjekk at ALLE rubric-oppgaver finnes i foundTasks
-    const isComplete = rubricTasks.size > 0 && Array.from(rubricTasks).every(t => foundTasks.has(t));
-    return { isComplete };
+    const checkPart = (rubricTasks: Set<string>, foundTasks: Set<string>, hasPages: boolean) => {
+        if (rubricTasks.size === 0) return 'none';
+        if (foundTasks.size === 0) {
+            // If pages exist but no tasks found, treat as partial (warning) instead of missing (ban)
+            return hasPages ? 'partial' : 'missing';
+        }
+        return Array.from(rubricTasks).every(t => foundTasks.has(t)) ? 'complete' : 'partial';
+    };
+
+    const d1Status = checkPart(tasksD1, foundD1, hasPagesD1);
+    const d2Status = checkPart(tasksD2, foundD2, hasPagesD2);
+
+    return { 
+        isComplete: (d1Status === 'complete' || d1Status === 'none') && (d2Status === 'complete' || d2Status === 'none'),
+        d1Status,
+        d2Status
+    };
   };
 
+  // ... handleMetadataChange, allUniqueTasks, finalCandidates, sortedReviewPages, hydrateEvidence logic remains same ...
   const handleMetadataChange = async (pageId: string, field: 'candidateId' | 'pageNumber' | 'part', value: string | number) => {
     setActiveProject(prev => {
       if (!prev) return null;
@@ -345,21 +378,22 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
     });
 
     return [
-      ...Array.from(del1).sort((a,b) => a.localeCompare(b, undefined, {numeric: true})).map(id => ({ id, part: 1 })),
-      ...Array.from(del2).sort((a,b) => a.localeCompare(b, undefined, {numeric: true})).map(id => ({ id, part: 2 }))
+      ...Array.from(del1).sort((a,b) => a.localeCompare(b, undefined, {numeric: true})).map(id => ({ id, part: 1 as const })),
+      ...Array.from(del2).sort((a,b) => a.localeCompare(b, undefined, {numeric: true})).map(id => ({ id, part: 2 as const }))
     ];
   }, [activeProject.candidates]);
 
   const finalCandidates = useMemo(() => {
-    // Filtrer kandidater basert på filter og task-filter
     let filtered = filteredCandidates.filter(c => {
       if (!taskFilter) return true;
-      return c.pages.some(p => p.identifiedTasks?.some(t => {
-        return `${t.taskNumber}${t.subTask || ""}` === taskFilter;
-      }));
+      return c.pages.some(p => {
+        const pagePart = (p.part || "Del 1").toLowerCase().includes("2") ? 2 : 1;
+        if (pagePart !== taskFilter.part) return false;
+        return p.identifiedTasks?.some(t => {
+          return `${t.taskNumber}${t.subTask || ""}` === taskFilter.id;
+        });
+      });
     });
-
-    // v7.9.5: Global alfabetisk sortering, Ukjent til slutt
     return filtered.sort((a, b) => {
       const aName = a.name.toLowerCase();
       const bName = b.name.toLowerCase();
@@ -371,7 +405,6 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
     });
   }, [filteredCandidates, taskFilter]);
 
-  // SORTERING V6.6.4: Sorter først på Del (Del 1 < Del 2), deretter på sidetall.
   const sortedReviewPages = useMemo(() => {
     if (!currentReviewCandidate) return [];
     return [...currentReviewCandidate.pages].sort((a, b) => {
@@ -382,10 +415,16 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
     });
   }, [currentReviewCandidate]);
 
+  const hydrateEvidence = (text: string, evidence?: string) => {
+    if (!evidence || !text) return text;
+    return text.replace(/\[BILDEVEDLEGG:\s*Se visualEvidence\s*\]/gi, `[BILDEVEDLEGG: ${evidence}]`);
+  };
+
   return (
     <div className="flex h-full w-full overflow-hidden bg-[#F1F5F9]">
       <aside className="w-64 bg-white border-r flex flex-col shrink-0 no-print shadow-sm h-full">
          <div className="p-4 border-b shrink-0 bg-white/80 sticky top-0 z-20">
+            {/* ... Header and Search ... */}
             <div className="flex justify-between items-center mb-3">
                <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Kandidater</h3>
                {handleSmartCleanup && (
@@ -394,19 +433,18 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                  </button>
                )}
             </div>
-            
             <div className="space-y-3">
               <input type="text" placeholder="Søk..." className="w-full bg-slate-50 border p-2 rounded-lg font-bold text-[10px] outline-none" value={reviewFilter} onChange={e => setReviewFilter(e.target.value)} />
-
+              {/* Task Pills */}
               {allUniqueTasks.length > 0 && (
-                <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto custom-scrollbar p-1">
+                <div className="flex flex-wrap gap-1 max-h-60 overflow-y-auto custom-scrollbar p-1">
                   {allUniqueTasks.map(t => {
-                    const isActive = taskFilter === t.id;
+                    const isActive = taskFilter?.id === t.id && taskFilter?.part === t.part;
                     const isDel2 = t.part === 2;
                     return (
                       <button 
-                        key={t.id}
-                        onClick={() => setTaskFilter(isActive ? null : t.id)}
+                        key={`${t.part}-${t.id}`}
+                        onClick={() => setTaskFilter(isActive ? null : t)}
                         className={`text-[8px] font-black uppercase px-2 py-1 rounded-lg border transition-all ${
                           isActive 
                             ? (isDel2 ? 'bg-emerald-600 text-white border-emerald-700 shadow-sm' : 'bg-indigo-600 text-white border-indigo-700 shadow-sm') 
@@ -428,7 +466,8 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
            ) : (
              finalCandidates.map(c => {
                const { del1, del2 } = getGroupedTasks(c);
-               const { isComplete } = getCompletionStatus(c);
+               // v8.0.35: Updated Status Check
+               const { isComplete, d1Status, d2Status } = getCandidateStatus(c, activeProject.rubric); 
                const isSelected = selectedReviewCandidateId === c.id;
                const isUnknown = c.name.toLowerCase().includes('ukjent');
                return (
@@ -447,6 +486,11 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                          {del2.map(t => (<span key={t} className={`text-[7px] font-black uppercase px-1.5 py-0.5 rounded-md ${isSelected ? 'bg-emerald-500/30' : 'bg-emerald-50 text-emerald-600'}`}>{t}</span>))}
                        </div>
                      )}
+                     {/* v8.0.35: Smart Badges */}
+                     <div className="flex gap-1 mt-1 justify-end opacity-80">
+                        {d1Status === 'complete' ? <span title="Del 1 Komplett">1️⃣✅</span> : d1Status === 'missing' ? <span title="Ingen Del 1">1️⃣🚫</span> : <span title="Del 1 Ufullstendig/Delvis">1️⃣⚠️</span>}
+                        {d2Status === 'complete' ? <span title="Del 2 Komplett">2️⃣✅</span> : d2Status === 'missing' ? <span title="Ingen Del 2">2️⃣🚫</span> : <span title="Del 2 Ufullstendig/Delvis">2️⃣⚠️</span>}
+                     </div>
                    </div>
                  </button>
                );
@@ -456,6 +500,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
       </aside>
 
       <main ref={mainScrollRef} className="flex-1 overflow-y-auto custom-scrollbar p-6 h-full bg-[#F1F5F9]">
+        {/* ... Main content (LazyImages) remains identical ... */}
         <div className="max-w-[1400px] mx-auto space-y-8 pb-32">
           {!currentReviewCandidate ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-300 py-20">
@@ -466,7 +511,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
               <header className="flex justify-between items-end mb-8">
                  <div>
                    <h2 className="text-3xl font-black text-slate-800 tracking-tighter">{currentReviewCandidate.name || 'Ukjent'}</h2>
-                   <p className="text-[10px] font-black uppercase text-indigo-500 tracking-[0.2em] mt-1">Kontrollerer transkripsjon v6.6.4</p>
+                   <p className="text-[10px] font-black uppercase text-indigo-500 tracking-[0.2em] mt-1">Kontrollerer transkripsjon</p>
                  </div>
               </header>
 
@@ -480,7 +525,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                       {isRefreshing && (
                         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-white/40 backdrop-blur-[2px] rounded-3xl animate-in fade-in duration-300">
                           <Spinner size="w-12 h-12" />
-                          <p className="text-[10px] font-black uppercase tracking-[0.3em] text-indigo-600 animate-pulse">Skanner side på nytt...</p>
+                          <p className="text-[10px] font-black uppercase tracking-[0.3em] text-indigo-600 animate-pulse">Transkriberer på nytt...</p>
                         </div>
                       )}
                       
@@ -518,7 +563,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                                     <option value="Del 1">Del 1</option>
                                     <option value="Del 2">Del 2</option>
                                   </select>
-                               </div>
+                                </div>
                              </div>
                            </div>
                            <div className="flex gap-2">
@@ -528,13 +573,12 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                                title="Slett nåværende tekst og tving KI-en til å se på bildet helt på nytt (høyeste presisjon)" 
                                className="h-10 px-3 flex items-center justify-center bg-white border rounded-xl hover:bg-indigo-50 text-indigo-600 transition-all text-[9px] font-black gap-1.5"
                              >
-                               ↻ Last inn på nytt
+                               ↻ Transkriber på nytt
                              </button>
                              <button onClick={() => { if(confirm('Slett denne siden permanent?')) deletePage(currentReviewCandidate.id, p.id); }} title="Slett denne siden" className="w-10 h-10 flex items-center justify-center bg-white border rounded-xl hover:bg-rose-50 text-rose-400 transition-all">✕</button>
                            </div>
                          </div>
                          <LazyImage page={p} />
-                         {/* Removed Left-Side Visual Evidence box here to avoid duplication. */}
                       </div>
                       <div className="space-y-4">
                          <div className="flex items-center justify-between px-2 h-10">
@@ -577,7 +621,8 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                                      <label className="text-[7px] font-black uppercase text-indigo-200 mb-1 block tracking-widest">Hovedtranskripsjon</label>
                                      <textarea 
                                         autoFocus 
-                                        value={(p.transcription || '').replace(/\\n/g, '\n')} 
+                                        // v8.0.43: Force line breaks on double backslash for readability in editor
+                                        value={(p.transcription || '').replace(/\\n/g, '\n').replace(/\\\\/g, '\\\\\n')} 
                                         onChange={e => {
                                           const val = e.target.value;
                                           setActiveProject(prev => prev ? ({ ...prev, candidates: prev.candidates.map(c => c.id === currentReviewCandidate.id ? { ...c, pages: c.pages.map(pg => pg.id === p.id ? { ...pg, transcription: val } : pg) } : c) }) : null);
@@ -598,12 +643,11 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                                ) : (
                                  <div className="text-white space-y-6">
                                    <div className="pl-1">
-                                     <LatexRenderer content={p.transcription || ""} className="text-base text-white font-medium leading-relaxed" />
+                                     <LatexRenderer content={hydrateEvidence(p.transcription || "", p.visualEvidence)} className="text-base text-white font-medium leading-relaxed" />
                                      
-                                     {/* Interleaved Fallback (lys grå boks inni indigo felt) */}
-                                     {!p.transcription?.includes('[AI-TOLKNING AV FIGUR:') && p.visualEvidence && (
+                                     {p.visualEvidence && !p.transcription?.match(/\[(?:AI-TOLKNING AV FIGUR|BILDEVEDLEGG)/) && (
                                        <div className="mt-8">
-                                          <LatexRenderer content={`[AI-TOLKNING AV FIGUR: ${p.visualEvidence}]`} />
+                                          <LatexRenderer content={`[BILDEVEDLEGG: ${p.visualEvidence}]`} />
                                        </div>
                                      )}
 

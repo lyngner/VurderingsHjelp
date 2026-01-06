@@ -10,13 +10,15 @@ import {
   evaluateCandidate,
   reconcileProjectData,
   regenerateSingleCriterion,
+  improveRubricWithStudentData,
   PRO_MODEL,
   OCR_MODEL
 } from '../services/geminiService';
 
 export const useProjectProcessor = (
   activeProject: Project | null, 
-  setActiveProject: React.Dispatch<React.SetStateAction<Project | null>>
+  setActiveProject: React.Dispatch<React.SetStateAction<Project | null>>,
+  forceFlash: boolean = false // v8.1.2: New prop
 ) => {
   const [processingCount, setProcessingCount] = useState(0);
   const [batchTotal, setBatchTotal] = useState(0);
@@ -27,19 +29,23 @@ export const useProjectProcessor = (
   const [useFlashFallback, setUseFlashFallback] = useState(false);
   const [retryTrigger, setRetryTrigger] = useState(0);
   const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
+  const [autoFlowPending, setAutoFlowPending] = useState(false); // v8.0.5: Track auto-flow state
   
   const isBatchProcessing = useRef(false);
   const isStoppingEvaluation = useRef(false);
   const retryCounts = useRef<Record<string, number>>({});
+  const rotatedIds = useRef<Set<string>>(new Set()); // v8.0.23: Track auto-rotated pages
   
   // v7.9.33: Abort Controller for skipping pages
   const abortControllerRef = useRef<AbortController | null>(null);
   
   const activeProjectRef = useRef(activeProject);
   const useFlashFallbackRef = useRef(useFlashFallback);
+  const forceFlashRef = useRef(forceFlash);
 
   useEffect(() => { activeProjectRef.current = activeProject; }, [activeProject]);
   useEffect(() => { useFlashFallbackRef.current = useFlashFallback; }, [useFlashFallback]);
+  useEffect(() => { forceFlashRef.current = forceFlash; }, [forceFlash]);
 
   // v7.9.15: Auto-resume when network is restored
   useEffect(() => {
@@ -54,7 +60,8 @@ export const useProjectProcessor = (
     return () => window.removeEventListener('online', handleOnline);
   }, []);
 
-  const getActiveReasoningModel = () => useFlashFallbackRef.current ? OCR_MODEL : PRO_MODEL;
+  // v8.1.2: If Force Flash is on, use OCR_MODEL (Flash). Else check fallback.
+  const getActiveReasoningModel = () => (forceFlashRef.current || useFlashFallbackRef.current) ? OCR_MODEL : PRO_MODEL;
 
   const updateActiveProject = useCallback((updates: Partial<Project>) => {
     setActiveProject(prev => prev ? { ...prev, ...updates, updatedAt: Date.now() } : null);
@@ -73,18 +80,36 @@ export const useProjectProcessor = (
     setProcessingCount(prev => prev + files.length);
     const fileArray = Array.from(files);
     
+    // v7.9.40: Session Hash Set for immediate deduplication within the same batch
+    const sessionHashes = new Set<string>();
+
     for (const file of fileArray) {
       setCurrentAction(`Laster oppgave: ${file.name}...`);
       const processed = await processFileToImages(file);
       
-      setActiveProject(prev => {
-        if (!prev) return null;
-        return { 
-          ...prev, 
-          taskFiles: [...prev.taskFiles, ...processed],
-          updatedAt: Date.now()
-        };
-      });
+      // v7.9.40: Deduplication Logic for Tasks
+      const currentProject = activeProjectRef.current;
+      if (currentProject) {
+         const existingHashes = new Set<string>(sessionHashes);
+         currentProject.taskFiles.forEach(f => existingHashes.add(f.contentHash));
+         
+         const uniquePages = processed.filter(p => !existingHashes.has(p.contentHash));
+         
+         if (uniquePages.length > 0) {
+            uniquePages.forEach(p => sessionHashes.add(p.contentHash));
+            
+            setActiveProject(prev => {
+                if (!prev) return null;
+                return { 
+                  ...prev, 
+                  taskFiles: [...prev.taskFiles, ...uniquePages],
+                  updatedAt: Date.now()
+                };
+            });
+         } else {
+            console.warn(`Skippet duplikat oppgavefil: ${file.name}`);
+         }
+      }
       setProcessingCount(prev => Math.max(0, prev - 1));
     }
     setCurrentAction('');
@@ -93,32 +118,57 @@ export const useProjectProcessor = (
   const handleCandidateFileSelect = async (files: FileList) => {
     if (!activeProject) return;
     setProcessingCount(prev => prev + files.length);
+    
+    // v8.0.5: Activate Auto-Flow when candidates are added
+    setAutoFlowPending(true);
+
     const fileArray = Array.from(files);
 
     for (const file of fileArray) {
       setCurrentAction(`Laster elevfil: ${file.name}...`);
       const processed = await processFileToImages(file);
       
-      setActiveProject(prev => {
-        if (!prev) return null;
-        const currentUnprocessed = prev.unprocessedPages || [];
-        return { 
-          ...prev, 
-          unprocessedPages: [...currentUnprocessed, ...processed],
-          updatedAt: Date.now()
-        };
+      // v8.1.7: Duplicate Permission
+      // We allow duplicates now, but ensure they get unique metadata to avoid DB collisions
+      const uniquePages = processed.map(p => {
+          // Check if this hash ALREADY exists in the project
+          const isDuplicate = activeProjectRef.current?.candidates.some(c => c.pages.some(existing => existing.contentHash === p.contentHash)) 
+                           || activeProjectRef.current?.unprocessedPages?.some(existing => existing.contentHash === p.contentHash);
+          
+          if (isDuplicate) {
+              console.log(`Tillater duplikat fil: ${p.fileName} (Legger til suffix)`);
+              // Mutate hash and filename slightly to bypass "Already Exists" logic in user's mind
+              return {
+                  ...p,
+                  fileName: `${p.fileName} (Kopi)`,
+                  // Append timestamp to hash to make it unique in IndexedDB cache
+                  contentHash: `${p.contentHash}_COPY_${Date.now()}`
+              };
+          }
+          return p;
       });
+
+      if (uniquePages.length > 0) {
+        setActiveProject(prev => {
+            if (!prev) return null;
+            const currentUnprocessed = prev.unprocessedPages || [];
+            return { 
+                ...prev, 
+                unprocessedPages: [...currentUnprocessed, ...uniquePages],
+                updatedAt: Date.now()
+            };
+        });
+      }
       setProcessingCount(prev => Math.max(0, prev - 1));
     }
     setCurrentAction('');
   };
 
   const handleGenerateRubric = async (overrideProject?: Project) => {
-    // ... existing implementation ...
     const proj = overrideProject || activeProject;
     if (!proj || proj.taskFiles.length === 0) return;
     
-    setRubricStatus({ loading: true, text: 'Genererer rettemanual...', errorType: undefined });
+    setRubricStatus({ loading: true, text: 'Starter fase 1: Kartlegger oppgaver...', errorType: undefined });
     try {
       const taskFilesWithMedia = await Promise.all(proj.taskFiles.map(async f => {
         if (f.mimeType === 'text/plain') return f;
@@ -127,7 +177,16 @@ export const useProjectProcessor = (
       }));
       
       const model = getActiveReasoningModel();
-      const rubric = await generateRubricFromTaskAndSamples(taskFilesWithMedia, model);
+      
+      // v8.2.0: Live Update Callback
+      const onProgress = (msg: string, partialRubric?: Rubric) => {
+          setRubricStatus({ loading: true, text: msg, errorType: undefined });
+          if (partialRubric) {
+              updateActiveProject({ rubric: partialRubric });
+          }
+      };
+
+      const rubric = await generateRubricFromTaskAndSamples(taskFilesWithMedia, model, onProgress);
       updateActiveProject({ rubric });
       setRubricStatus({ loading: false, text: '', errorType: undefined });
     } catch (e: any) { 
@@ -141,166 +200,154 @@ export const useProjectProcessor = (
   };
 
   const integratePageResults = async (pageToSave: Page, results: any[], parentIdToRemove?: string) => {
-    setActiveProject(prev => {
-      if (!prev) return null;
-      let newCandidates = [...prev.candidates];
-      
-      const removeId = parentIdToRemove || pageToSave.id;
-      let newUnprocessed = (prev.unprocessedPages || []).filter(p => p.id !== removeId);
+    // V8.0.4: Safe Async & Sibling Logic Refactor
+    // This function calculates the new state first, PERFORMS DB OPS, and then updates React.
+    
+    // 1. Get snapshot of current state
+    const currentProject = activeProjectRef.current;
+    if (!currentProject) return;
 
-      const hasRubric = !!prev.rubric && (prev.rubric.criteria.length > 0);
-      const validTaskStrings = new Set(prev.rubric?.criteria.map(c => 
-        `${c.taskNumber}${c.subTask || ''}`.toUpperCase().replace(/[^A-Z0-9]/g, '')
-      ) || []);
+    // Clone to work on
+    let newCandidates = [...currentProject.candidates];
+    const removeId = parentIdToRemove || pageToSave.id;
+    
+    // Prepare unprocessed update
+    const newUnprocessed = (currentProject.unprocessedPages || []).filter(p => p.id !== removeId);
 
-      results.forEach(async (res, idx) => {
+    const hasRubric = !!currentProject.rubric && (currentProject.rubric.criteria.length > 0);
+    const validTaskStrings = new Set(currentProject.rubric?.criteria.map(c => 
+      `${c.taskNumber}${c.subTask || ''}`.toUpperCase().replace(/[^A-Z0-9]/g, '')
+    ) || []);
+
+    const pagesToDefer: Page[] = []; // Pages that should be marked as skipped (waiting for sibling)
+    const candidatesToSave: Candidate[] = [];
+    const candidatesToDeleteIds: string[] = [];
+
+    // Helper logic
+    const cleanBaseName = (name: string) => {
+       if (!name) return "";
+       // Robust cleanup for V/H/Ø/N suffixes
+       let clean = name.replace(/\s*\([VHØN]\)$/i, "");
+       clean = clean.replace(/\.[^/.]+$/, ""); // Remove extension
+       return clean.trim();
+    };
+    
+    const currentBaseName = cleanBaseName(pageToSave.fileName);
+    const isSplitPage = pageToSave.fileName.match(/\([VHØN]\)$/i);
+    const isDigital = pageToSave.mimeType === 'text/plain'; // v8.0.41: Digital check
+
+    // Process all results from the AI (usually 1, sometimes 2 if A3 logic in AI was used - rare now due to local split)
+    for (const res of results) {
         const isBlank = (res.fullText || res.transcription || "").includes("[TOM SIDE]") || (res.fullText || "").length < 15;
-        const isUnknown = !res.candidateId || res.candidateId === "UKJENT";
+        let rawId = res.candidateId === "UKJENT" ? `UKJENT_${pageToSave.id}` : res.candidateId;
         
-        if (isBlank && isUnknown) {
-          console.log(`Auto-discarding blank page from ${pageToSave.fileName}`);
-          return;
+        if (rawId && !rawId.startsWith("UKJENT")) {
+            rawId = rawId.trim().replace(/^(?:kandidat|kand|cand)(?:nummer|nr|\.|_)?\s*:?\s*/i, "").trim();
+            rawId = rawId.replace(/^(?:nr|nummer)\.?\s*/i, "").trim();
         }
 
-        const pageId = pageToSave.id + (results.length > 1 ? `_${idx}` : '');
-        let finalPart = res.part;
-        let filteredTasks = (res.identifiedTasks || []).map((t: IdentifiedTask) => {
-           let cleanNum = t.taskNumber;
-           const isDoubleDigit = /^(\d)\1$/.test(cleanNum); 
-           
-           if (isDoubleDigit) {
-              const singleDigit = cleanNum[0];
-              const singleLabel = `${singleDigit}${t.subTask || ''}`.toUpperCase();
-              const doubleLabel = `${cleanNum}${t.subTask || ''}`.toUpperCase();
-              
-              if (hasRubric) {
-                 if (!validTaskStrings.has(doubleLabel) && validTaskStrings.has(singleLabel)) {
-                    cleanNum = singleDigit;
-                 }
-              } else {
-                 cleanNum = singleDigit;
-              }
-           }
-           return { ...t, taskNumber: cleanNum };
-        }).filter((t: IdentifiedTask) => {
-          if (!t.taskNumber) return false; 
-          if (hasRubric) {
-             const taskLabel = `${t.taskNumber}${t.subTask || ''}`.toUpperCase().replace(/[^A-Z0-9]/g, '');
-             return validTaskStrings.has(taskLabel);
-          }
-          return true; 
-        });
-
-        let rawId = res.candidateId === "UKJENT" ? `UKJENT_${pageToSave.id}` : res.candidateId;
-        if (rawId && !rawId.startsWith("UKJENT")) rawId = rawId.replace(/^Kandidat\s*:?\s*/i, "").trim();
         let candId = rawId || `UKJENT_${pageToSave.id}`;
-        
-        const cleanBaseName = (name: string) => name.replace(/\s*\([VHØN]\)$/i, "").replace(/\.[^/.]+$/, "").trim();
-        const currentBaseName = cleanBaseName(pageToSave.fileName);
-        const isUnknownStart = candId.startsWith("UKJENT");
+        let isUnknownStart = candId.startsWith("UKJENT");
 
+        if (isBlank && isUnknownStart) {
+            console.log(`Auto-discarding blank page from ${pageToSave.fileName}`);
+            continue; 
+        }
+
+        // v8.0.4: Smart Sibling Inference (Safe)
         if (isUnknownStart) {
-            const siblingCandidate = newCandidates.find(c => 
+            // 1. Try to find a KNOWN sibling (Best case)
+            const knownSibling = newCandidates.find(c => 
                 !c.id.startsWith("UKJENT") && 
                 c.pages.some(p => cleanBaseName(p.fileName) === currentBaseName)
             );
-            if (siblingCandidate) {
-                candId = siblingCandidate.id;
+
+            if (knownSibling) {
+                candId = knownSibling.id;
+                isUnknownStart = false;
+            } else {
+                // 2. Try to find an UNKNOWN sibling (Group them together)
+                const unknownSibling = newCandidates.find(c => 
+                    c.id.startsWith("UKJENT") && 
+                    c.pages.some(p => cleanBaseName(p.fileName) === currentBaseName)
+                );
+                
+                if (unknownSibling) {
+                    candId = unknownSibling.id;
+                } 
+                // v8.0.29: Removed Deferral Logic. Always create Unknown if no sibling found.
+                // The "Rescue Logic" below handles merging if a known sibling appears later.
             }
         }
 
-        const textToScan = res.fullText || res.transcription || "";
-        const existingCand = newCandidates.find(c => c.id === candId);
-        
-        let currentContextTaskNum: string | null = null;
-        if (existingCand) {
-           const prevPageNum = (res.pageNumber || pageToSave.pageNumber || 0) - 1;
-           const prevPage = existingCand.pages.find(p => p.pageNumber === prevPageNum);
-           if (prevPage && prevPage.identifiedTasks && prevPage.identifiedTasks.length > 0) {
-              currentContextTaskNum = prevPage.identifiedTasks[prevPage.identifiedTasks.length - 1].taskNumber;
-              if (prevPage.part === "Del 2" && finalPart !== "Del 2") finalPart = "Del 2"; 
-           }
+        // v8.0.15: Strict Integer Task Logic (Auto-fix suffixes like "2CAS" -> "2")
+        let filteredTasks: IdentifiedTask[] = [];
+        if (res.identifiedTasks) {
+             filteredTasks = res.identifiedTasks.map((t: any) => {
+                 if (!t.taskNumber) return null;
+                 if (hasRubric) {
+                    const label = `${t.taskNumber}${t.subTask || ''}`.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                    const parentLabel = t.taskNumber.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                    
+                    if (validTaskStrings.has(label)) {
+                       // Perfect match (e.g. "2")
+                       return t;
+                    } 
+                    
+                    // Fallback: If "2CAS" not found, but "2" exists in rubric, force map to "2".
+                    if (validTaskStrings.has(parentLabel)) {
+                        return { ...t, subTask: '' };
+                    }
+                    return null; // Invalid, remove it.
+                 }
+                 return t; // No rubric, keep everything
+             }).filter((t: any) => t !== null);
         }
 
-        const smartRegex = /(?:^|\n|\[)\s*(?:opg(?:ave)?\.?|oppg\.?)?(?:(\d+)(?:[\.\)\s]*)([a-zæøå]*)|([a-zæøå])(?:\)|:|\.))/gmi;
+        const pageId = pageToSave.id + (results.length > 1 ? `_res` : '');
         
-        let match;
-        while ((match = smartRegex.exec(textToScan)) !== null) {
-           let explicitNum = match[1]; 
-           const explicitLetter = match[2]; 
-           const orphanLetter = match[3]; 
-
-           if (explicitNum && /^(\d)\1$/.test(explicitNum)) {
-              if (hasRubric) {
-                 const single = explicitNum[0];
-                 const label = `${single}${explicitLetter || ''}`.toUpperCase();
-                 if (validTaskStrings.has(label)) explicitNum = single;
-              } else {
-                 explicitNum = explicitNum[0];
-              }
-           }
-
-           if (explicitNum) {
-              currentContextTaskNum = explicitNum; 
-              const letter = explicitLetter ? explicitLetter.toLowerCase() : "";
-              const label = `${explicitNum}${letter}`.toUpperCase();
-              if (validTaskStrings.has(label)) {
-                 const exists = filteredTasks.some((t: IdentifiedTask) => `${t.taskNumber}${t.subTask}`.toUpperCase() === label);
-                 if (!exists) {
-                    filteredTasks.push({ taskNumber: explicitNum, subTask: letter });
-                 }
-              }
-           } else if (orphanLetter && currentContextTaskNum) {
-              const letter = orphanLetter.toLowerCase();
-              const label = `${currentContextTaskNum}${letter}`.toUpperCase();
-              if (validTaskStrings.has(label)) {
-                 const exists = filteredTasks.some((t: IdentifiedTask) => `${t.taskNumber}${t.subTask}`.toUpperCase() === label);
-                 if (!exists) {
-                    filteredTasks.push({ taskNumber: currentContextTaskNum, subTask: letter });
-                 }
-              }
-           }
-        }
-
-        if (textToScan.includes("Del 2") || textToScan.includes("Med hjelpemidler")) {
-           finalPart = "Del 2";
+        // v8.0.41: Force "Del 2" for digital files (hard override)
+        let determinedPart = res.part || pageToSave.part;
+        if (isDigital) {
+            determinedPart = "Del 2";
         }
 
         const newPage: Page = {
-          ...pageToSave,
-          id: pageId,
-          candidateId: candId.startsWith("UKJENT") ? "UKJENT" : candId,
-          pageNumber: res.pageNumber || pageToSave.pageNumber,
-          part: finalPart,
-          transcription: textToScan,
-          visualEvidence: res.visualEvidence,
-          identifiedTasks: filteredTasks,
-          status: 'completed',
-          rotation: 0 
+            ...pageToSave,
+            id: pageId,
+            candidateId: isUnknownStart ? "UKJENT" : candId,
+            pageNumber: res.pageNumber || pageToSave.pageNumber,
+            part: determinedPart,
+            transcription: res.fullText || res.transcription,
+            visualEvidence: res.visualEvidence,
+            identifiedTasks: filteredTasks,
+            status: 'completed',
+            rotation: 0 
         };
 
+        // Find or Create Candidate
         let candIdx = newCandidates.findIndex(c => c.id === candId);
-        
         if (candIdx === -1) {
-          const newCand: Candidate = {
-            id: candId,
-            projectId: prev.id,
-            name: candId.startsWith("UKJENT") ? `Ukjent (${pageToSave.fileName})` : candId,
-            pages: [newPage],
-            status: 'completed'
-          };
-          newCandidates.push(newCand);
-          saveCandidate(newCand);
-          candIdx = newCandidates.length - 1;
+            const newCand: Candidate = {
+                id: candId,
+                projectId: currentProject.id,
+                name: isUnknownStart ? `Ukjent (${pageToSave.fileName})` : candId,
+                pages: [newPage],
+                status: 'completed'
+            };
+            newCandidates.push(newCand);
+            candidatesToSave.push(newCand); // Mark for saving
         } else {
-          newCandidates[candIdx] = {
-            ...newCandidates[candIdx],
-            pages: [...newCandidates[candIdx].pages, newPage].sort((a,b) => (a.pageNumber || 0) - (b.pageNumber || 0))
-          };
-          saveCandidate(newCandidates[candIdx]);
+            const updatedCand = {
+                ...newCandidates[candIdx],
+                pages: [...newCandidates[candIdx].pages, newPage].sort((a,b) => (a.pageNumber || 0) - (b.pageNumber || 0))
+            };
+            newCandidates[candIdx] = updatedCand;
+            candidatesToSave.push(updatedCand); // Mark for saving
         }
 
-        if (!candId.startsWith("UKJENT")) {
+        // Rescue Logic (Backward Merge)
+        if (!isUnknownStart) {
              const unknownSiblingIndex = newCandidates.findIndex(c => 
                 c.id.startsWith("UKJENT") && 
                 c.pages.some(p => cleanBaseName(p.fileName) === currentBaseName)
@@ -310,18 +357,47 @@ export const useProjectProcessor = (
                  const unknownCand = newCandidates[unknownSiblingIndex];
                  const rescuedPages = unknownCand.pages.map(p => ({ ...p, candidateId: candId }));
                  
-                 const updatedCand = newCandidates[candIdx];
-                 updatedCand.pages = [...updatedCand.pages, ...rescuedPages].sort((a,b) => (a.pageNumber || 0) - (b.pageNumber || 0));
-                 newCandidates[candIdx] = updatedCand;
-                 saveCandidate(updatedCand);
+                 // Update the KNOWN candidate again with rescued pages
+                 // Note: candIdx might have shifted if we are not careful, but finding by ID is safer
+                 const targetIdx = newCandidates.findIndex(c => c.id === candId);
+                 if (targetIdx !== -1) {
+                     const mergedCand = {
+                         ...newCandidates[targetIdx],
+                         pages: [...newCandidates[targetIdx].pages, ...rescuedPages].sort((a,b) => (a.pageNumber || 0) - (b.pageNumber || 0))
+                     };
+                     newCandidates[targetIdx] = mergedCand;
+                     candidatesToSave.push(mergedCand); // Re-save merged
+                 }
                  
+                 // Mark unknown for deletion
                  newCandidates = newCandidates.filter(c => c.id !== unknownCand.id);
-                 deleteCandidate(unknownCand.id);
+                 candidatesToDeleteIds.push(unknownCand.id);
              }
         }
-      });
+    } // End Loop
 
-      return { ...prev, candidates: newCandidates, unprocessedPages: newUnprocessed };
+    // 2. Perform DB Operations (Safely)
+    try {
+        await Promise.all([
+            ...candidatesToSave.map(c => saveCandidate(c)),
+            ...candidatesToDeleteIds.map(id => deleteCandidate(id))
+        ]);
+    } catch (e) {
+        console.error("DB Save failed", e);
+    }
+
+    // 3. Update React State (Atomic)
+    setActiveProject(prev => {
+        if (!prev) return null;
+        // Merge deferred pages back into unprocessed
+        const finalUnprocessed = [...newUnprocessed, ...pagesToDefer];
+        
+        return {
+            ...prev,
+            candidates: newCandidates,
+            unprocessedPages: finalUnprocessed,
+            updatedAt: Date.now()
+        };
     });
   };
 
@@ -329,6 +405,45 @@ export const useProjectProcessor = (
     if (isBatchProcessing.current || !activeProject) return;
     
     const hasPending = (activeProject.unprocessedPages || []).some(p => p.status === 'pending');
+    
+    // v8.0.5: Auto-Flow Logic
+    // If the queue is empty, no processing is happening, and we have pending Auto-Flow
+    if (!hasPending && processingCount === 0 && autoFlowPending && !rubricStatus.loading) {
+       
+       const triggerAutoFlow = async () => {
+          if (!activeProjectRef.current?.rubric) return; // Wait for rubric
+          
+          const cands = activeProjectRef.current.candidates;
+          if (cands.length === 0) return; // Nothing to analyze
+
+          setAutoFlowPending(false); // Stop loop
+          
+          try {
+             // Step 1: Analyze Errors
+             setCurrentAction("🤖 Auto-pilot: Analyserer klassens feil...");
+             const improvedRubric = await improveRubricWithStudentData(activeProjectRef.current.rubric, cands, getActiveReasoningModel());
+             
+             // Update project with new rubric immediately (Ref and State)
+             if (activeProjectRef.current) activeProjectRef.current.rubric = improvedRubric;
+             updateActiveProject({ rubric: improvedRubric });
+             
+             // Step 2: Evaluate All (Force Refresh)
+             setCurrentAction("🚀 Auto-pilot: Vurderer alle kandidater...");
+             const allIds = cands.map(c => c.id);
+             await handleBatchEvaluation(allIds, true); // True = Force re-evaluation
+             
+          } catch (e) {
+             console.error("Auto-Flow failed", e);
+             setRubricStatus({ loading: false, text: 'Auto-pilot feilet', errorType: 'GENERIC' });
+          } finally {
+             setCurrentAction('');
+          }
+       };
+
+       triggerAutoFlow();
+       return;
+    }
+
     if (!hasPending) {
       setEtaSeconds(null);
       return;
@@ -369,20 +484,26 @@ export const useProjectProcessor = (
         setActivePageId(page.id);
         processedIds.add(page.id);
         
-        // v7.9.33: Initialize AbortController for this file
         abortControllerRef.current = new AbortController();
         const signal = abortControllerRef.current.signal;
 
         try {
-          // STEP 1: FORCE SPLIT & ORIENTATION
+          // v8.0.12: MANDATORY UNIVERSAL SPLIT - NO AI, NO EXCEPTIONS
+          // If it's an image and hasn't been split yet (layoutType is undefined), split it.
           if (page.mimeType.startsWith('image/') && !page.layoutType) {
              setCurrentAction(`Geometri-sjekk: ${page.fileName}...`);
              const base64 = await getMedia(page.id);
              if (!base64) throw new Error("Mangler bildedata");
 
+             // Logic:
+             // Part 1: Left (if Landscape) OR Top (if Portrait)
+             // Part 2: Right (if Landscape) OR Bottom (if Portrait)
+             // splitImageInHalf handles the axis decision based on dimensions.
              let split1 = await splitImageInHalf(base64, 1);
              let split2 = await splitImageInHalf(base64, 2);
              
+             // If portrait split (Top/Bottom), resulting images are likely landscape.
+             // We rotate them 90 degrees to ensure they are upright A4 for OCR.
              if (!split1.isLandscapeSplit) {
                 split1.fullRes = await processImageRotation(split1.fullRes, 90);
                 split2.fullRes = await processImageRotation(split2.fullRes, 90);
@@ -393,8 +514,9 @@ export const useProjectProcessor = (
              
              await Promise.all([saveMedia(id1, split1.fullRes), saveMedia(id2, split2.fullRes)]);
              
-             const s1Suffix = split1.isLandscapeSplit ? '(V)' : '(Ø)';
-             const s2Suffix = split2.isLandscapeSplit ? '(H)' : '(N)';
+             // Suffix logic
+             const s1Suffix = split1.isLandscapeSplit ? '(V)' : '(Ø)'; // V=Venstre, Ø=Øvre
+             const s2Suffix = split2.isLandscapeSplit ? '(H)' : '(N)'; // H=Høyre, N=Nedre
 
              const processedPages: Page[] = [
                { ...page, id: id1, base64Data: undefined, contentHash: generateHash(split1.fullRes), fileName: `${page.fileName} ${s1Suffix}`, layoutType: 'A4_SINGLE', rotation: 0, mimeType: 'image/jpeg' },
@@ -410,12 +532,18 @@ export const useProjectProcessor = (
                 newList.splice(idx, 1, ...processedPages);
                 return { ...prev, unprocessedPages: newList };
              });
-
+             
+             // Immediate loop continue to pick up the new split pages
              continue; 
           }
 
-          // STEP 2: TRANSCRIPTION
           if (currentProject.rubric && currentProject.rubric.criteria.length > 0) {
+             // v8.3.1: Strict Block - Do not transcribe if rubric is loading (partial)
+             if (rubricStatus.loading) {
+                 hasMore = false;
+                 break;
+             }
+
              if (page.mimeType === 'text/plain') {
                 setCurrentAction(`Analyserer digital tekst: ${page.fileName}...`);
                 const res = await analyzeTextContent(page.rawText || "", activeProjectRef.current?.rubric, page.attachedImages, signal);
@@ -425,12 +553,10 @@ export const useProjectProcessor = (
                 setCurrentAction(`🚀 Sender til Google: ${page.fileName}...`);
                 const base64 = await getMedia(page.id);
                 if (base64) {
-                  // LOGGING DIAGNOSTICS FOR HEAVY FILES
                   const sizeInMB = base64.length / 1024 / 1024;
                   if (sizeInMB > 15) console.warn(`⚠️ Veldig stor fil (${sizeInMB.toFixed(1)} MB): ${page.fileName}. Kan forårsake timeouts.`);
 
                   const pWithData = { ...page, base64Data: base64.split(',')[1] };
-                  // Venter på svar fra Google...
                   const results = await transcribeAndAnalyzeImage(pWithData, activeProjectRef.current?.rubric, signal);
                   setCurrentAction(`🧠 Tolker og lagrer: ${page.fileName}...`);
                   await integratePageResults(page, results);
@@ -451,18 +577,46 @@ export const useProjectProcessor = (
           }
           
         } catch (e: any) {
-           // v7.9.33: Handle Abort (User Skip)
            if (e.name === 'AbortError' || e.message === 'Aborted') {
              console.log(`Fil ${page.fileName} ble hoppet over av bruker.`);
              updateActiveProject({ 
                unprocessedPages: (activeProjectRef.current?.unprocessedPages || []).map(p => p.id === page.id ? { ...p, status: 'skipped', statusLabel: 'Hoppet over' } : p) 
              });
-             continue; // Immediately go to next file
+             continue; 
            }
 
            const msg = e?.message || String(e);
            const isNetworkError = msg.includes("fetch failed") || msg.includes("NetworkError") || msg.includes("503") || msg.includes("504") || msg.includes("Failed to fetch") || msg.includes("timeout") || msg.includes("timed out");
            
+           // v8.0.23: Smart Rotation Retry Logic
+           // If it's NOT a network error, and we haven't rotated this page yet, try rotating 180 degrees.
+           if (!isNetworkError && !rotatedIds.current.has(page.id)) {
+              console.log(`Smart Retry: Feil oppstod, forsøker å rotere ${page.fileName} 180 grader...`);
+              rotatedIds.current.add(page.id); // Mark as rotated
+              setCurrentAction(`⚠️ Feil (roterer 180 grader): ${page.fileName}...`);
+              
+              try {
+                 const base64 = await getMedia(page.id);
+                 if (base64) {
+                    const rotated = await processImageRotation(base64, 180);
+                    // Update Media
+                    await saveMedia(page.id, rotated);
+                    
+                    // Force refresh of page state in unprocessedPages (reset status, new hash?)
+                    // Actually, we just need to retry loop. 
+                    // processedIds.delete(page.id) ensures loop picks it up again.
+                    // We don't change ID or Hash, just the content.
+                    
+                    processedIds.delete(page.id);
+                    await new Promise(r => setTimeout(r, 1000)); // Small delay
+                    continue; // Retry immediatly
+                 }
+              } catch (rotErr) {
+                 console.error("Rotation retry failed", rotErr);
+                 // Fall through to normal error handling
+              }
+           }
+
            const currentRetries = retryCounts.current[page.id] || 0;
            
            if (isNetworkError && currentRetries < 3) { 
@@ -481,7 +635,7 @@ export const useProjectProcessor = (
            });
         }
         
-        await new Promise(r => setTimeout(r, 20)); 
+        await new Promise(r => setTimeout(r, 50)); 
       }
 
       setActivePageId(null);
@@ -494,7 +648,28 @@ export const useProjectProcessor = (
     };
 
     processQueue();
-  }, [activeProject?.unprocessedPages, activeProject?.rubric, retryTrigger]);
+  }, [activeProject?.unprocessedPages, activeProject?.rubric, retryTrigger, processingCount, rubricStatus.loading]); // v8.0.5: Trigger on processingCount for auto-flow, v8.3.1: Trigger on rubricStatus.loading
+
+  const handleRetryFailed = () => {
+    setActiveProject(prev => {
+        if (!prev) return null;
+        const failed = (prev.unprocessedPages || []).filter(p => p.status === 'error');
+        if (failed.length === 0) return prev;
+        
+        // Reset retry counters for these
+        failed.forEach(p => delete retryCounts.current[p.id]);
+        
+        // v8.0.23: Reset rotation flags so we can try rotating again if needed (or if manual intervention happened)
+        failed.forEach(p => rotatedIds.current.delete(p.id));
+
+        return {
+            ...prev,
+            unprocessedPages: (prev.unprocessedPages || []).map(p => p.status === 'error' ? { ...p, status: 'pending', statusLabel: undefined } : p)
+        };
+    });
+    // Trigger queue restart
+    setRetryTrigger(prev => prev + 1);
+  };
 
   const handleRegeneratePage = async (candId: string, pageId: string) => {
     if (!activeProject) return;
@@ -507,8 +682,20 @@ export const useProjectProcessor = (
       const base64 = await getMedia(page.id);
       if (!base64) return;
       
-      const results = await transcribeAndAnalyzeImage({ ...page, base64Data: base64.split(',')[1], forceRescan: true } as any, activeProject.rubric);
-      await integratePageResults(page, results);
+      // v8.1.4: Use PRO_MODEL for manual regeneration to ensure deep reasoning and avoid hallucinations
+      const results = await transcribeAndAnalyzeImage(
+          { ...page, base64Data: base64.split(',')[1], forceRescan: true } as any, 
+          activeProject.rubric,
+          undefined, // no abort signal
+          PRO_MODEL // Override with PRO
+      );
+      
+      // v8.0.10 Fix: Force only the first result to be integrated.
+      // This prevents split-image hallucination from creating duplicate/ghost pages during regeneration.
+      // We assume one physical page image = one logical page here.
+      if (results && results.length > 0) {
+         await integratePageResults(page, [results[0]]);
+      }
     } catch (e) { console.error(e); }
   };
 
@@ -525,47 +712,93 @@ export const useProjectProcessor = (
     } catch (e) { console.error(e); }
   };
 
+  const handleBatchEvaluation = async (candidateIds: string[], force: boolean = false) => {
+    if (!activeProjectRef.current?.rubric) return;
+    isStoppingEvaluation.current = false;
+    
+    let candsToProcess = activeProjectRef.current.candidates;
+    if (candidateIds && candidateIds.length > 0) {
+       candsToProcess = candsToProcess.filter(c => candidateIds.includes(c.id));
+    }
+
+    setRubricStatus({ loading: true, text: `Vurderer ${candsToProcess.length} kandidater...` });
+    
+    // v8.1.3: Initialize Progress Stats
+    setBatchTotal(candsToProcess.length);
+    setBatchCompleted(0);
+    const batchStartTime = Date.now();
+    let localProcessedCount = 0;
+
+    for (let i = 0; i < candsToProcess.length; i++) {
+      const cand = candsToProcess[i];
+      if (isStoppingEvaluation.current) break;
+      if (!force && cand.status === 'evaluated') {
+          // v8.1.3: Still count skipped as completed for progress bar consistency
+          localProcessedCount++;
+          setBatchCompleted(localProcessedCount);
+          continue;
+      }
+      
+      setCurrentAction(`Vurderer ${cand.name} (${i + 1}/${candsToProcess.length})...`);
+      try {
+        const res = await evaluateCandidate(cand, activeProjectRef.current.rubric, getActiveReasoningModel());
+        const updatedCand = { ...cand, evaluation: res, status: 'evaluated' as const };
+        await saveCandidate(updatedCand);
+        
+        setActiveProject(prev => {
+           if (!prev) return null;
+           const updatedList = prev.candidates.map(c => c.id === cand.id ? updatedCand : c);
+           return { ...prev, candidates: updatedList };
+        });
+      } catch (e) {
+         console.error(`Feil ved vurdering av ${cand.name}:`, e);
+      }
+
+      // v8.1.3: Update Progress
+      localProcessedCount++;
+      setBatchCompleted(localProcessedCount);
+      
+      const elapsedTime = Date.now() - batchStartTime;
+      const averageTimePerItem = elapsedTime / localProcessedCount;
+      const remaining = candsToProcess.length - localProcessedCount;
+      const estSeconds = (averageTimePerItem * remaining) / 1000;
+      setEtaSeconds(Math.round(estSeconds));
+    }
+    setRubricStatus({ loading: false, text: '' });
+    setCurrentAction('');
+    setBatchTotal(0);
+    setBatchCompleted(0);
+    setEtaSeconds(null);
+  };
+
+  const handleEvaluateAll = (force: boolean = false) => handleBatchEvaluation([], force);
+
+  const handleEvaluateCandidateWrapper = async (id: string) => {
+    if (!activeProject?.rubric) return;
+    const cand = activeProject.candidates.find(c => c.id === id);
+    if (!cand) return;
+    setRubricStatus({ loading: true, text: `Vurderer ${cand.name}...` });
+    try {
+      const res = await evaluateCandidate(cand, activeProject.rubric, getActiveReasoningModel());
+      const updated = { ...cand, evaluation: res, status: 'evaluated' as const };
+      await saveCandidate(updated);
+      setActiveProject(prev => prev ? ({ ...prev, candidates: prev.candidates.map(c => c.id === id ? updated : c) }) : null);
+    } finally { setRubricStatus({ loading: false, text: '' }); }
+  };
+
   return { 
     processingCount, batchTotal, batchCompleted, currentAction, activePageId, rubricStatus, 
     useFlashFallback, setUseFlashFallback,
     etaSeconds, 
     handleTaskFileSelect,
     handleCandidateFileSelect,
-    // REMOVED handleDriveImport
     handleSkipFile, 
-    handleEvaluateAll: async (force: boolean = false) => {
-      if (!activeProject?.rubric) return;
-      isStoppingEvaluation.current = false;
-      setRubricStatus({ loading: true, text: 'Vurderer besvarelser...' });
-      const cands = [...activeProject.candidates];
-      for (let i = 0; i < cands.length; i++) {
-        if (isStoppingEvaluation.current) break;
-        if (!force && cands[i].status === 'evaluated') continue;
-        setCurrentAction(`Vurderer ${cands[i].name}...`);
-        try {
-          const res = await evaluateCandidate(cands[i], activeProject.rubric, getActiveReasoningModel());
-          cands[i] = { ...cands[i], evaluation: res, status: 'evaluated' as const };
-          await saveCandidate(cands[i]);
-          setActiveProject(prev => prev ? { ...prev, candidates: [...cands] } : null);
-        } catch (e) {}
-      }
-      setRubricStatus({ loading: false, text: '' });
-      setCurrentAction('');
-    },
-    handleEvaluateCandidate: async (id: string) => {
-      if (!activeProject?.rubric) return;
-      const cand = activeProject.candidates.find(c => c.id === id);
-      if (!cand) return;
-      setRubricStatus({ loading: true, text: `Vurderer ${cand.name}...` });
-      try {
-        const res = await evaluateCandidate(cand, activeProject.rubric, getActiveReasoningModel());
-        const updated = { ...cand, evaluation: res, status: 'evaluated' as const };
-        await saveCandidate(updated);
-        setActiveProject(prev => prev ? ({ ...prev, candidates: prev.candidates.map(c => c.id === id ? updated : c) }) : null);
-      } finally { setRubricStatus({ loading: false, text: '' }); }
-    },
+    handleBatchEvaluation,
+    handleEvaluateAll,
+    handleEvaluateCandidate: handleEvaluateCandidateWrapper,
     handleGenerateRubric, 
     handleRegenerateCriterion,
+    handleRetryFailed, 
     handleSmartCleanup: async () => {
       if (!activeProject) return;
       setRubricStatus({ loading: true, text: 'Kjører smart-rydding v6.1.8...' });
@@ -587,7 +820,18 @@ export const useProjectProcessor = (
       }
     },
     handleRetryPage: (p: Page) => {
-      updateActiveProject({ unprocessedPages: (activeProject?.unprocessedPages || []).map(pg => pg.id === p.id ? { ...pg, status: 'pending' } : pg) });
+      // v8.0.9 Fix: Use functional update to ensure we work on latest state and clear label immediately
+      setActiveProject(prev => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          unprocessedPages: (prev.unprocessedPages || []).map(pg => 
+            pg.id === p.id ? { ...pg, status: 'pending', statusLabel: undefined } : pg
+          ),
+          updatedAt: Date.now()
+        };
+      });
+      setRetryTrigger(prev => prev + 1);
     },
     handleRegeneratePage,
     updateActiveProject 

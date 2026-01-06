@@ -10,9 +10,9 @@ export const Spinner: React.FC<{ size?: string; color?: string }> = ({ size = "w
 );
 
 /**
- * LatexRenderer v2.17: Literal Newline Fix (v7.9.4)
- * - Utvidet regex for å fange opp 'BILDEVEDLEGG'
- * - Automatisk konvertering av literal '\n' strenger til faktiske linjeskift
+ * LatexRenderer v8.2.11: The Formatter
+ * - Fixes red backslash issue (invalid line breaks before aligned)
+ * - Improved verbatim/code block detection
  */
 export const LatexRenderer: React.FC<{ content: string; className?: string }> = ({ content, className = "" }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -25,15 +25,20 @@ export const LatexRenderer: React.FC<{ content: string; className?: string }> = 
       setIsRendered(false);
       
       const timer = setTimeout(() => {
-        mathjax.typesetClear([containerRef.current]);
-        mathjax.typesetPromise([containerRef.current])
-          .then(() => {
+        // Only typeset elements that are NOT code blocks (marked with data-no-math)
+        const mathElements = containerRef.current?.querySelectorAll('.tex2jax_process');
+        
+        if (mathElements && mathElements.length > 0) {
+            mathjax.typesetClear(mathElements);
+            mathjax.typesetPromise(mathElements)
+            .then(() => setIsRendered(true))
+            .catch((err: any) => {
+                console.warn("MathJax error:", err);
+                setIsRendered(true);
+            });
+        } else {
             setIsRendered(true);
-          })
-          .catch((err: any) => {
-            console.warn("MathJax error:", err);
-            setIsRendered(true);
-          });
+        }
       }, 50);
       
       return () => clearTimeout(timer);
@@ -42,73 +47,192 @@ export const LatexRenderer: React.FC<{ content: string; className?: string }> = 
     }
   }, [content]);
 
+  const sanitizeLatex = (text: string): string => {
+    if (!text) return "";
+    let clean = text;
+
+    // v8.2.10: Unicode Decode Fix (e.g. Skr\u00e5 -> Skrå)
+    clean = clean.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+
+    // v8.2.11: Enhanced Verbatim Fix (Allow spaces)
+    // Convert \begin{verbatim} ... \end{verbatim} to Markdown Code Block
+    clean = clean.replace(/\\begin\s*\{verbatim\}([\s\S]*?)\\end\s*\{verbatim\}/g, "\n```\n$1\n```\n");
+
+    // v8.2.11: Fix Red Backslash (Remove \\ before \begin{aligned} or other environments)
+    // AI often writes "Text \\ \begin{aligned}", which is invalid in inline math.
+    clean = clean.replace(/\\\\\s*(\\begin\{)/g, "\n$1");
+
+    // 1. Literal Newline Fix
+    clean = clean.replace(/\\n/g, '\n');
+
+    // 2. Double Exponent Fix (Strict Guard)
+    clean = clean.replace(/([\w\)\}\]]+\^\{[^\}]+\})'/g, "{$1}'");
+    clean = clean.replace(/([\w\)\}\]]+\^[\w\d]+)'/g, "{$1}'");
+
+    // 3. Bold Fix
+    clean = clean.replace(/\\bold\{/g, '\\mathbf{');
+
+    // \b -> \begin (Repair only if it looks like corrupted 'egin')
+    clean = clean.replace(/[\x08\s]*egin\{/g, '\\begin{'); 
+    
+    // \t -> \text (Repair corrupted 'ext')
+    clean = clean.replace(/[\x0c\s]*rac\{/g, '\\frac{'); // Formfeed + rac -> frac
+    clean = clean.replace(/[\t\s]*ext\{/g, '\\text{'); // Tab + ext -> text
+    
+    // v8.0.40 - v8.0.44: Aggressive Shorthand Repair
+    clean = clean.replace(/\\f\s*\{/g, '\\frac{');
+    clean = clean.replace(/\\f\s+(\d)/g, '\\frac $1');
+    clean = clean.replace(/\\f(?![a-zA-Z])/g, '');
+
+    clean = clean.replace(/\\t\s*\{/g, '\\text{');
+    clean = clean.replace(/\\t\s*([A-ZÆØÅ][a-zæøå]*)/g, '\\mathrm{$1}');
+    clean = clean.replace(/\\t(?!(ext|imes|heta|au|an|op|o))/g, '');
+
+    clean = clean.replace(/\\b\s*\{aligned\}/g, '\\begin{aligned}');
+    clean = clean.replace(/\\b(?!(eta|inom|egin|ar|f|ullet))/g, '');
+    
+    clean = clean.replace(/\\r\s*([\}\)\]\|\.\/])/g, '\\right$1');
+    clean = clean.replace(/\\r(?!(ight|ho))/g, '');
+
+    clean = clean.replace(/\\begin\{align\}/g, '\\begin{aligned}');
+    clean = clean.replace(/\\end\{align\}/g, '\\end{aligned}');
+
+    clean = clean.replace(/(^|[^\\])\\\s+\[/g, '$1\\['); 
+    clean = clean.replace(/(^|[^\\])\\\s+\]/g, '$1\\]');
+    clean = clean.replace(/(^|[^\\])\\\s+\(/g, '$1\\('); 
+    clean = clean.replace(/(^|[^\\])\\\s+\)/g, '$1\\)');
+
+    clean = clean.replace(/(\\begin\{aligned\}[\s\S]*?\\end\{aligned\})/g, (match, p1, offset, string) => {
+        const prefix = string.substring(Math.max(0, offset - 5), offset);
+        if (/(\\\)|\\\]|\$\$)$/.test(prefix.trimEnd())) return match;
+        if (/(\\\(|\\\[|\$\$)$/.test(prefix.trimEnd())) return match;
+        return `\\[\n${match}\n\\]`;
+    });
+
+    clean = clean.replace(/(\\\[|\\\()([\s\S]*?)(\\\)|\\\])/g, (match, open, content, close) => {
+        let fixedContent = content;
+        const beginCount = (fixedContent.match(/\\begin\{aligned\}/g) || []).length;
+        const endCount = (fixedContent.match(/\\end\{aligned\}/g) || []).length;
+        
+        if (beginCount > endCount) {
+            const missing = beginCount - endCount;
+            fixedContent += "\n\\end{aligned}".repeat(missing);
+        }
+        return `${open}${fixedContent}${close}`;
+    });
+
+    return clean;
+  };
+
   const processContent = (text: string) => {
-    // FIX v7.9.4: Erstatt litteære "\n" tegnsekvenser med faktiske linjeskift
-    // Dette retter problemet der KI returnerer dobbel-escaped newlines ("\\n")
-    const cleanText = text.replace(/\\n/g, '\n');
+    const cleanText = sanitizeLatex(text);
 
-    // Regex oppdatert i v7.8.8: Inkluderer 'BILDEVEDLEGG' som gyldig trigger
-    const figureRegex = /\[\s*(?:AI-TOLKNING AV FIGUR|FIGURTOLKNING|BESKRIVELSE AV BILDE|VISUAL-EVIDENCE|BILDEVEDLEGG)\s*:?\s*([\s\S]*?)\s*\]/gi;
-    const parts = [];
-    let lastIndex = 0;
-    let match;
+    // v8.2.10: Multi-Pass Parser
+    // Pass 1: Split by Visual Evidence (Images)
+    // Pass 2: Split by Code Blocks (Markdown)
+    
+    const imageRegex = /\[\s*(?:AI-TOLKNING AV FIGUR|FIGURTOLKNING|BESKRIVELSE AV BILDE|VISUAL-EVIDENCE|BILDEVEDLEGG)(?:\s*\d*)?\s*:?\s*([\s\S]*?)\s*\]/gi;
+    
+    const splitByImages = (input: string) => {
+        const parts = [];
+        let lastIndex = 0;
+        let match;
+        while ((match = imageRegex.exec(input)) !== null) {
+            if (match.index > lastIndex) parts.push({ type: 'text', content: input.substring(lastIndex, match.index) });
+            
+            const content = match[1].trim();
+            const isNegative = content.length < 2 || /^(?:ingen|ikke|nei|tom|mangler|fant ikke)/i.test(content);
+            
+            if (!isNegative) {
+                parts.push({ type: 'image', content });
+            }
+            lastIndex = match.index + match[0].length;
+        }
+        if (lastIndex < input.length) parts.push({ type: 'text', content: input.substring(lastIndex) });
+        return parts;
+    };
 
-    while ((match = figureRegex.exec(cleanText)) !== null) {
-      if (match.index > lastIndex) {
-        parts.push(cleanText.substring(lastIndex, match.index));
-      }
+    // v8.2.10: Code Block Regex (Markdown style ``` ... ```)
+    const codeRegex = /```(?:\w+)?\s*([\s\S]*?)```/g;
 
-      const innerContent = match[1].trim();
-      
-      // REGEL v5.8.6: Skjul boks dersom den bare inneholder meldinger om fravær av figurer
-      const isNegativeEvidence = 
-        innerContent.length < 2 || // Ignorer hvis det bare er et tall (f.eks "[BILDEVEDLEGG 1]") uten tekst
-        /^(?:ingen|ikke|nei|tom|mangler|fant ikke|no figures|no images|ingen bilder|ingen figurer|ingen cas)/i.test(innerContent) ||
-        innerContent.toLowerCase().includes("er inkludert i tekstdokumentet");
+    const splitByCode = (input: string) => {
+        const parts = [];
+        let lastIndex = 0;
+        let match;
+        while ((match = codeRegex.exec(input)) !== null) {
+            if (match.index > lastIndex) parts.push({ type: 'latex', content: input.substring(lastIndex, match.index) });
+            
+            // Add Code Block
+            parts.push({ type: 'code', content: match[1].trim() });
+            
+            lastIndex = match.index + match[0].length;
+        }
+        if (lastIndex < input.length) parts.push({ type: 'latex', content: input.substring(lastIndex) });
+        return parts;
+    };
 
-      if (!isNegativeEvidence) {
-        parts.push(
-          <div key={match.index} className="my-6 p-0 bg-slate-100 border-l-[4px] border-indigo-500 rounded-r-xl shadow-md overflow-hidden ring-1 ring-slate-300/50 animate-in fade-in slide-in-from-left-2 duration-300">
-            <div className="bg-slate-200/80 px-4 py-2 flex items-center justify-between border-b border-slate-300">
-              <div className="text-[10px] font-black uppercase text-indigo-800 tracking-[0.15em] flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-indigo-600 shadow-sm"></span>
-                Tolkning av Gemini (Flash)
-              </div>
-              <div className="text-[8px] font-black text-slate-500 uppercase tracking-widest bg-white/50 px-2 py-0.5 rounded">{SYSTEM_VERSION}</div>
-            </div>
-            <div className="p-5 text-[12px] text-slate-900 font-medium leading-[1.7] font-mono whitespace-pre-wrap bg-slate-50/50">
-              {innerContent.split('\n').map((line, i) => {
-                const trimmed = line.trim();
-                if (!trimmed) return <div key={i} className="h-2"></div>;
-                
-                const isCommand = /^(?:\$|In:|Linje|\d+:)/.test(trimmed);
-                const isResult = /^->|Out:/.test(trimmed);
-                
-                return (
-                  <div key={i} className={`flex gap-3 mb-1 ${isCommand ? 'text-indigo-900 mt-2 font-bold bg-indigo-50/30 -mx-2 px-2 py-0.5 rounded' : isResult ? 'text-emerald-800 pl-4 border-l-2 border-emerald-200' : 'text-slate-700 italic'}`}>
-                    <span className="flex-1">{trimmed}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        );
-      }
-      
-      lastIndex = match.index + match[0].length;
-    }
+    const initialParts = splitByImages(cleanText);
+    const finalElements: React.ReactNode[] = [];
 
-    if (lastIndex < cleanText.length) {
-      parts.push(cleanText.substring(lastIndex));
-    }
+    initialParts.forEach((part, idx) => {
+        if (part.type === 'image') {
+            finalElements.push(
+                <div key={`img-${idx}`} className="my-6 p-0 bg-slate-100 border-l-[4px] border-indigo-500 rounded-r-xl shadow-md overflow-hidden ring-1 ring-slate-300/50 animate-in fade-in slide-in-from-left-2 duration-300">
+                    <div className="bg-slate-200/80 px-4 py-2 flex items-center justify-between border-b border-slate-300">
+                        <div className="text-[10px] font-black uppercase text-indigo-800 tracking-[0.15em] flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-indigo-600 shadow-sm"></span>
+                            Tolkning av Gemini (Flash)
+                        </div>
+                    </div>
+                    <div className="p-5 text-[12px] text-slate-900 font-medium leading-[1.7] font-mono whitespace-pre-wrap bg-slate-50/50">
+                        {part.content.split('\n').map((line, i) => {
+                            const trimmed = line.trim();
+                            if (!trimmed) return <div key={i} className="h-2"></div>;
+                            const isCommand = /^(?:\$|In:|Linje|\d+:)/.test(trimmed);
+                            const isResult = /^->|Out:/.test(trimmed);
+                            return (
+                                <div key={i} className={`flex gap-3 mb-1 ${isCommand ? 'text-indigo-900 mt-2 font-bold bg-indigo-50/30 -mx-2 px-2 py-0.5 rounded' : isResult ? 'text-emerald-800 pl-4 border-l-2 border-emerald-200' : 'text-slate-700 italic'}`}>
+                                    <span className="flex-1">{trimmed}</span>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        } else {
+            // Text part - Check for Code Blocks inside
+            const subParts = splitByCode(part.content);
+            subParts.forEach((sub, subIdx) => {
+                if (sub.type === 'code') {
+                    finalElements.push(
+                        <div key={`code-${idx}-${subIdx}`} className="my-4 rounded-lg overflow-hidden border border-slate-200 shadow-sm">
+                            <div className="bg-slate-800 text-slate-400 px-3 py-1 text-[9px] font-mono font-bold border-b border-slate-700 flex justify-between">
+                                <span>KODE / UTREGNING</span>
+                            </div>
+                            <pre className="bg-[#1e1e1e] text-emerald-400 p-4 text-xs font-mono overflow-x-auto whitespace-pre">
+                                <code>{sub.content}</code>
+                            </pre>
+                        </div>
+                    );
+                } else {
+                    // Standard LaTeX Text
+                    finalElements.push(
+                        <span key={`text-${idx}-${subIdx}`} className="tex2jax_process">
+                            {sub.content}
+                        </span>
+                    );
+                }
+            });
+        }
+    });
 
-    return parts.length > 0 ? parts : [cleanText];
+    return finalElements;
   };
 
   return (
     <div 
       ref={containerRef} 
-      className={`math-content tex2jax_process transition-opacity duration-300 ${isRendered ? 'opacity-100' : 'opacity-0'} ${className}`}
+      className={`math-content transition-opacity duration-300 ${isRendered ? 'opacity-100' : 'opacity-0'} ${className}`}
     >
       {processContent(content)}
     </div>

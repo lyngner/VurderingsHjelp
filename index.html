@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="no">
 <head>
@@ -32,7 +33,9 @@
     </style>
     <script>
       window.MathJax = {
-        tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']], processEscapes: true },
+        // v8.0.37: Removed '$' delimiters to prevent accidental parsing of text or currency as math.
+        // Only explicit LaTeX delimiters \( ... \) and \[ ... \] are now allowed.
+        tex: { inlineMath: [['\\(', '\\)']], displayMath: [['\\[', '\\]']], processEscapes: true },
         options: { enableMenu: false, processHtmlClass: 'tex2jax_process' },
         startup: { pageReady: () => MathJax.startup.defaultPageReady() }
       };

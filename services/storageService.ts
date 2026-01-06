@@ -35,9 +35,26 @@ const openDB = (): Promise<IDBDatabase> => {
 export const clearAllData = async (): Promise<void> => {
   return new Promise((resolve, reject) => {
     const request = indexedDB.deleteDatabase(DB_NAME);
-    request.onsuccess = () => resolve();
+    request.onsuccess = () => {
+        // Clear local settings too
+        localStorage.removeItem('APP_SETTINGS_FORCE_FLASH');
+        resolve();
+    }
     request.onerror = () => reject(request.error);
   });
+};
+
+// v8.1.2: Settings Persistence
+export const getSetting = (key: string): boolean => {
+    try {
+        return localStorage.getItem(`APP_SETTINGS_${key}`) === 'true';
+    } catch { return false; }
+};
+
+export const saveSetting = (key: string, value: boolean) => {
+    try {
+        localStorage.setItem(`APP_SETTINGS_${key}`, String(value));
+    } catch {}
 };
 
 export const getStorageStats = async (): Promise<{ projects: number, candidates: number, media: number }> => {
@@ -153,7 +170,10 @@ export const saveProject = async (project: Project): Promise<void> => {
     const stripData = (p: Page) => { delete p.base64Data; };
     cleanProject.taskFiles.forEach(stripData);
     cleanProject.unprocessedPages?.forEach(stripData);
+    // v7.9.44: Calculate and store statistics
     cleanProject.candidateCount = project.candidates?.length || 0;
+    cleanProject.evaluatedCount = project.candidates?.filter(c => c.status === 'evaluated').length || 0;
+    
     delete cleanProject.candidates;
     transaction.objectStore(STORE_NAME).put({ ...cleanProject, updatedAt: Date.now() });
     transaction.oncomplete = () => resolve();

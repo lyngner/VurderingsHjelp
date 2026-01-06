@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Project, Rubric, RubricCriterion } from '../types';
 import { LatexRenderer, Spinner } from './SharedUI';
 import { improveRubricWithStudentData } from '../services/geminiService';
@@ -20,11 +20,33 @@ export const RubricStep: React.FC<RubricStepProps> = ({
   handleRegenerateCriterion
 }) => {
   const [selectedTask, setSelectedTask] = useState<{ num: string, part: string } | null>(null);
+  // v8.2.5: Theme selection state
+  const [selectedTheme, setSelectedTheme] = useState<string | null>(null);
+  
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingHeaderId, setEditingHeaderId] = useState<string | null>(null);
   const [editingErrorsId, setEditingErrorsId] = useState<string | null>(null);
   const [localLoading, setLocalLoading] = useState<string | null>(null);
   const [isImproving, setIsImproving] = useState(false);
+  const [progressSim, setProgressSim] = useState(0);
+
+  // Simulated progress bar for heavy tasks (v8.2.0: Now with real text updates)
+  useEffect(() => {
+      let interval: any;
+      if (rubricStatus.loading || isImproving) {
+          setProgressSim(5);
+          interval = setInterval(() => {
+              setProgressSim(prev => {
+                  if (prev >= 95) return prev; // Stall at 95 until done
+                  return prev + Math.random() * 2;
+              });
+          }, 300);
+      } else {
+          setProgressSim(100);
+          setTimeout(() => setProgressSim(0), 500);
+      }
+      return () => clearInterval(interval);
+  }, [rubricStatus.loading, isImproving]);
 
   const criteria = activeProject.rubric?.criteria || [];
 
@@ -76,28 +98,33 @@ export const RubricStep: React.FC<RubricStepProps> = ({
   }, [criteria]);
 
   const filteredCriteria = useMemo(() => {
-    const sortCriteria = (list: RubricCriterion[]) => {
-      return [...list].sort((a, b) => {
-        const partA = (a.part || "Del 1").toLowerCase().includes("2") ? 2 : 1;
-        const partB = (b.part || "Del 1").toLowerCase().includes("2") ? 2 : 1;
-        if (partA !== partB) return partA - partB;
-        const numA = parseInt(String(a.taskNumber).replace(/[^0-9]/g, '')) || 0;
-        const numB = parseInt(String(b.taskNumber).replace(/[^0-9]/g, '')) || 0;
-        if (numA !== numB) return numA - numB;
-        return (a.subTask || "").localeCompare(b.subTask || "");
-      });
-    };
+    let result = [...criteria];
 
-    if (!selectedTask) return sortCriteria(criteria);
-    
-    const filtered = criteria.filter(c => {
-      const groupKey = (c.part || "Del 1").toLowerCase().includes("2") ? "Del 2" : "Del 1";
-      const cleanNum = String(c.taskNumber || "").replace(/[^0-9]/g, '');
-      return cleanNum === selectedTask.num && groupKey === selectedTask.part;
+    // Filter by selected task in sidebar
+    if (selectedTask) {
+        result = result.filter(c => {
+            const groupKey = (c.part || "Del 1").toLowerCase().includes("2") ? "Del 2" : "Del 1";
+            const cleanNum = String(c.taskNumber || "").replace(/[^0-9]/g, '');
+            return cleanNum === selectedTask.num && groupKey === selectedTask.part;
+        });
+    }
+
+    // v8.2.5: Filter by selected theme
+    if (selectedTheme) {
+        result = result.filter(c => c.tema === selectedTheme);
+    }
+
+    // Sort
+    return result.sort((a, b) => {
+      const partA = (a.part || "Del 1").toLowerCase().includes("2") ? 2 : 1;
+      const partB = (b.part || "Del 1").toLowerCase().includes("2") ? 2 : 1;
+      if (partA !== partB) return partA - partB;
+      const numA = parseInt(String(a.taskNumber).replace(/[^0-9]/g, '')) || 0;
+      const numB = parseInt(String(b.taskNumber).replace(/[^0-9]/g, '')) || 0;
+      if (numA !== numB) return numA - numB;
+      return (a.subTask || "").localeCompare(b.subTask || "");
     });
-    
-    return sortCriteria(filtered);
-  }, [selectedTask, criteria]);
+  }, [selectedTask, selectedTheme, criteria]);
 
   // Helper to generate a truly unique ID for editing state
   const getUniqueId = (c: RubricCriterion) => {
@@ -156,7 +183,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
         <Spinner size="w-12 h-12" />
         <div className="space-y-2">
           <h2 className="text-xl font-black text-slate-800 uppercase tracking-widest">Genererer rettemanual</h2>
-          <p className="text-slate-400 text-xs font-bold uppercase tracking-widest animate-pulse">Analyserer oppgaver og løsninger...</p>
+          <p className="text-slate-400 text-xs font-bold uppercase tracking-widest animate-pulse">{rubricStatus.text || "Analyserer oppgaver..."}</p>
         </div>
       </div>
     );
@@ -181,11 +208,11 @@ export const RubricStep: React.FC<RubricStepProps> = ({
         
         <nav className="flex-1 overflow-y-auto p-3 space-y-6 custom-scrollbar">
           <button 
-            onClick={() => setSelectedTask(null)}
-            className={`w-full text-left px-4 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all flex justify-between items-center ${!selectedTask ? 'bg-slate-800 text-white shadow-md' : 'text-slate-400 hover:bg-slate-50'}`}
+            onClick={() => { setSelectedTask(null); setSelectedTheme(null); }}
+            className={`w-full text-left px-4 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all flex justify-between items-center ${(!selectedTask && !selectedTheme) ? 'bg-slate-800 text-white shadow-md' : 'text-slate-400 hover:bg-slate-50'}`}
           >
             <span>Alle Oppgaver</span>
-            <span className={`px-2 py-0.5 rounded-full text-[8px] ${!selectedTask ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-400'}`}>
+            <span className={`px-2 py-0.5 rounded-full text-[8px] ${(!selectedTask && !selectedTheme) ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-400'}`}>
               {activeProject.rubric.totalMaxPoints.toFixed(1)} p
             </span>
           </button>
@@ -203,7 +230,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                    return (
                      <button 
                        key={`del1-${num}`}
-                       onClick={() => setSelectedTask({ num, part: "Del 1" })}
+                       onClick={() => { setSelectedTask({ num, part: "Del 1" }); setSelectedTheme(null); }}
                        className={`w-full text-left px-4 py-2 rounded-lg font-black text-[10px] uppercase tracking-widest transition-all flex justify-between items-center ${isActive ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:bg-indigo-50'}`}
                      >
                        <span>Oppgave {num}</span>
@@ -228,7 +255,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                    return (
                      <button 
                        key={`del2-${num}`}
-                       onClick={() => setSelectedTask({ num, part: "Del 2" })}
+                       onClick={() => { setSelectedTask({ num, part: "Del 2" }); setSelectedTheme(null); }}
                        className={`w-full text-left px-4 py-2 rounded-lg font-black text-[10px] uppercase tracking-widest transition-all flex justify-between items-center ${isActive ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-500 hover:bg-emerald-50'}`}
                      >
                        <span>Oppgave {num}</span>
@@ -242,49 +269,80 @@ export const RubricStep: React.FC<RubricStepProps> = ({
         </nav>
 
         <div className="p-3 border-t bg-slate-50/50 shrink-0 space-y-2">
-           <button 
-             onClick={handleAnalyzeStudentErrors} 
-             disabled={isImproving || rubricStatus.loading} 
-             title="Lar KI analysere alle transkriberte elevsvar for å finne vanlige feil og oppdatere rettemanualen automatisk."
-             className="w-full py-3 rounded-xl bg-purple-600 text-white font-black text-[9px] uppercase tracking-widest shadow-lg hover:bg-purple-700 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-           >
-             {isImproving ? <Spinner size="w-3 h-3" color="text-white" /> : '🧠 Analyser Elevfeil'}
-           </button>
-           
-           <button 
-             onClick={handleGenerateRubric} 
-             disabled={rubricStatus.loading || isImproving} 
-             title="Sletter alt og genererer en helt ny rettemanual fra oppgavefilene"
-             className="w-full py-3 rounded-xl border border-dashed text-[9px] font-black uppercase text-slate-400 hover:text-indigo-600 hover:bg-white transition-all"
-           >
-             {rubricStatus.loading ? <Spinner size="w-3 h-3 mx-auto" /> : 'Lag helt ny manual ↻'}
-           </button>
+           {(isImproving || (rubricStatus.loading && activeProject.rubric)) ? (
+               <div className="bg-white p-4 rounded-xl border border-indigo-100 shadow-sm animate-in fade-in slide-in-from-bottom-2">
+                   <div className="flex justify-between items-center mb-2">
+                       <span className="text-[9px] font-black uppercase text-indigo-600 tracking-widest">
+                           {isImproving ? "Analyserer..." : "Genererer..."}
+                       </span>
+                       <Spinner size="w-3 h-3" />
+                   </div>
+                   <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                       <div className="h-full bg-indigo-500 transition-all duration-300 rounded-full" style={{ width: `${progressSim}%` }}></div>
+                   </div>
+                   <div className="mt-2 text-[8px] text-slate-400 font-medium truncate">
+                       {rubricStatus.text || "Jobber med saken..."}
+                   </div>
+               </div>
+           ) : (
+               <>
+                   <button 
+                     onClick={handleAnalyzeStudentErrors} 
+                     disabled={isImproving || rubricStatus.loading} 
+                     title="Lar KI analysere alle transkriberte elevsvar for å finne vanlige feil og oppdatere rettemanualen automatisk."
+                     className="w-full py-3 rounded-xl bg-white border border-indigo-100 text-indigo-600 font-black text-[9px] uppercase tracking-widest hover:bg-indigo-50 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                   >
+                     🧠 Analyser Elevfeil
+                   </button>
+                   
+                   <button 
+                     onClick={handleGenerateRubric} 
+                     disabled={rubricStatus.loading || isImproving} 
+                     title="Sletter alt og genererer en helt ny rettemanual fra oppgavefilene"
+                     className="w-full py-3 rounded-xl bg-white border border-slate-200 text-slate-500 font-black text-[9px] uppercase tracking-widest hover:bg-slate-50 hover:text-slate-700 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                   >
+                     Lag ny manual ↻
+                   </button>
+               </>
+           )}
         </div>
       </aside>
 
       <main className="flex-1 overflow-y-auto custom-scrollbar p-6 h-full bg-[#F8FAFC]">
-        <div className="max-w-5xl mx-auto space-y-6 pb-20">
+        {/* v8.3.0: Changed max-w-5xl to max-w-[1800px] to use full screen */}
+        <div className="max-w-[1800px] mx-auto space-y-6 pb-20">
           
           <header className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-1 bg-indigo-600"></div>
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
               <div className="min-w-0 flex-1">
+                {/* v8.2.5: Dynamic Title */}
                 <h2 className="text-xl font-black text-slate-800 leading-tight tracking-tighter">
                    {activeProject.rubric.title}
                 </h2>
                 {uniqueThemes.length > 0 && (
                   <div className="flex flex-wrap gap-2 mt-3">
-                    {uniqueThemes.map(t => (
-                      <span key={t} className="text-[9px] font-black text-indigo-500 uppercase tracking-wide bg-indigo-50 px-2 py-1 rounded-md border border-indigo-100/50">
-                        {t}
-                      </span>
-                    ))}
+                    {uniqueThemes.map(t => {
+                      const isSelected = selectedTheme === t;
+                      return (
+                        <button 
+                          key={t} 
+                          onClick={() => { setSelectedTheme(isSelected ? null : t); setSelectedTask(null); }}
+                          className={`text-[9px] font-black uppercase tracking-wide px-2 py-1 rounded-md border transition-all ${isSelected ? 'bg-indigo-600 text-white border-indigo-700 shadow-sm' : 'bg-indigo-50 text-indigo-500 border-indigo-100/50 hover:bg-indigo-100'}`}
+                        >
+                          {t}
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
-                <div className="flex gap-2 mt-3">
-                   <span className="text-[8px] font-black text-slate-400 uppercase tracking-[0.1em]">
-                      {selectedTask ? `Viser Oppgave ${selectedTask.num} (${selectedTask.part})` : 'Viser hele rettemanualen'}
-                   </span>
+                {/* v8.2.5: Removed static "Viser hele rettemanualen" text */}
+                <div className="flex gap-2 mt-3 h-4">
+                   {(selectedTask || selectedTheme) && (
+                     <span className="text-[8px] font-black text-slate-400 uppercase tracking-[0.1em] animate-in fade-in">
+                        {selectedTask ? `Filtrert på: Oppgave ${selectedTask.num}` : `Filtrert på tema: ${selectedTheme}`}
+                     </span>
+                   )}
                 </div>
               </div>
               <div className="shrink-0 bg-slate-900 px-6 py-3 rounded-2xl shadow-lg text-center">
@@ -295,136 +353,140 @@ export const RubricStep: React.FC<RubricStepProps> = ({
           </header>
 
           <div className="space-y-6">
-            {filteredCriteria.map((crit, idx) => {
-              const uniqueId = getUniqueId(crit);
-              const isEditingHeader = editingHeaderId === uniqueId;
-              const isEditingSolution = editingId === uniqueId;
-              const isEditingErrors = editingErrorsId === uniqueId;
-              const isLoading = localLoading === crit.name;
-              const isDel2 = (crit.part || "").toLowerCase().includes('2');
-              const cleanNum = String(crit.taskNumber || "").replace(/[^0-9]/g, '');
-              const cleanSub = String(crit.subTask || "").toUpperCase().replace(/[^A-Z]/g, '');
-              const badgeLabel = `${cleanNum}${cleanSub}`;
+            {filteredCriteria.length === 0 ? (
+                <div className="text-center py-20 opacity-30 text-slate-400 font-black text-xs uppercase tracking-widest">Ingen oppgaver matcher filteret</div>
+            ) : (
+                filteredCriteria.map((crit, idx) => {
+                  const uniqueId = getUniqueId(crit);
+                  const isEditingHeader = editingHeaderId === uniqueId;
+                  const isEditingSolution = editingId === uniqueId;
+                  const isEditingErrors = editingErrorsId === uniqueId;
+                  const isLoading = localLoading === crit.name;
+                  const isDel2 = (crit.part || "").toLowerCase().includes('2');
+                  const cleanNum = String(crit.taskNumber || "").replace(/[^0-9]/g, '');
+                  const cleanSub = String(crit.subTask || "").toUpperCase().replace(/[^A-Z]/g, '');
+                  const badgeLabel = `${cleanNum}${cleanSub}`;
 
-              return (
-                <div key={uniqueId} className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden relative">
-                  {isLoading && (
-                    <div className="absolute inset-0 bg-white/80 z-20 flex flex-col items-center justify-center gap-3 backdrop-blur-[2px] animate-in fade-in duration-300">
-                      <Spinner size="w-10 h-10" />
-                      <p className="text-[10px] font-black uppercase tracking-[0.3em] text-indigo-600 animate-pulse">Oppdaterer oppgave...</p>
-                    </div>
-                  )}
-                  <div className="px-6 py-4 border-b border-slate-50 flex justify-between items-center bg-slate-50/20 flex-wrap gap-4">
-                    <div className="flex items-center gap-4 min-w-0 flex-1">
-                      <div className={`w-12 h-12 rounded-xl text-white flex flex-col items-center justify-center shadow-lg shrink-0 ${isDel2 ? 'bg-emerald-600' : 'bg-slate-800'}`}>
-                        <span className="text-[6px] font-black opacity-40 uppercase tracking-tighter mb-0.5">{isDel2 ? 'Del 2' : 'Del 1'}</span>
-                        <div className="text-sm font-black leading-none">
-                           {badgeLabel}
+                  return (
+                    <div key={uniqueId} className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden relative animate-in fade-in slide-in-from-bottom-2">
+                      {isLoading && (
+                        <div className="absolute inset-0 bg-white/80 z-20 flex flex-col items-center justify-center gap-3 backdrop-blur-[2px] animate-in fade-in duration-300">
+                          <Spinner size="w-10 h-10" />
+                          <p className="text-[10px] font-black uppercase tracking-[0.3em] text-indigo-600 animate-pulse">Oppdaterer oppgave...</p>
                         </div>
-                      </div>
-                      <div className="min-w-0 flex-1 group">
-                        <div className="flex items-center justify-between mb-0.5">
-                           <input 
-                             value={crit.tema || ""} 
-                             placeholder="TEMA..." 
-                             onChange={e => handleFieldChange(crit, 'tema', e.target.value)} 
-                             className={`text-[9px] font-black uppercase tracking-widest bg-transparent border-none outline-none w-full ${isDel2 ? 'text-emerald-600' : 'text-indigo-400'}`} 
-                           />
-                           <div className="flex gap-3 items-center">
-                             <button 
-                               onClick={() => onRegenerate(crit.name)} 
-                               title="Be KI generere et nytt løsningsforslag for denne spesifikke oppgaven"
-                               className="text-[8px] font-black uppercase text-indigo-500 bg-indigo-50 px-2 py-1 rounded-md border border-indigo-100 hover:bg-indigo-100 transition-all flex items-center gap-1"
-                             >
-                               ↻ Last inn på nytt
-                             </button>
-                             <button onClick={() => setEditingHeaderId(isEditingHeader ? null : uniqueId)} className="text-[8px] font-black uppercase text-slate-400 hover:underline transition-all">
-                                {isEditingHeader ? 'LAGRE' : 'REDIGER'}
-                             </button>
-                           </div>
-                        </div>
-                        {isEditingHeader ? (
-                          <input 
-                            autoFocus
-                            value={crit.description} 
-                            onChange={e => handleFieldChange(crit, 'description', e.target.value)} 
-                            className="text-lg font-bold text-slate-700 bg-white ring-2 ring-indigo-50 outline-none w-full rounded-lg p-2 transition-all border border-indigo-100" 
-                          />
-                        ) : (
-                          <div className="text-lg font-bold text-slate-700 tracking-tight">
-                            <LatexRenderer content={crit.description} />
+                      )}
+                      <div className="px-6 py-4 border-b border-slate-50 flex justify-between items-center bg-slate-50/20 flex-wrap gap-4">
+                        <div className="flex items-center gap-4 min-w-0 flex-1">
+                          <div className={`w-12 h-12 rounded-xl text-white flex flex-col items-center justify-center shadow-lg shrink-0 ${isDel2 ? 'bg-emerald-600' : 'bg-slate-800'}`}>
+                            <span className="text-[6px] font-black opacity-40 uppercase tracking-tighter mb-0.5">{isDel2 ? 'Del 2' : 'Del 1'}</span>
+                            <div className="text-sm font-black leading-none">
+                               {badgeLabel}
+                            </div>
                           </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex gap-3 items-center shrink-0">
-                      <div className="text-center bg-white p-2 rounded-xl border shadow-sm">
-                        <input 
-                          type="number" 
-                          step="0.5"
-                          value={crit.maxPoints} 
-                          onChange={e => handleFieldChange(crit, 'maxPoints', Number(e.target.value) || 0)} 
-                          className={`text-xl font-black w-12 text-center bg-transparent outline-none ${isDel2 ? 'text-emerald-600' : 'text-indigo-600'}`} 
-                        />
-                        <div className="text-[8px] font-black text-slate-300 uppercase tracking-widest">Poeng</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="p-6">
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                      <div className="space-y-3">
-                        <div className="flex justify-between items-center">
-                          <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.1em] flex items-center gap-1.5">
-                            <div className={`w-2 h-2 rounded-full ${isDel2 ? 'bg-emerald-400' : 'bg-indigo-400'}`}></div>
-                            Løsningsforslag
-                          </h4>
-                          <button onClick={() => setEditingId(isEditingSolution ? null : uniqueId)} className="text-[9px] font-black uppercase text-indigo-500 hover:underline">
-                            {isEditingSolution ? 'Fullfør' : 'Rediger'}
-                          </button>
+                          <div className="min-w-0 flex-1 group">
+                            <div className="flex items-center justify-between mb-0.5">
+                               <input 
+                                 value={crit.tema || ""} 
+                                 placeholder="TEMA..." 
+                                 onChange={e => handleFieldChange(crit, 'tema', e.target.value)} 
+                                 className={`text-[9px] font-black uppercase tracking-widest bg-transparent border-none outline-none w-full ${isDel2 ? 'text-emerald-600' : 'text-indigo-400'}`} 
+                               />
+                               <div className="flex gap-3 items-center">
+                                 <button 
+                                   onClick={() => onRegenerate(crit.name)} 
+                                   title="Be KI generere et nytt løsningsforslag for denne spesifikke oppgaven"
+                                   className="text-[8px] font-black uppercase text-indigo-500 bg-indigo-50 px-2 py-1 rounded-md border border-indigo-100 hover:bg-indigo-100 transition-all flex items-center gap-1"
+                                 >
+                                   ↻ Last inn på nytt
+                                 </button>
+                                 <button onClick={() => setEditingHeaderId(isEditingHeader ? null : uniqueId)} className="text-[8px] font-black uppercase text-slate-400 hover:underline transition-all">
+                                    {isEditingHeader ? 'LAGRE' : 'REDIGER'}
+                                 </button>
+                               </div>
+                            </div>
+                            {isEditingHeader ? (
+                              <input 
+                                autoFocus
+                                value={crit.description} 
+                                onChange={e => handleFieldChange(crit, 'description', e.target.value)} 
+                                className="text-lg font-bold text-slate-700 bg-white ring-2 ring-indigo-50 outline-none w-full rounded-lg p-2 transition-all border border-indigo-100" 
+                              />
+                            ) : (
+                              <div className="text-lg font-bold text-slate-700 tracking-tight">
+                                <LatexRenderer content={crit.description} />
+                              </div>
+                            )}
+                          </div>
                         </div>
-                        <div className={`rounded-xl p-6 border min-h-[150px] transition-all overflow-x-auto custom-scrollbar ${isEditingSolution ? 'bg-white border-indigo-200' : 'bg-slate-50 border-slate-100 shadow-inner'}`}>
-                          {isEditingSolution ? (
-                            <textarea 
-                              value={(crit.suggestedSolution || "").replace(/\\\\/g, '\\\\\n')} 
-                              autoFocus 
-                              onChange={e => handleFieldChange(crit, 'suggestedSolution', e.target.value)} 
-                              className="w-full bg-transparent outline-none text-sm font-medium text-slate-600 resize-none h-48 leading-relaxed custom-scrollbar" 
+                        <div className="flex gap-3 items-center shrink-0">
+                          <div className="text-center bg-white p-2 rounded-xl border shadow-sm">
+                            <input 
+                              type="number" 
+                              step="0.5"
+                              value={crit.maxPoints} 
+                              onChange={e => handleFieldChange(crit, 'maxPoints', Number(e.target.value) || 0)} 
+                              className={`text-xl font-black w-12 text-center bg-transparent outline-none ${isDel2 ? 'text-emerald-600' : 'text-indigo-600'}`} 
                             />
-                          ) : (
-                            <LatexRenderer content={crit.suggestedSolution} className="text-slate-800 text-sm leading-relaxed" />
-                          )}
+                            <div className="text-[8px] font-black text-slate-300 uppercase tracking-widest">Poeng</div>
+                          </div>
                         </div>
                       </div>
 
-                      <div className="space-y-3">
-                        <div className="flex justify-between items-center">
-                          <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.1em] flex items-center gap-1.5">
-                            <div className="w-2 h-2 rounded-full bg-rose-400"></div>
-                            Retteveiledning (Vanlige feil)
-                          </h4>
-                          <button onClick={() => setEditingErrorsId(isEditingErrors ? null : uniqueId)} className="text-[9px] font-black uppercase text-rose-500 hover:underline">
-                            {isEditingErrors ? 'Fullfør' : 'Rediger'}
-                          </button>
-                        </div>
-                        <div className={`rounded-xl p-6 border min-h-[150px] transition-all overflow-x-auto custom-scrollbar ${isEditingErrors ? 'bg-white border-rose-200' : 'bg-rose-50/5 border-rose-100/30 shadow-inner'}`}>
-                          {isEditingErrors ? (
-                            <textarea 
-                              value={(crit.commonErrors || "").replace(/\\\\/g, '\\\\\n')} 
-                              autoFocus 
-                              onChange={e => handleFieldChange(crit, 'commonErrors', e.target.value)} 
-                              className="w-full bg-transparent outline-none text-sm font-bold text-slate-700 resize-none h-48 leading-relaxed custom-scrollbar" 
-                            />
-                          ) : (
-                            <LatexRenderer content={crit.commonErrors || "Ingen spesifikke feil registrert ennå."} className="text-slate-700 font-bold text-sm leading-relaxed" />
-                          )}
+                      <div className="p-6">
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                          <div className="space-y-3">
+                            <div className="flex justify-between items-center">
+                              <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.1em] flex items-center gap-1.5">
+                                <div className={`w-2 h-2 rounded-full ${isDel2 ? 'bg-emerald-400' : 'bg-indigo-400'}`}></div>
+                                Løsningsforslag
+                              </h4>
+                              <button onClick={() => setEditingId(isEditingSolution ? null : uniqueId)} className="text-[9px] font-black uppercase text-indigo-500 hover:underline">
+                                {isEditingSolution ? 'Fullfør' : 'Rediger'}
+                              </button>
+                            </div>
+                            <div className={`rounded-xl p-6 border min-h-[150px] transition-all overflow-x-auto custom-scrollbar ${isEditingSolution ? 'bg-white border-indigo-200' : 'bg-slate-50 border-slate-100 shadow-inner'}`}>
+                              {isEditingSolution ? (
+                                <textarea 
+                                  value={(crit.suggestedSolution || "").replace(/\\\\/g, '\\\\\n')} 
+                                  autoFocus 
+                                  onChange={e => handleFieldChange(crit, 'suggestedSolution', e.target.value)} 
+                                  className="w-full bg-transparent outline-none text-sm font-medium text-slate-600 resize-none h-48 leading-relaxed custom-scrollbar" 
+                                />
+                              ) : (
+                                <LatexRenderer content={crit.suggestedSolution} className="text-slate-800 text-sm leading-relaxed" />
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="space-y-3">
+                            <div className="flex justify-between items-center">
+                              <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.1em] flex items-center gap-1.5">
+                                <div className="w-2 h-2 rounded-full bg-rose-400"></div>
+                                Retteveiledning (Vanlige feil)
+                              </h4>
+                              <button onClick={() => setEditingErrorsId(isEditingErrors ? null : uniqueId)} className="text-[9px] font-black uppercase text-rose-500 hover:underline">
+                                {isEditingErrors ? 'Fullfør' : 'Rediger'}
+                              </button>
+                            </div>
+                            <div className={`rounded-xl p-6 border min-h-[150px] transition-all overflow-x-auto custom-scrollbar ${isEditingErrors ? 'bg-white border-rose-200' : 'bg-rose-50/5 border-rose-100/30 shadow-inner'}`}>
+                              {isEditingErrors ? (
+                                <textarea 
+                                  value={(crit.commonErrors || "").replace(/\\\\/g, '\\\\\n')} 
+                                  autoFocus 
+                                  onChange={e => handleFieldChange(crit, 'commonErrors', e.target.value)} 
+                                  className="w-full bg-transparent outline-none text-sm font-bold text-slate-700 resize-none h-48 leading-relaxed custom-scrollbar" 
+                                />
+                              ) : (
+                                <LatexRenderer content={crit.commonErrors || "Ingen spesifikke feil registrert ennå."} className="text-slate-700 font-bold text-sm leading-relaxed" />
+                              )}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                </div>
-              );
-            })}
+                  );
+                })
+            )}
           </div>
         </div>
       </main>

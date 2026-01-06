@@ -78,7 +78,8 @@ const extractWordMetadata = async (arrayBuffer: ArrayBuffer): Promise<string> =>
       const content = await zip.files[fileName].async('text');
       const matches = content.match(/<w:t[^>]*>(.*?)<\/w:t>/g);
       if (matches) {
-        metaText += matches.map(m => m.replace(/<[^>]+>/g, '')).join('') + "\n";
+        // v7.9.38: Changed join('') to join(' ') to prevent "124" + "11.12.2025" becoming "12411.12.2025"
+        metaText += matches.map(m => m.replace(/<[^>]+>/g, '')).join(' ') + "\n";
       }
     }
     return metaText.trim();
@@ -209,6 +210,7 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
             let attachedImages: { data: string, mimeType: string }[] = [];
             
             const options = {
+                ignoreEmptyParagraphs: false, // v8.0.19: Catch spacing in tables
                 convertImage: mammoth.images.inline((element) => {
                     return element.read("base64").then((imageBuffer) => {
                         const mime = element.contentType;
@@ -230,6 +232,24 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
                 
             let txt = new DOMParser().parseFromString(cleanText, 'text/html').body.textContent || "";
             
+            // v8.0.19: TABLE RESCUE FALLBACK
+            // Hvis mammoth gir tom streng (pga flytende tabeller/tekstbokser), prøv rå XML-uthenting.
+            if (!txt || txt.trim().length === 0) {
+               console.warn("Mammoth fant ingen tekst (mulig kompleks tabell), forsøker XML-redning...");
+               try {
+                 const zip = await JSZip.loadAsync(buffer);
+                 const docXml = await zip.file("word/document.xml")?.async("text");
+                 if (docXml) {
+                    // Brutal stripping av tags, men redder innholdet.
+                    // Erstatter w:p (paragraf) med linjeskift for å bevare struktur.
+                    txt = docXml.replace(/<w:p.*?>/g, '\n').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+                    txt = "[RÅ XML-UTTREKK - FORMATERING KAN VÆRE TAPT]\n" + txt;
+                 }
+               } catch (fallbackErr) {
+                 console.error("XML-redning feilet:", fallbackErr);
+               }
+            }
+
             // v7.9.34: Payload Safety Cap
             if (txt.length > 500000) {
                console.warn("Word-dokument for stort, kutter innhold.");
@@ -254,7 +274,8 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
         };
 
         const timeoutPromise = new Promise<Page[]>((_, reject) => 
-            setTimeout(() => reject(new Error("Timeout ved lesing av Word-fil (lokal)")), 10000)
+            // v8.0.19: Økt til 30s for tunge filer med tabeller/bilder
+            setTimeout(() => reject(new Error("Timeout ved lesing av Word-fil (lokal)")), 30000)
         );
 
         const pages = await Promise.race([processPromise(), timeoutPromise]);
@@ -266,7 +287,8 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
             id: Math.random().toString(36).substring(7),
             fileName: safeName,
             contentHash: generateHash(file.name),
-            mimeType: 'application/unknown',
+            mimeType: 'text/plain', // Set to text/plain so we see the error text in Preview
+            rawText: `Feil ved lesing av fil: ${e.message}`, 
             status: 'error',
             statusLabel: e.message?.includes("Timeout") ? 'Tidsavbrudd (Lokal)' : 'Filfeil (Word)',
             rotation: 0

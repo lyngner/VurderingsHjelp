@@ -1,5 +1,5 @@
 
-export const SYSTEM_VERSION = "v7.9.36";
+export const SYSTEM_VERSION = "v8.3.0";
 
 export interface IdentifiedTask {
   taskNumber: string;
@@ -39,6 +39,7 @@ export interface TaskEvaluation {
   max: number;
   comment: string;
   tema?: string;
+  reasoning?: string; // v8.1.8: Internal reasoning field for CoT
 }
 
 export interface Candidate {
@@ -80,6 +81,7 @@ export interface Project {
   createdAt: number;
   updatedAt: number;
   candidateCount?: number;
+  evaluatedCount?: number; 
   taskDescription: string;
   taskFiles: Page[];
   candidates: Candidate[];

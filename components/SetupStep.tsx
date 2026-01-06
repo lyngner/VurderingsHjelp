@@ -2,6 +2,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Project, Page, Candidate } from '../types';
 import { Spinner } from './SharedUI';
+import { getMedia } from '../services/storageService';
 
 interface SetupStepProps {
   activeProject: Project;
@@ -21,6 +22,7 @@ interface SetupStepProps {
   updateActiveProject: (updates: Partial<Project>) => void;
   onNavigateToCandidate?: (id: string) => void;
   handleSkipFile?: () => void; // v7.9.33: New Prop
+  handleRetryFailed?: () => void; // v7.9.44: New Prop
 }
 
 export const SetupStep: React.FC<SetupStepProps> = ({
@@ -40,11 +42,17 @@ export const SetupStep: React.FC<SetupStepProps> = ({
   handleRetryPage,
   updateActiveProject,
   onNavigateToCandidate,
-  handleSkipFile
+  handleSkipFile,
+  handleRetryFailed
 }) => {
   const hasRubric = !!activeProject.rubric;
   const isProQuotaError = rubricStatus.errorType === 'PRO_QUOTA';
   const [simulatedProgress, setSimulatedProgress] = useState(0);
+  
+  // v8.0.6: Preview State
+  const [previewPage, setPreviewPage] = useState<Page | null>(null);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
 
   // Simulert fremdrift for enkelt-operasjoner som tar tid (som Rubric Generation)
   useEffect(() => {
@@ -81,6 +89,25 @@ export const SetupStep: React.FC<SetupStepProps> = ({
         rubric: null
       });
     }
+  };
+
+  const handleOpenPreview = async (page: Page) => {
+    setPreviewPage(page);
+    setLoadingPreview(true);
+    try {
+      const data = await getMedia(page.id);
+      setPreviewImage(data);
+    } catch (e) {
+      console.error("Failed to load preview", e);
+      setPreviewImage(null);
+    } finally {
+      setLoadingPreview(false);
+    }
+  };
+
+  const closePreview = () => {
+    setPreviewPage(null);
+    setPreviewImage(null);
   };
 
   // Helper for å sjekke om kandidaten er komplett (klar til vurdering)
@@ -152,10 +179,11 @@ export const SetupStep: React.FC<SetupStepProps> = ({
     const totalCandidates = candidates.length;
     const totalPages = allPages.length;
     const pending = unprocessed.filter(p => p.status === 'pending').length;
+    const errorCount = unprocessed.filter(p => p.status === 'error').length; // New
     const digitalCount = allPages.filter(p => p.mimeType === 'text/plain').length;
     const handwrittenCount = totalPages - digitalCount;
 
-    return { totalCandidates, totalPages, pending, digitalCount, handwrittenCount };
+    return { totalCandidates, totalPages, pending, errorCount, digitalCount, handwrittenCount };
   }, [activeProject]);
 
   const displayProgress = useMemo(() => {
@@ -206,6 +234,36 @@ export const SetupStep: React.FC<SetupStepProps> = ({
   return (
     <div className="p-6 max-w-[1400px] mx-auto h-full flex flex-col overflow-hidden">
       
+      {/* PREVIEW MODAL v8.0.6 */}
+      {previewPage && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/90 backdrop-blur-sm animate-in fade-in" onClick={closePreview}>
+          <div className="relative max-w-4xl w-full max-h-[90vh] bg-white rounded-3xl overflow-hidden shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
+             <div className="p-4 border-b flex justify-between items-center bg-slate-50">
+                <div>
+                  <h3 className="font-bold text-sm text-slate-800">{previewPage.fileName}</h3>
+                  {previewPage.statusLabel && <p className="text-xs text-rose-600 font-bold uppercase mt-1">{previewPage.statusLabel}</p>}
+                </div>
+                <button onClick={closePreview} className="w-8 h-8 rounded-full bg-slate-200 hover:bg-slate-300 flex items-center justify-center font-bold text-slate-600">✕</button>
+             </div>
+             <div className="flex-1 overflow-auto bg-slate-100 p-8 flex items-center justify-center">
+                {loadingPreview ? (
+                  <Spinner size="w-10 h-10" />
+                ) : previewImage ? (
+                  <img src={previewImage} alt="Preview" className="max-w-full max-h-full object-contain shadow-lg border border-slate-200" />
+                ) : (
+                  <div className="text-center">
+                    <p className="text-slate-400 font-bold mb-2">Ingen bildevisning tilgjengelig</p>
+                    <p className="text-xs text-slate-300 max-w-md">Dette kan skyldes at filen er korrupt, for stor, eller at den er et Word-dokument som feilet under tekstuthenting.</p>
+                  </div>
+                )}
+             </div>
+             <div className="p-4 bg-white border-t text-xs text-slate-500 font-mono">
+                ID: {previewPage.id} • Type: {previewPage.mimeType} • Hash: {previewPage.contentHash.substring(0,8)}...
+             </div>
+          </div>
+        </div>
+      )}
+
       {isProQuotaError && (
         <div className="mb-6 bg-rose-600 text-white p-6 rounded-[32px] shadow-2xl border-b-4 border-rose-800 animate-in slide-in-from-top-4 duration-500 relative overflow-hidden shrink-0">
           <div className="flex flex-col md:flex-row justify-between items-center gap-6 relative z-10">
@@ -319,7 +377,14 @@ export const SetupStep: React.FC<SetupStepProps> = ({
 
         <div className="md:col-span-8 bg-white rounded-[45px] shadow-sm border border-slate-100 flex flex-col overflow-hidden">
            <div className="p-8 border-b bg-slate-50/20 flex justify-between items-center shrink-0">
-              <h3 className="font-black text-[10px] uppercase text-emerald-600 tracking-[0.2em]">2. Besvarelser</h3>
+              <div className="flex items-center gap-4">
+                <h3 className="font-black text-[10px] uppercase text-emerald-600 tracking-[0.2em]">2. Besvarelser</h3>
+                {stats.errorCount > 0 && handleRetryFailed && (
+                  <button onClick={handleRetryFailed} className="bg-rose-50 border border-rose-100 text-rose-600 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest hover:bg-rose-100 transition-all shadow-sm animate-pulse">
+                    ⚠️ Prøv {stats.errorCount} feilede på nytt
+                  </button>
+                )}
+              </div>
               <div className="flex gap-6 items-end">
                  <div className="text-center">
                    <div className="text-sm font-black text-slate-800">{stats.totalCandidates}</div>
@@ -419,19 +484,19 @@ export const SetupStep: React.FC<SetupStepProps> = ({
                       : (hasRubric ? 'Tolker håndskrift...' : 'Klargjør (Split/Roter)...');
 
                    return (
-                     <div key={p.id} className={`p-4 rounded-[28px] border flex justify-between items-center transition-all duration-300 ${isActive ? 'bg-white border-indigo-200 shadow-md scale-[1.02] opacity-100' : isError ? 'bg-rose-50 border-rose-100' : isSkipped ? 'bg-slate-100 border-slate-200 opacity-60' : 'bg-slate-50/50 border-slate-100 opacity-60'}`}>
+                     <div key={p.id} className={`p-4 rounded-[28px] border flex justify-between items-center transition-all duration-300 ${isActive ? 'bg-white border-indigo-200 shadow-md scale-[1.02] opacity-100' : isError ? 'bg-rose-50 border-rose-100' : isSkipped ? 'bg-slate-100 border-slate-200' : 'bg-slate-50/50 border-slate-100 opacity-60'}`}>
                         <div className="flex items-center gap-3 w-full">
                            {isActive ? (
                              <Spinner size="w-4 h-4" color="text-indigo-500" />
                            ) : isError ? (
                              <span className="text-rose-500 text-sm">⚠️</span>
                            ) : isSkipped ? (
-                             <span className="text-slate-400 text-xs">⏭️</span>
+                             <span className="text-slate-400 text-xs opacity-50">⏭️</span>
                            ) : (
                              <span className="text-slate-300 text-xs grayscale">⏳</span>
                            )}
                            <div className="overflow-hidden flex-1">
-                              <p className={`text-[10px] font-bold truncate max-w-[120px] ${isActive ? 'text-indigo-900' : isError ? 'text-rose-700' : isSkipped ? 'text-slate-500 line-through' : 'text-slate-400'}`}>{p.fileName}</p>
+                              <p className={`text-[10px] font-bold truncate max-w-[120px] ${isActive ? 'text-indigo-900' : isError ? 'text-rose-700' : isSkipped ? 'text-slate-500 line-through decoration-slate-300' : 'text-slate-400'}`}>{p.fileName}</p>
                               <div className="flex justify-between items-center">
                                 <p className={`text-[8px] font-black uppercase tracking-widest ${isActive ? 'text-indigo-500' : isError ? 'text-rose-500' : isSkipped ? 'text-slate-400' : 'text-slate-300'}`}>
                                    {isActive 
@@ -444,6 +509,17 @@ export const SetupStep: React.FC<SetupStepProps> = ({
                                   <button onClick={handleSkipFile} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-1 rounded text-[8px] font-black uppercase ml-2 transition-all hover:scale-105 shadow-sm">
                                     ⏭️ Hopp over (Utsett)
                                   </button>
+                                )}
+                                {(isSkipped || isError) && (
+                                  <div className="flex gap-1">
+                                    {/* Preview Button for failed/skipped items v8.0.6 */}
+                                    <button onClick={(e) => { e.stopPropagation(); handleOpenPreview(p); }} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-1 rounded text-[8px] font-black uppercase ml-2 transition-all hover:scale-105 shadow-sm flex items-center gap-1" title="Se fil/Feilmelding">
+                                      <span>👁️</span>
+                                    </button>
+                                    <button onClick={(e) => { e.stopPropagation(); handleRetryPage(p); }} className="bg-white hover:bg-indigo-50 text-indigo-600 border border-indigo-100 px-2 py-1 rounded text-[8px] font-black uppercase transition-all hover:scale-105 shadow-sm flex items-center gap-1" title="Legg tilbake i køen">
+                                      <span>↺</span> Prøv igjen
+                                    </button>
+                                  </div>
                                 )}
                               </div>
                            </div>

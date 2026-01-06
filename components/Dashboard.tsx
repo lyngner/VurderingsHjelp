@@ -1,20 +1,24 @@
 
 import React, { useState, useEffect } from 'react';
 import { Project, SYSTEM_VERSION, RubricCriterion } from '../types';
-import { clearAllData, getStorageStats } from '../services/storageService';
+import { clearAllData, getStorageStats, saveSetting } from '../services/storageService';
 
 interface DashboardProps {
   projects: Project[];
   onSelectProject: (project: Project) => void;
   onCreateProject: () => void;
   onDeleteProject: (id: string) => void;
+  forceFlash?: boolean;
+  setForceFlash?: (val: boolean) => void;
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({ 
   projects, 
   onSelectProject, 
   onCreateProject, 
-  onDeleteProject 
+  onDeleteProject,
+  forceFlash,
+  setForceFlash
 }) => {
   const [showSettings, setShowSettings] = useState(false);
   const [storageStats, setStorageStats] = useState<{ projects: number, candidates: number, media: number } | null>(null);
@@ -32,9 +36,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
+  const toggleForceFlash = () => {
+      if (setForceFlash) {
+          const newVal = !forceFlash;
+          setForceFlash(newVal);
+          saveSetting('FORCE_FLASH', newVal);
+      }
+  };
+
   const getProjectStats = (p: Project) => {
-    const candidateCount = p.candidates?.length || 0;
-    const evaluatedCount = p.candidates?.filter(c => c.status === 'evaluated').length || 0;
+    const candidateCount = p.candidates?.length ?? (p.candidateCount || 0);
+    // v7.9.44: Use stored evaluatedCount if candidates are not loaded (Dashboard view)
+    const evaluatedCount = p.candidates 
+        ? p.candidates.filter(c => c.status === 'evaluated').length 
+        : (p.evaluatedCount || 0);
+        
     const pageCount = (p.candidates?.reduce((acc, c) => acc + c.pages.length, 0) || 0) + (p.unprocessedPages?.length || 0);
     
     // Rubric Stats
@@ -190,6 +206,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
                      All behandling av elevbesvarelser skjer <strong>lokalt i din nettleser</strong> (IndexedDB). Ingen filer lagres på våre servere. KI-analysen sendes som krypterte transienter til Gemini API og dataene brukes <strong>ikke</strong> til trening av modeller. Du har full kontroll over dine data.
                    </p>
                  </section>
+
+                 {setForceFlash && (
+                     <section className="bg-emerald-50/50 p-6 rounded-2xl border border-emerald-100 flex justify-between items-center">
+                        <div>
+                            <h4 className="font-black uppercase text-[10px] tracking-widest text-emerald-600 mb-1 flex items-center gap-2">
+                                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                                Kostnadsmodus (Sparebluss)
+                            </h4>
+                            <p className="text-[10px] text-slate-500 max-w-[280px]">
+                                Tving systemet til å bruke <strong>Gemini Flash</strong> overalt (også på fasit og vurdering). Sparer penger og kvote, men kan gi litt enklere begrunnelser.
+                            </p>
+                        </div>
+                        <button 
+                            onClick={toggleForceFlash}
+                            className={`w-12 h-7 rounded-full p-1 transition-colors duration-300 relative ${forceFlash ? 'bg-emerald-500' : 'bg-slate-200'}`}
+                        >
+                            <div className={`w-5 h-5 bg-white rounded-full shadow-sm transition-transform duration-300 ${forceFlash ? 'translate-x-5' : 'translate-x-0'}`}></div>
+                        </button>
+                     </section>
+                 )}
 
                  <div className="grid grid-cols-2 gap-4">
                    <section>
