@@ -190,6 +190,17 @@ const sanitizeFilename = (name: string): string => {
   return namePart.replace(/\./g, '_') + extPart;
 };
 
+// Helper to convert array buffer to base64
+const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(bytes[i]);
+    }
+    return window.btoa(binary);
+};
+
 export const processFileToImages = async (file: File): Promise<Page[]> => {
   // v7.9.34: Use sanitized name for processing logic to avoid regex confusion
   const safeName = sanitizeFilename(file.name);
@@ -233,15 +244,12 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
             let txt = new DOMParser().parseFromString(cleanText, 'text/html').body.textContent || "";
             
             // v8.0.19: TABLE RESCUE FALLBACK
-            // Hvis mammoth gir tom streng (pga flytende tabeller/tekstbokser), prøv rå XML-uthenting.
             if (!txt || txt.trim().length === 0) {
                console.warn("Mammoth fant ingen tekst (mulig kompleks tabell), forsøker XML-redning...");
                try {
                  const zip = await JSZip.loadAsync(buffer);
                  const docXml = await zip.file("word/document.xml")?.async("text");
                  if (docXml) {
-                    // Brutal stripping av tags, men redder innholdet.
-                    // Erstatter w:p (paragraf) med linjeskift for å bevare struktur.
                     txt = docXml.replace(/<w:p.*?>/g, '\n').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
                     txt = "[RÅ XML-UTTREKK - FORMATERING KAN VÆRE TAPT]\n" + txt;
                  }
@@ -259,6 +267,10 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
             const combinedText = `[METADATA]:\n${metaText}\n\n[INNHOLD]:\n${txt}`;
             const id = Math.random().toString(36).substring(7);
             
+            // v8.5.7: Save original binary for Visual Preview
+            const base64Doc = arrayBufferToBase64(buffer);
+            await saveMedia(id, `data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,${base64Doc}`);
+
             return [{ 
               id, 
               fileName: safeName, // Use sanitized name

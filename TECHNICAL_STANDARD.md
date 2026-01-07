@@ -1,5 +1,5 @@
 
-# Teknisk Standard & Algoritmer (v8.3.0)
+# Teknisk Standard & Algoritmer (v8.6.0)
 
 Dette dokumentet er systemets "Grunnlov". Ved alle fremtidige oppdateringer SKAL disse reglene følges for å hindre regresjon.
 
@@ -209,3 +209,31 @@ Dette dokumentet er systemets "Grunnlov". Ved alle fremtidige oppdateringer SKAL
 ## 55. Distinct Theme Requirement (v8.2.8)
 * **Regel:** Rettemanualen må inneholde mellom 5 og 8 distinkte temaer for å sikre at ferdighetsdiagrammet blir nyttig.
 * **Krav:** Hvis prøven er smal, tvinges KI-en til å splitte temaer (f.eks. "Algebra" -> "Likninger" og "Faktorisering").
+
+## 56. Blank Cell Policy for Missing Parts (v8.4.0)
+* **Regel:** Dersom en kandidat har status "Mangler Del X" (f.eks. `2️⃣🚫`), skal cellene for oppgaver i denne delen vises som helt blanke i resultattabellen.
+* **Krav:** Det skal ikke stå `0` (som indikerer feil svar) eller `-` (som indikerer delvis fravær). Dette bekrefter visuelt at delen er ekskludert fra vurderingsgrunnlaget.
+
+## 57. Rubric-Locked Transcription Queue (v8.3.1 / v6.4.5)
+* **Regel:** Systemet skal ALDRI starte OCR/transkribering av elevsider før rettemanualen (Rubric) er ferdig generert og inneholder kriterier.
+* **Krav:** Filer i køen skal ha status "Venter..." inntil fasiten er klar. Dette forhindrer at KI-en hallusinerer oppgavenavn (som "11a") uten å ha en whitelist å sjekke mot.
+
+## 58. Deterministic Grading Scale (v8.6.0)
+* **Regel:** Karaktersetting er IKKE en AI-oppgave. Den er en matematisk funksjon av poengsum og maks-poeng.
+* **Krav:** Systemet skal ALLTID overstyre KI-ens forslag med følgende skala:
+    *   1: 0-19%
+    *   2: 20-39%
+    *   3: 40-59%
+    *   4: 60-74%
+    *   5: 75-89%
+    *   6: 90-100%
+*   **Auto-Update:** Ved manuell endring av poengsum SKAL karakteren rekalkuleres automatisk.
+
+## 59. Common Error Line Breaks (v8.3.1)
+* **Regel:** Punkter i retteveiledningen (`commonErrors`) skal alltid formateres med linjeskift mellom hvert punkt for lesbarhet.
+* **Format:** `[-0.5 p] Feil 1... \n [-1.0 p] Feil 2...`.
+
+## 60. Unified Flash Mandate (v8.5.1)
+* **Regel:** Systemet skal utelukkende bruke `gemini-3-flash-preview` til alle oppgaver, inkludert OCR, Fasit-generering og Sensor-vurdering.
+* **Forbud:** Det er ikke tillatt å bruke "Pro"-modeller i kildekoden. Variabler som `PRO_MODEL` skal peke til Flash-modellen.
+* **Begrunnelse:** Kostnadseffektivitet og hastighet. Flash er kapabel til resonneringsoppgaver når den får tilstrekkelig `thinkingBudget` eller stegvis prompting.

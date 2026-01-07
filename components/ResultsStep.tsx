@@ -1,9 +1,9 @@
 
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { Project, Candidate, RubricCriterion, TaskEvaluation } from '../types';
 import { Spinner, LatexRenderer } from './SharedUI';
 import { saveCandidate, deleteCandidate } from '../services/storageService';
-import { sanitizeTaskId, cleanTaskPair } from '../services/geminiService';
+import { sanitizeTaskId, cleanTaskPair, calculateGrade } from '../services/geminiService';
 
 interface PrintConfig {
   showGrade: boolean;
@@ -32,6 +32,11 @@ const renderTaskLabel = (num: unknown, sub: unknown): string => {
     return `${pair.taskNumber}${pair.subTask}`;
 };
 
+// Helper to format numbers with comma as decimal separator (Norwegian standard)
+const formatScore = (num: number): string => {
+    return String(num).replace('.', ',');
+};
+
 // v8.0.49: Robust Task Matcher
 const matchEvaluationToCriterion = (evalTask: TaskEvaluation, criterion: RubricCriterion): boolean => {
     const evalLabel = renderTaskLabel(evalTask.taskNumber, evalTask.subTask);
@@ -54,7 +59,7 @@ const getCandidatePartStatus = (candidate: Candidate, project: Project) => {
         d1: { status: 'missing', max: 0 }, 
         d2: { status: 'missing', max: 0 }, 
         totalMax: 0, 
-        adjustedMax: 0,
+        adjustedMax: 0, 
         isTotalComplete: false 
     };
 
@@ -188,11 +193,11 @@ const GroupStats: React.FC<{ candidates: Candidate[], project: Project }> = ({ c
        <div className="flex gap-8">
           <div>
              <div className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Snittkarakter</div>
-             <div className="text-3xl font-black text-indigo-600">{avgGrade > 0 ? avgGrade.toFixed(1) : '-'}</div>
+             <div className="text-3xl font-black text-indigo-600">{avgGrade > 0 ? formatScore(Number(avgGrade.toFixed(1))) : '-'}</div>
           </div>
           <div>
              <div className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Snittpoeng</div>
-             <div className="text-3xl font-black text-slate-800">{avgScore.toFixed(1)}</div>
+             <div className="text-3xl font-black text-slate-800">{formatScore(Number(avgScore.toFixed(1)))}</div>
           </div>
           <div>
              <div className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Snitt Måloppnåelse</div>
@@ -262,17 +267,16 @@ const SkillRadarChart: React.FC<{
   skills: { tema: string, value: number, avg: number }[],
   isGroupView?: boolean 
 }> = ({ skills, isGroupView = false }) => {
-  // v8.0.49: Relaxed constraint. Allow charts even with 1 or 2 themes, just to show SOMETHING.
   if (skills.length === 0) return <div className="p-10 text-center text-[10px] font-bold text-slate-400 uppercase print:hidden">Ingen data for diagram</div>;
 
   const size = 300;
   const center = size / 2;
   const radius = 100;
-  const angleStep = (Math.PI * 2) / (skills.length < 3 ? 3 : skills.length); // Force 3-way split minimum for layout
+  const angleStep = (Math.PI * 2) / (skills.length < 3 ? 3 : skills.length); 
 
-  const getPoints = (isAvg: boolean) => {
+  const getPoints = (useAvg: boolean) => {
     return skills.map((s, i) => {
-      const val = isAvg ? s.avg : s.value;
+      const val = useAvg ? s.avg : s.value;
       const r = (val / 100) * radius;
       const x = center + r * Math.cos(i * angleStep - Math.PI / 2);
       const y = center + r * Math.sin(i * angleStep - Math.PI / 2);
@@ -281,16 +285,17 @@ const SkillRadarChart: React.FC<{
   };
 
   return (
-    <div className="flex flex-col items-center print:scale-75 print:transform-origin-top">
+    // v8.5.8: Increased scale for print and forced color rendering
+    <div className="flex flex-col items-center print:scale-100 print:mt-4" style={{ printColorAdjust: 'exact', WebkitPrintColorAdjust: 'exact' }}>
       <div className="flex gap-4 mb-4 print:hidden">
          {!isGroupView && (
            <div className="flex items-center gap-2">
-              <div className="w-8 h-3 bg-indigo-500 rounded-sm border-2 border-indigo-200 print:border-black print:bg-transparent"></div>
+              <div className="w-8 h-3 bg-indigo-500 rounded-sm border-2 border-indigo-200 print:bg-indigo-500 print:border-indigo-600"></div>
               <span className="text-[10px] font-black text-slate-500 uppercase print:text-black">Deg</span>
            </div>
          )}
          <div className="flex items-center gap-2">
-            <div className={`w-8 h-3 ${isGroupView ? 'bg-indigo-500 border-2 border-indigo-200' : 'border-t-2 border-dashed border-slate-300'} print:border-black`}></div>
+            <div className={`w-8 h-3 ${isGroupView ? 'bg-indigo-500 border-2 border-indigo-200' : 'border-t-2 border-dashed border-slate-300'}`}></div>
             <span className="text-[10px] font-black text-slate-400 uppercase print:hidden">{isGroupView ? 'Snitt' : 'Snitt'}</span>
          </div>
       </div>
@@ -302,7 +307,7 @@ const SkillRadarChart: React.FC<{
             const y = center + r * Math.sin(idx * angleStep - Math.PI / 2);
             return `${x},${y}`;
           }).join(' ');
-          return <polygon key={i} points={points} fill="none" stroke="#e2e8f0" strokeWidth="1" className="print:stroke-black print:stroke-[0.5]" />;
+          return <polygon key={i} points={points} fill="none" stroke="#e2e8f0" strokeWidth="1" className="print:stroke-slate-300" />;
         })}
         
         {skills.map((s, i) => {
@@ -312,8 +317,8 @@ const SkillRadarChart: React.FC<{
           const ly = center + (radius + 20) * Math.sin(i * angleStep - Math.PI / 2);
           return (
             <g key={i}>
-              <line x1={center} y1={center} x2={x2} y2={y2} stroke="#e2e8f0" strokeWidth="1" className="print:stroke-black print:stroke-[0.5]" />
-              <text x={lx} y={ly} textAnchor="middle" className="text-[9px] font-black fill-slate-500 uppercase print:fill-black print:text-[8px]">{s.tema}</text>
+              <line x1={center} y1={center} x2={x2} y2={y2} stroke="#e2e8f0" strokeWidth="1" className="print:stroke-slate-300" />
+              <text x={lx} y={ly} textAnchor="middle" className="text-[9px] font-black fill-slate-500 uppercase print:fill-black print:text-[10px] print:font-bold">{s.tema}</text>
             </g>
           );
         })}
@@ -326,7 +331,9 @@ const SkillRadarChart: React.FC<{
               fill="rgba(99, 102, 241, 0.2)" 
               stroke="#6366f1" 
               strokeWidth="3" 
-              className="print:fill-transparent print:stroke-black print:stroke-2" 
+              // v8.5.8: Force colors in print
+              className="print:fill-indigo-100 print:stroke-indigo-600 print:stroke-[3px] print:opacity-80" 
+              style={{ printColorAdjust: 'exact', WebkitPrintColorAdjust: 'exact' }}
             />
           </>
         ) : (
@@ -335,7 +342,8 @@ const SkillRadarChart: React.FC<{
             fill="rgba(99, 102, 241, 0.2)" 
             stroke="#6366f1" 
             strokeWidth="3" 
-            className="print:fill-transparent print:stroke-black print:stroke-2" 
+            className="print:fill-indigo-100 print:stroke-indigo-600"
+            style={{ printColorAdjust: 'exact', WebkitPrintColorAdjust: 'exact' }}
           />
         )}
       </svg>
@@ -347,120 +355,182 @@ const CandidateReport: React.FC<{
   candidate: Candidate, 
   project: Project, 
   config: PrintConfig,
-  onNavigateToTask?: (cId: string, tId: string, part: 1 | 2) => void 
-}> = ({ candidate, project, config, onNavigateToTask }) => {
+  onNavigateToTask?: (cId: string, tId: string, part: 1 | 2) => void,
+  groupSkillStats?: Record<string, { total: number, max: number }>,
+  onUpdateCandidate?: (updatedCandidate: Candidate) => void 
+}> = ({ candidate, project, config, onNavigateToTask, groupSkillStats, onUpdateCandidate }) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [localGrade, setLocalGrade] = useState(candidate.evaluation?.grade || "");
+  
   if (!candidate.evaluation) return <div className="p-8 text-center text-slate-400">Ingen vurdering tilgjengelig</div>;
 
   const { score, grade, feedback, vekstpunkter, taskBreakdown } = candidate.evaluation;
   const { d1, d2, totalMax, adjustedMax } = getCandidatePartStatus(candidate, project);
   
-  // Calculate skills for radar
   const skillsMap: Record<string, { total: number, max: number }> = {};
   project.rubric?.criteria.forEach(c => {
       const tema = c.tema || "Generelt";
       if (!skillsMap[tema]) skillsMap[tema] = { total: 0, max: 0 };
-      
       const ev = taskBreakdown?.find(t => matchEvaluationToCriterion(t, c));
-      
       if (ev) {
           skillsMap[tema].total += ev.score;
           skillsMap[tema].max += c.maxPoints || 0;
       } else {
            const isD2 = (c.part || "").toLowerCase().includes('2');
            const isMissing = isD2 ? d2.status === 'missing' : d1.status === 'missing';
-           if (!isMissing) {
-               skillsMap[tema].max += c.maxPoints || 0;
-           }
+           if (!isMissing) skillsMap[tema].max += c.maxPoints || 0;
       }
   });
   
   const skills = Object.entries(skillsMap)
     .filter(([_, data]) => data.max > 0)
-    .map(([tema, data]) => ({
-      tema,
-      value: Math.round((data.total / data.max) * 100),
-      avg: 0 
-    }));
+    .map(([tema, data]) => {
+      const groupData = groupSkillStats ? groupSkillStats[tema] : null;
+      const avg = groupData && groupData.max > 0 ? Math.round((groupData.total / groupData.max) * 100) : 0;
+      return { tema, value: Math.round((data.total / data.max) * 100), avg };
+    });
 
-  // v8.3.0: Calculate percent
   const percent = adjustedMax > 0 ? Math.round((score / adjustedMax) * 100) : 0;
 
+  // v8.6.2: Ensure display grade matches strict calculation based on ADJUSTED max, not raw max.
+  // Unless we are editing or the user has manually set a grade that differs.
+  const displayGrade = isEditing ? localGrade : (candidate.evaluation?.grade || calculateGrade(score, adjustedMax));
+
+  const handleTaskScoreChange = (taskId: string, newScore: number) => {
+      if (!onUpdateCandidate || !candidate.evaluation) return;
+      const updatedBreakdown = (candidate.evaluation.taskBreakdown || []).map(t => {
+          const tLabel = renderTaskLabel(t.taskNumber, t.subTask);
+          if (tLabel === taskId) return { ...t, score: newScore };
+          return t;
+      });
+      const newTotal = updatedBreakdown.reduce((acc, t) => acc + t.score, 0);
+      const newGrade = calculateGrade(newTotal, adjustedMax);
+      setLocalGrade(newGrade);
+
+      onUpdateCandidate({
+          ...candidate,
+          evaluation: { ...candidate.evaluation, taskBreakdown: updatedBreakdown, score: newTotal, grade: newGrade }
+      });
+  };
+
+  const handleGradeChange = (newGrade: string) => {
+      setLocalGrade(newGrade);
+      if (onUpdateCandidate && candidate.evaluation) {
+          onUpdateCandidate({ ...candidate, evaluation: { ...candidate.evaluation, grade: newGrade } });
+      }
+  };
+
+  useEffect(() => {
+      if (candidate.evaluation?.grade) {
+          setLocalGrade(candidate.evaluation.grade);
+      }
+  }, [candidate.evaluation?.grade]);
+
   return (
-    <div className="bg-white rounded-[32px] shadow-sm border border-slate-100 p-8 md:p-12 print:shadow-none print:border-none print:p-0">
-      <div className="flex flex-col md:flex-row justify-between gap-8 border-b border-slate-100 pb-8 mb-8">
+    // v8.6.1: Added page-break-after-always for batch printing
+    <div className="bg-white rounded-[32px] shadow-sm border border-slate-100 p-8 md:p-12 print:shadow-none print:border-none print:p-0 print:rounded-none print:break-after-page min-h-[90vh]">
+      {/* v8.5.8: Compact Header for Print */}
+      <div className="flex flex-col md:flex-row justify-between gap-8 border-b border-slate-100 pb-8 mb-8 print:pb-2 print:mb-4 print:flex-row print:gap-4 print:items-center">
          <div>
-            <h2 className="text-3xl font-black text-slate-800 tracking-tighter mb-2">{candidate.name}</h2>
-            <div className="flex gap-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">
-               <span>ID: {candidate.id}</span>
-               <span>•</span>
-               <span>{new Date().toLocaleDateString()}</span>
-            </div>
+            <h2 className="text-3xl font-black text-slate-800 tracking-tighter mb-2 print:text-xl print:mb-0">{candidate.name}</h2>
          </div>
-         <div className="flex gap-6 items-center">
+         <div className="flex gap-6 items-center print:gap-4">
+            {onUpdateCandidate && (
+                <button 
+                    onClick={() => setIsEditing(!isEditing)} 
+                    className={`text-[9px] font-black uppercase tracking-widest px-4 py-2 rounded-xl transition-all print:hidden ${isEditing ? 'bg-indigo-600 text-white shadow-md' : 'bg-white border border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                >
+                    {isEditing ? 'Lagre Endringer ✓' : '✎ Rediger'}
+                </button>
+            )}
+            
             {config.showGrade && (
-                <div className="text-center">
-                   <div className="text-5xl font-black text-indigo-600">{grade}</div>
-                   <div className="text-[9px] font-black uppercase text-slate-400 tracking-widest mt-1">Karakter</div>
+                <div className="text-center print:flex print:items-center print:gap-2">
+                   {isEditing ? (
+                       <input 
+                           type="text" 
+                           value={localGrade} 
+                           onChange={e => handleGradeChange(e.target.value)}
+                           className="text-5xl font-black text-indigo-600 w-24 text-center bg-indigo-50 rounded-xl outline-none"
+                       />
+                   ) : (
+                       <div className="text-5xl font-black text-indigo-600 print:text-2xl">{displayGrade}</div>
+                   )}
+                   <div className="text-[9px] font-black uppercase text-slate-400 tracking-widest mt-1 print:mt-0">Karakter</div>
                 </div>
             )}
             {config.showScore && (
-                <div className="text-center px-6 border-l border-slate-100">
-                   <div className="text-3xl font-black text-slate-800">{score} <span className="text-lg text-slate-300">/ {adjustedMax}</span></div>
-                   <div className="text-[9px] font-black uppercase text-slate-400 tracking-widest mt-1">
-                       {config.showPercent ? `${percent}% Resultat` : 'Poeng'}
+                <div className="text-center px-6 border-l border-slate-100 print:flex print:items-center print:gap-2 print:px-4">
+                   <div className="text-3xl font-black text-slate-800 print:text-xl">{formatScore(score)} <span className="text-lg text-slate-300 print:text-sm">/ {adjustedMax}</span></div>
+                   <div className="text-[9px] font-black uppercase text-slate-400 tracking-widest mt-1 print:mt-0">
+                       {config.showPercent ? `(${percent}%)` : 'Poeng'}
                    </div>
                 </div>
             )}
          </div>
       </div>
 
-      {/* v8.3.0: New Layout: Comment & Growth top, Radar bottom */}
-      <div className="flex flex-col gap-10">
+      <div className="flex flex-col gap-10 print:block">
+          {/* v8.6.3: Print Block Flow - Guaranteed Vertical Stacking */}
+          {/* Screen: Grid Side-by-Side */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 print:block">
-              {/* Left Column: Comment */}
-              {config.showFeedback && (
-                  <div className="print:mb-6">
-                     <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-3">Kommentar</h3>
-                     <LatexRenderer content={feedback} className="text-sm text-slate-700 leading-relaxed font-medium" />
-                  </div>
-              )}
               
-              {/* Right Column: Growth */}
-              {config.showGrowth && vekstpunkter && vekstpunkter.length > 0 && (
-                  <div className="print:mb-6">
-                     <h3 className="text-[10px] font-black uppercase text-emerald-600 tracking-widest mb-4">Vekstpunkter</h3>
-                     <ul className="space-y-3">
-                        {vekstpunkter.map((v, i) => (
-                            <li key={i} className="bg-emerald-50/50 border border-emerald-100 p-3 rounded-xl text-xs text-emerald-900 flex gap-3 items-start print:bg-transparent print:border-none print:p-0">
-                               <span className="text-emerald-400 text-lg leading-none print:hidden">↗</span>
-                               <span>- {v}</span>
-                            </li>
-                        ))}
-                     </ul>
+              {/* Text Section (Left on screen, Top on print) */}
+              <div className="flex flex-col gap-6 print:gap-4 print:mb-8">
+                  {config.showFeedback && (
+                      <div className="">
+                         <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-3 print:mb-1">Kommentar</h3>
+                         <LatexRenderer content={feedback} className="text-sm text-slate-700 leading-relaxed font-medium print:text-xs print:leading-snug" />
+                      </div>
+                  )}
+                  
+                  {config.showGrowth && vekstpunkter && vekstpunkter.length > 0 && (
+                      <div className="print:mt-2">
+                         <h3 className="text-[10px] font-black uppercase text-emerald-600 tracking-widest mb-3 print:mb-1">Ting å jobbe med</h3>
+                         
+                         {/* Screen View (Styled Boxes) */}
+                         <ul className="space-y-2 print:hidden">
+                            {vekstpunkter.map((vp, i) => (
+                               <li key={i} className="flex gap-3 items-start p-3 rounded-xl bg-emerald-50/50 border border-emerald-100 text-emerald-800 text-xs font-medium leading-relaxed">
+                                  <span className="text-emerald-400 font-bold">↗</span>
+                                  <span>{vp}</span>
+                               </li>
+                            ))}
+                         </ul>
+
+                         {/* Print View (Compact List) */}
+                         <ul className="hidden print:block list-disc pl-4 space-y-1 text-xs text-slate-700">
+                            {vekstpunkter.map((vp, i) => (
+                               <li key={i} className="leading-snug">{vp}</li>
+                            ))}
+                         </ul>
+                      </div>
+                  )}
+              </div>
+
+              {/* Radar Section (Right on screen, Below text on print) */}
+              {config.showRadar && skills.length > 0 && (
+                  <div className="flex flex-col items-center pt-8 border-t border-slate-100 md:border-none md:pt-0 print:border-none print:pt-0 print:w-full print:items-center print:mb-8 print:break-inside-avoid">
+                     <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-6 print:mb-0 print:hidden">Ferdighetsprofil</h3>
+                     <SkillRadarChart skills={skills} />
                   </div>
               )}
           </div>
-
-          {/* Bottom: Radar Chart */}
-          {config.showRadar && skills.length > 0 && (
-              <div className="flex flex-col items-center pt-8 border-t border-slate-100 print:break-inside-avoid">
-                 <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-6">Ferdighetsprofil</h3>
-                 <SkillRadarChart skills={skills} />
-              </div>
-          )}
       </div>
 
       {config.showTable && project.rubric && (
-          <div className="mt-12 print:break-before-page">
-             <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-6">Oppgavedetaljer</h3>
-             <div className="overflow-hidden rounded-2xl border border-slate-200">
+          <div className="mt-12 print:mt-4 print:break-inside-avoid">
+             <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-6 print:mb-2 print:hidden">Oppgavedetaljer</h3>
+             
+             {/* SCREEN TABLE (Standard) */}
+             <div className="overflow-hidden rounded-2xl border border-slate-200 print:hidden">
                 <table className="w-full text-left border-collapse">
                    <thead>
                       <tr className="bg-slate-50 text-[9px] font-black uppercase text-slate-500 tracking-wider">
-                         <th className="p-4 border-b border-slate-200">Oppgave</th>
-                         <th className="p-4 border-b border-slate-200">Tema</th>
-                         <th className="p-4 border-b border-slate-200 w-1/2">Kommentar</th>
-                         <th className="p-4 border-b border-slate-200 text-right">Poeng</th>
+                         <th className="p-3 border-b border-slate-200">Oppgave</th>
+                         <th className="p-3 border-b border-slate-200">Tema</th>
+                         <th className="p-3 border-b border-slate-200 w-1/2">Kommentar</th>
+                         <th className="p-3 border-b border-slate-200 text-right">Poeng</th>
                       </tr>
                    </thead>
                    <tbody className="text-xs">
@@ -475,15 +545,19 @@ const CandidateReport: React.FC<{
                           const taskLabel = `${cleanTask.taskNumber}${cleanTask.subTask}`;
 
                           return (
-                              <tr key={idx} className={`border-b border-slate-100 last:border-0 hover:bg-slate-50 transition-colors ${!ev ? 'opacity-50' : ''}`}>
-                                  <td className="p-4 font-bold text-slate-700">
+                              <tr 
+                                key={idx} 
+                                onClick={() => !isEditing && onNavigateToTask && onNavigateToTask(candidate.id, taskLabel, isDel2 ? 2 : 1)}
+                                className={`border-b border-slate-100 last:border-0 transition-colors ${!ev ? 'opacity-50' : ''} ${!isEditing ? 'cursor-pointer hover:bg-slate-50' : ''}`}
+                              >
+                                  <td className="p-3 font-bold text-slate-700">
                                      <div className="flex items-center gap-2">
                                         <span className={`w-1.5 h-1.5 rounded-full ${isDel2 ? 'bg-emerald-400' : 'bg-indigo-400'}`}></span>
                                         {taskLabel}
                                      </div>
                                   </td>
-                                  <td className="p-4 text-slate-500">{crit.tema}</td>
-                                  <td className="p-4 text-slate-600">
+                                  <td className="p-3 text-slate-500">{crit.tema}</td>
+                                  <td className="p-3 text-slate-600">
                                       {ev ? (
                                         <div className="space-y-1">
                                             {config.showCommentsInTable && (
@@ -491,19 +565,23 @@ const CandidateReport: React.FC<{
                                                     <LatexRenderer content={ev.comment} />
                                                 </div>
                                             )}
-                                            {onNavigateToTask && (
-                                              <button 
-                                                onClick={() => onNavigateToTask(candidate.id, taskLabel, isDel2 ? 2 : 1)}
-                                                className="text-[8px] font-black uppercase text-indigo-500 hover:underline mt-1 print:hidden"
-                                              >
-                                                Se besvarelse →
-                                              </button>
-                                            )}
                                         </div>
-                                      ) : <span className="italic text-slate-400">Ikke vurdert</span>}
+                                      ) : <span className="italic text-slate-400">-</span>}
                                   </td>
-                                  <td className="p-4 text-right font-bold text-slate-800">
-                                      {ev ? ev.score : '-'} <span className="text-slate-300 font-normal">/ {crit.maxPoints}</span>
+                                  <td className="p-3 text-right font-bold text-slate-800">
+                                      {isEditing && ev ? (
+                                          <input 
+                                              type="number" 
+                                              step="0.5"
+                                              value={ev.score}
+                                              onChange={(e) => handleTaskScoreChange(taskLabel, parseFloat(e.target.value) || 0)}
+                                              onClick={(e) => e.stopPropagation()} 
+                                              className="w-12 text-right bg-slate-100 border border-slate-300 rounded px-1 outline-none focus:border-indigo-500"
+                                          />
+                                      ) : (
+                                          ev ? formatScore(ev.score) : '-'
+                                      )} 
+                                      <span className="text-slate-300 font-normal"> / {formatScore(crit.maxPoints)}</span>
                                   </td>
                               </tr>
                           );
@@ -511,10 +589,163 @@ const CandidateReport: React.FC<{
                    </tbody>
                 </table>
              </div>
+
+             {/* PRINT LIST (Simplified v8.6.2) */}
+             <div className="hidden print:block text-[10px]">
+                <ul className="border-t border-slate-200">
+                    {project.rubric.criteria.map((crit, idx) => {
+                        const ev = taskBreakdown?.find(t => matchEvaluationToCriterion(t, crit));
+                        const isDel2 = (crit.part || "").toLowerCase().includes("2");
+                        const isMissingPart = isDel2 ? d2.status === 'missing' : d1.status === 'missing';
+                        if (isMissingPart) return null;
+                        
+                        const cleanTask = cleanTaskPair(crit.taskNumber, crit.subTask);
+                        const taskLabel = `${cleanTask.taskNumber}${cleanTask.subTask}`;
+
+                        return (
+                            <li key={idx} className="flex gap-2 py-1 border-b border-slate-200 break-inside-avoid items-start">
+                                <span className="font-bold w-8 shrink-0">{taskLabel}</span>
+                                <span className="flex-1 text-slate-700">
+                                    {ev ? <LatexRenderer content={ev.comment} /> : '-'}
+                                </span>
+                                <span className="font-bold whitespace-nowrap text-right w-12 shrink-0">
+                                    {ev ? formatScore(ev.score) : '-'} <span className="font-normal text-slate-400">/ {formatScore(crit.maxPoints)}</span>
+                                </span>
+                            </li>
+                        );
+                    })}
+                </ul>
+             </div>
           </div>
       )}
     </div>
   );
+};
+
+// v8.3.3: Re-introduced Matrix Component
+const ResultMatrix: React.FC<{ 
+    project: Project, 
+    candidates: Candidate[], 
+    onNavigate: (cId: string) => void,
+    selectedIds: Set<string>,
+    onToggle: (id: string) => void,
+    onToggleAll: () => void
+}> = ({ project, candidates, onNavigate, selectedIds, onToggle, onToggleAll }) => {
+    
+    // Sort tasks
+    const rubricTasks = useMemo(() => {
+        if (!project.rubric) return { d1: [], d2: [] };
+        const d1: RubricCriterion[] = [];
+        const d2: RubricCriterion[] = [];
+        project.rubric.criteria.forEach(c => {
+           const isD2 = (c.part || "Del 1").toLowerCase().includes("2");
+           if (isD2) d2.push(c); else d1.push(c);
+        });
+        const sorter = (a: RubricCriterion, b: RubricCriterion) => {
+            const nA = parseInt(a.taskNumber.replace(/\D/g,'')) || 0;
+            const nB = parseInt(b.taskNumber.replace(/\D/g,'')) || 0;
+            if (nA !== nB) return nA - nB;
+            return (a.subTask || "").localeCompare(b.subTask || "");
+        };
+        return { d1: d1.sort(sorter), d2: d2.sort(sorter) };
+    }, [project.rubric]);
+
+    const allSelected = candidates.length > 0 && selectedIds.size === candidates.length;
+
+    return (
+        <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-4">
+            <div className="overflow-x-auto custom-scrollbar">
+                <table className="w-full text-left border-collapse min-w-max">
+                    <thead>
+                        <tr className="bg-slate-50 text-[9px] font-black uppercase text-slate-500 tracking-wider text-center border-b border-slate-200">
+                            <th className="p-3 bg-white sticky left-0 z-20 shadow-sm border-r border-slate-100 w-12">
+                                <input type="checkbox" checked={allSelected} onChange={onToggleAll} className="w-4 h-4 accent-indigo-600 cursor-pointer" />
+                            </th>
+                            <th className="p-3 bg-white sticky left-12 z-20 shadow-sm border-r border-slate-100 text-left min-w-[200px]">Kandidat</th>
+                            {rubricTasks.d1.length > 0 && <th colSpan={rubricTasks.d1.length} className="p-2 bg-indigo-50 text-indigo-600 border-x border-indigo-100">DEL 1</th>}
+                            {rubricTasks.d2.length > 0 && <th colSpan={rubricTasks.d2.length} className="p-2 bg-emerald-50 text-emerald-600 border-r border-emerald-100">DEL 2</th>}
+                            <th colSpan={3} className="p-2 bg-slate-100 text-slate-600">TOTALT</th>
+                        </tr>
+                        <tr className="bg-white text-[8px] font-black uppercase text-slate-400 tracking-widest text-center border-b border-slate-100">
+                            <th className="p-2 bg-white sticky left-0 z-20 shadow-sm border-r border-slate-100"></th>
+                            <th className="p-2 bg-white sticky left-12 z-20 shadow-sm border-r border-slate-100"></th>
+                            {rubricTasks.d1.map((t, i) => (
+                                <th key={i} className="p-2 min-w-[40px] text-indigo-400 border-r border-slate-50" title={`${t.taskNumber}${t.subTask}`}>
+                                    {t.taskNumber}{t.subTask}
+                                </th>
+                            ))}
+                            {rubricTasks.d2.map((t, i) => (
+                                <th key={i} className="p-2 min-w-[40px] text-emerald-500 border-r border-slate-50" title={`${t.taskNumber}${t.subTask}`}>
+                                    {t.taskNumber}{t.subTask}
+                                </th>
+                            ))}
+                            <th className="p-2 min-w-[60px] bg-slate-50 border-r border-slate-200">Sum</th>
+                            <th className="p-2 min-w-[60px] bg-slate-50 border-r border-slate-200">%</th>
+                            <th className="p-2 min-w-[40px] bg-slate-50">Kar</th>
+                        </tr>
+                    </thead>
+                    <tbody className="text-xs font-medium text-slate-700">
+                        {candidates.map((c, i) => {
+                            const { totalMax, adjustedMax, isTotalComplete, d1, d2 } = getCandidatePartStatus(c, project);
+                            const score = c.evaluation?.score || 0;
+                            const percent = adjustedMax > 0 ? Math.round((score/adjustedMax)*100) : 0;
+                            const isSelected = selectedIds.has(c.id);
+                            
+                            // v8.6.2: Ensure table grade matches adjusted calculation
+                            const grade = calculateGrade(score, adjustedMax);
+
+                            return (
+                                <tr key={c.id} className={`hover:bg-slate-50 transition-colors border-b border-slate-50 last:border-0 group ${isSelected ? 'bg-indigo-50/30' : ''}`}>
+                                    <td className="p-3 bg-white sticky left-0 z-10 shadow-sm border-r border-slate-100 group-hover:bg-slate-50 text-center">
+                                        <input type="checkbox" checked={isSelected} onChange={() => onToggle(c.id)} className="w-4 h-4 accent-indigo-600 cursor-pointer" />
+                                    </td>
+                                    <td className="p-3 bg-white sticky left-12 z-10 shadow-sm border-r border-slate-100 group-hover:bg-slate-50 transition-colors">
+                                        <div className="flex items-center gap-2">
+                                            <button onClick={() => onNavigate(c.id)} className="font-bold text-slate-700 hover:text-indigo-600 hover:underline text-left truncate">
+                                                {c.name}
+                                            </button>
+                                            {/* v8.3.8: Inline Badges */}
+                                            <div className="flex gap-1 text-[9px] font-black uppercase tracking-widest text-slate-400 opacity-80 shrink-0">
+                                                {d1.status === 'complete' ? <span title="Del 1 Komplett">1️⃣✅</span> : d1.status === 'missing' ? <span title="Ingen Del 1">1️⃣🚫</span> : <span title="Del 1 Delvis">1️⃣⚠️</span>}
+                                                {d2.status === 'complete' ? <span title="Del 2 Komplett">2️⃣✅</span> : d2.status === 'missing' ? <span title="Ingen Del 2">2️⃣🚫</span> : <span title="Del 2 Delvis">2️⃣⚠️</span>}
+                                            </div>
+                                        </div>
+                                    </td>
+                                    {rubricTasks.d1.map((t, idx) => {
+                                        // v8.4.0: Blank Cell Policy for missing parts
+                                        if (d1.status === 'missing') {
+                                            return <td key={`d1-${idx}`} className="p-2 border-r border-slate-50 bg-slate-50/30"></td>;
+                                        }
+                                        const ev = c.evaluation?.taskBreakdown?.find(e => matchEvaluationToCriterion(e, t));
+                                        return (
+                                            <td key={`d1-${idx}`} className="p-2 text-center border-r border-slate-50 text-indigo-900">
+                                                {ev ? (ev.score === 0 ? <span className="text-rose-400">0</span> : formatScore(ev.score)) : <span className="text-slate-200">-</span>}
+                                            </td>
+                                        );
+                                    })}
+                                    {rubricTasks.d2.map((t, idx) => {
+                                        // v8.4.0: Blank Cell Policy for missing parts
+                                        if (d2.status === 'missing') {
+                                            return <td key={`d2-${idx}`} className="p-2 border-r border-slate-50 bg-slate-50/30"></td>;
+                                        }
+                                        const ev = c.evaluation?.taskBreakdown?.find(e => matchEvaluationToCriterion(e, t));
+                                        return (
+                                            <td key={`d2-${idx}`} className="p-2 text-center border-r border-slate-50 text-emerald-900">
+                                                {ev ? (ev.score === 0 ? <span className="text-rose-400">0</span> : formatScore(ev.score)) : <span className="text-slate-200">-</span>}
+                                            </td>
+                                        );
+                                    })}
+                                    <td className="p-2 text-center bg-slate-50 border-r border-slate-200 font-bold">{formatScore(score)}</td>
+                                    <td className="p-2 text-center bg-slate-50 border-r border-slate-200 text-slate-500 font-mono text-[10px]">{percent}%</td>
+                                    <td className="p-2 text-center bg-slate-50 font-black text-indigo-600">{grade}</td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
 };
 
 interface ResultsStepProps {
@@ -528,6 +759,7 @@ interface ResultsStepProps {
   rubricStatus: { loading: boolean; text: string };
   onNavigateToReview: (id: string) => void;
   onNavigateToTask?: (candidateId: string, taskId: string, part: 1 | 2) => void;
+  updateActiveProject?: (updates: Partial<Project>) => void; // v8.3.6: Editing
   progress?: {
     batchTotal: number;
     batchCompleted: number;
@@ -547,18 +779,46 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
   rubricStatus,
   onNavigateToReview,
   onNavigateToTask,
+  updateActiveProject,
   progress
 }) => {
   const [printConfig, setPrintConfig] = useState<PrintConfig>(DEFAULT_PRINT_CONFIG);
-  const [filterQuery, setFilterQuery] = useState('');
-  // v8.3.0: Toggle for Print Menu
-  const [showPrintMenu, setShowPrintMenu] = useState(false);
+  const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(new Set());
+  const [isBatchPrinting, setIsBatchPrinting] = useState(false); // v8.6.1
   
-  const evaluatedCandidates = useMemo(() => {
-    return activeProject.candidates.filter(c => c.status === 'evaluated' && c.evaluation);
+  // v8.4.5: Split display and stats candidates
+  
+  const displayCandidates = useMemo(() => {
+    return activeProject.candidates.filter(c => c.status === 'completed' || c.status === 'evaluated');
   }, [activeProject.candidates]);
 
-  const selectedCandidate = evaluatedCandidates.find(c => c.id === selectedResultCandidateId);
+  const evaluatedCandidates = useMemo(() => {
+    return displayCandidates.filter(c => c.status === 'evaluated' && c.evaluation);
+  }, [displayCandidates]);
+
+  const selectedCandidate = displayCandidates.find(c => c.id === selectedResultCandidateId);
+
+  // v8.3.3: Calculate Group Skills for Individual Report (Only based on EVALUATED)
+  const groupSkillStats = useMemo(() => {
+      const skillsMap: Record<string, { total: number, max: number }> = {};
+      if (!activeProject.rubric) return undefined;
+
+      activeProject.rubric.criteria.forEach(c => {
+          const tema = c.tema || "Generelt";
+          if (!skillsMap[tema]) skillsMap[tema] = { total: 0, max: 0 };
+          skillsMap[tema].max += (c.maxPoints || 0) * evaluatedCandidates.length;
+      });
+      
+      evaluatedCandidates.forEach(c => {
+          c.evaluation?.taskBreakdown?.forEach(t => {
+              const crit = activeProject.rubric?.criteria.find(crit => matchEvaluationToCriterion(t, crit));
+              if (crit && crit.tema) {
+                  if (skillsMap[crit.tema]) skillsMap[crit.tema].total += t.score;
+              }
+          });
+      });
+      return skillsMap;
+  }, [activeProject.rubric, evaluatedCandidates]);
 
   const formatEta = (seconds: number) => {
     if (seconds < 60) return `${seconds}s`;
@@ -570,7 +830,6 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
   const analysisData = useMemo(() => {
     if (!activeProject.rubric) return [];
     
-    // Calculate average % per task
     return activeProject.rubric.criteria.map(crit => {
         const evals = evaluatedCandidates.map(c => c.evaluation?.taskBreakdown?.find(t => matchEvaluationToCriterion(t, crit)));
         const validEvals = evals.filter(e => e !== undefined);
@@ -593,208 +852,287 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
     });
   }, [evaluatedCandidates, activeProject.rubric]);
 
-  return (
-    <div className="flex h-full w-full overflow-hidden bg-[#F8FAFC]">
-      <aside className="w-64 bg-white border-r flex flex-col shrink-0 no-print shadow-sm h-full z-10">
-         <div className="p-4 border-b shrink-0 bg-white/80 sticky top-0 z-20">
-             <div className="flex justify-between items-center mb-3">
-                 <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Resultater</h3>
-                 {evaluatedCandidates.length > 0 && (
-                     <span className="bg-emerald-50 text-emerald-600 px-2 py-1 rounded-md text-[8px] font-black">{evaluatedCandidates.length} stk</span>
-                 )}
-             </div>
-             <input type="text" placeholder="Søk..." className="w-full bg-slate-50 border p-2 rounded-lg font-bold text-[10px] outline-none" value={filterQuery} onChange={e => setFilterQuery(e.target.value)} />
-         </div>
-         
-         <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar bg-slate-50/30">
-            <button 
-               onClick={() => setSelectedResultCandidateId(null)}
-               className={`w-full text-left p-3 rounded-xl border transition-all ${!selectedCandidate ? 'bg-indigo-600 text-white shadow-md' : 'bg-white hover:bg-indigo-50 text-slate-600 border-slate-100'}`}
-            >
-               <div className="text-[10px] font-black uppercase tracking-widest mb-1">Oversikt</div>
-               <div className="text-xs font-bold">Hele klassen</div>
-            </button>
-            
-            {activeProject.candidates
-              .filter(c => c.name.toLowerCase().includes(filterQuery.toLowerCase()))
-              .sort((a,b) => a.name.localeCompare(b.name))
-              .map(c => {
-                 const isSelected = c.id === selectedResultCandidateId;
-                 const isEvaluated = c.status === 'evaluated';
-                 
-                 return (
-                   <button 
-                      key={c.id} 
-                      onClick={() => isEvaluated ? setSelectedResultCandidateId(c.id) : handleEvaluateCandidate(c.id)}
-                      className={`w-full text-left p-3 rounded-xl border transition-all relative overflow-hidden group ${isSelected ? 'bg-slate-900 text-white shadow-md' : isEvaluated ? 'bg-white hover:border-indigo-200' : 'bg-slate-50 opacity-70 hover:opacity-100'}`}
-                   >
-                      <div className="flex justify-between items-center mb-1">
-                         <div className={`font-bold text-xs truncate ${!isEvaluated ? 'text-slate-400' : ''}`}>{c.name}</div>
-                         {isEvaluated && <div className={`text-[10px] font-black ${isSelected ? 'text-emerald-400' : 'text-emerald-600'}`}>{c.evaluation?.grade || '-'}</div>}
-                      </div>
-                      {!isEvaluated && (
-                          <div className="text-[8px] font-black uppercase text-indigo-500 tracking-widest flex items-center gap-1">
-                             <span>Start Vurdering</span>
-                             <span className="opacity-0 group-hover:opacity-100 transition-opacity">→</span>
-                          </div>
-                      )}
-                      {isEvaluated && (
-                          <div className={`text-[8px] font-black uppercase tracking-widest ${isSelected ? 'text-slate-400' : 'text-slate-300'}`}>
-                             {c.evaluation?.score} Poeng
-                          </div>
-                      )}
-                   </button>
-                 );
-              })}
-         </div>
-         
-         <div className="p-4 border-t bg-slate-50/50">
-             {rubricStatus.loading ? (
-                <div className="bg-white p-4 rounded-xl border border-indigo-100 shadow-sm animate-pulse">
-                   <div className="flex justify-between items-center mb-2">
-                      <span className="text-[9px] font-black uppercase text-indigo-600 tracking-widest">Jobber...</span>
-                      {progress?.etaSeconds && <span className="text-[8px] font-bold text-emerald-600">{formatEta(progress.etaSeconds)}</span>}
-                   </div>
-                   {progress && progress.batchTotal > 0 && (
-                      <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden mb-2">
-                         <div className="h-full bg-indigo-500 transition-all duration-300 rounded-full" style={{ width: `${(progress.batchCompleted / progress.batchTotal) * 100}%` }}></div>
-                      </div>
-                   )}
-                   <div className="text-[8px] text-slate-400 font-medium truncate">{rubricStatus.text}</div>
-                </div>
-             ) : (
-                <button 
-                  onClick={() => handleEvaluateAll()} 
-                  className="w-full py-3 rounded-xl bg-indigo-600 text-white font-black text-[9px] uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-md active:scale-95"
-                >
-                  Vurder Alle (Auto)
-                </button>
-             )}
-         </div>
-      </aside>
+  // v8.3.6: Handle Candidate Update (Edit Mode)
+  const handleUpdateCandidate = async (updatedCandidate: Candidate) => {
+      await saveCandidate(updatedCandidate);
+      if (updateActiveProject) {
+          const newCandidates = activeProject.candidates.map(c => c.id === updatedCandidate.id ? updatedCandidate : c);
+          updateActiveProject({ candidates: newCandidates });
+      }
+  };
 
-      <main className="flex-1 overflow-y-auto custom-scrollbar p-8 print:p-0 print:overflow-visible h-full bg-[#F8FAFC]">
-         <div className="max-w-[1600px] mx-auto space-y-8 pb-20 print:max-w-none print:pb-0">
-            {!selectedCandidate ? (
-               <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4">
-                  <header>
-                     <h2 className="text-3xl font-black text-slate-800 tracking-tighter">Klasseoversikt</h2>
-                     <p className="text-[10px] font-black uppercase text-indigo-500 tracking-[0.2em] mt-2">Samlet statistikk for {evaluatedCandidates.length} vurderte kandidater</p>
-                  </header>
-                  
-                  {evaluatedCandidates.length === 0 ? (
-                     <div className="p-20 text-center border-2 border-dashed border-slate-200 rounded-[32px] opacity-50">
-                        <div className="text-6xl mb-4 grayscale opacity-30">📊</div>
-                        <h3 className="text-lg font-black text-slate-400 uppercase tracking-widest">Ingen resultater ennå</h3>
-                        <p className="text-sm text-slate-400 mt-2">Start vurdering av kandidater i menyen til venstre.</p>
-                     </div>
-                  ) : (
-                     <>
-                        <GroupStats candidates={activeProject.candidates} project={activeProject} />
-                        
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 h-[400px]">
-                           <TaskAnalysisChart data={analysisData} />
-                           {/* Add Group Radar here if wanted, or other stats */}
-                           <div className="bg-white p-8 rounded-[32px] border border-slate-100 shadow-sm flex flex-col items-center justify-center">
-                              <h3 className="text-xl font-black text-slate-800 mb-8 tracking-tighter self-start">Ferdighetsprofil (Snitt)</h3>
-                              {/* Calculate avg skills for group */}
-                              {(() => {
-                                  const skillsMap: Record<string, { total: number, max: number }> = {};
-                                  activeProject.rubric?.criteria.forEach(c => {
-                                      const tema = c.tema || "Generelt";
-                                      if (!skillsMap[tema]) skillsMap[tema] = { total: 0, max: 0 };
-                                      skillsMap[tema].max += (c.maxPoints || 0) * evaluatedCandidates.length;
-                                  });
-                                  
-                                  evaluatedCandidates.forEach(c => {
-                                      c.evaluation?.taskBreakdown?.forEach(t => {
-                                          // Find tema
-                                          const crit = activeProject.rubric?.criteria.find(crit => matchEvaluationToCriterion(t, crit));
-                                          if (crit && crit.tema) {
-                                              if (skillsMap[crit.tema]) skillsMap[crit.tema].total += t.score;
-                                          }
-                                      });
-                                  });
-                                  
-                                  const skills = Object.entries(skillsMap)
-                                      .filter(([_, data]) => data.max > 0)
-                                      .map(([tema, data]) => ({
-                                          tema,
-                                          value: 0,
-                                          avg: Math.round((data.total / data.max) * 100)
-                                      }));
-                                  
-                                  return <SkillRadarChart skills={skills} isGroupView={true} />;
-                              })()}
-                           </div>
-                        </div>
-                     </>
-                  )}
-               </div>
-            ) : (
-               <div className="animate-in fade-in slide-in-from-right-4 relative">
-                  {/* v8.3.0: Print Config Menu */}
-                  {showPrintMenu && (
-                      <div className="absolute top-12 left-0 z-50 bg-white border border-slate-200 rounded-2xl shadow-xl p-4 w-64 animate-in fade-in zoom-in-95 print:hidden">
-                          <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-3 border-b pb-2">Utskriftsvalg</h4>
-                          <div className="space-y-2">
-                              {Object.keys(DEFAULT_PRINT_CONFIG).map(key => {
-                                  const k = key as keyof PrintConfig;
-                                  const labels: Record<string, string> = {
-                                      showGrade: 'Vis Karakter',
-                                      showScore: 'Vis Poeng',
-                                      showPercent: 'Vis Prosent',
-                                      showFeedback: 'Vis Kommentar',
-                                      showRadar: 'Vis Ferdighetsprofil',
-                                      showGrowth: 'Vis Vekstpunkter',
-                                      showTable: 'Vis Oppgavetabell',
-                                      showCommentsInTable: 'Vis Tabellkommentarer'
-                                  };
-                                  return (
-                                      <label key={k} className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 p-1 rounded-lg">
-                                          <input 
-                                              type="checkbox" 
-                                              checked={printConfig[k]} 
-                                              onChange={() => setPrintConfig(prev => ({...prev, [k]: !prev[k]}))}
-                                              className="accent-indigo-600 w-4 h-4 rounded" 
-                                          />
-                                          <span className="text-xs font-medium text-slate-700">{labels[k] || k}</span>
-                                      </label>
-                                  );
-                              })}
-                          </div>
-                          <button onClick={() => window.print()} className="mt-4 w-full bg-indigo-600 text-white py-2 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700">
-                              Skriv ut nå →
+  const toggleCandidateSelection = (id: string) => {
+      const next = new Set(selectedCandidateIds);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      setSelectedCandidateIds(next);
+  };
+
+  const toggleAllCandidates = () => {
+      if (selectedCandidateIds.size === displayCandidates.length) {
+          setSelectedCandidateIds(new Set());
+      } else {
+          setSelectedCandidateIds(new Set(displayCandidates.map(c => c.id)));
+      }
+  };
+
+  const executeSelectedEvaluation = () => {
+      if (selectedCandidateIds.size === 0) return;
+      handleBatchEvaluation(Array.from(selectedCandidateIds), true);
+      setSelectedCandidateIds(new Set());
+  };
+
+  // v8.6.1: Handle Batch Export CSV
+  const handleExportCSV = () => {
+      // Logic copied from ResultMatrix, centralized here
+      const rubricTasks = (() => {
+          if (!activeProject.rubric) return { d1: [], d2: [] };
+          const d1: RubricCriterion[] = [];
+          const d2: RubricCriterion[] = [];
+          activeProject.rubric.criteria.forEach(c => {
+             const isD2 = (c.part || "Del 1").toLowerCase().includes("2");
+             if (isD2) d2.push(c); else d1.push(c);
+          });
+          const sorter = (a: RubricCriterion, b: RubricCriterion) => {
+              const nA = parseInt(a.taskNumber.replace(/\D/g,'')) || 0;
+              const nB = parseInt(b.taskNumber.replace(/\D/g,'')) || 0;
+              if (nA !== nB) return nA - nB;
+              return (a.subTask || "").localeCompare(b.subTask || "");
+          };
+          return { d1: d1.sort(sorter), d2: d2.sort(sorter) };
+      })();
+
+      const headers = ["Kandidat", ...rubricTasks.d1.map(c => `D1-${c.taskNumber}${c.subTask}`), ...rubricTasks.d2.map(c => `D2-${c.taskNumber}${c.subTask}`), "Sum", "Prosent", "Karakter"];
+      const rows = displayCandidates.map(c => {
+          const { adjustedMax } = getCandidatePartStatus(c, activeProject);
+          const score = c.evaluation?.score || 0;
+          const percent = adjustedMax > 0 ? Math.round((score/adjustedMax)*100) : 0;
+          
+          const cols = [
+              c.name,
+              ...rubricTasks.d1.map(t => {
+                  const ev = c.evaluation?.taskBreakdown?.find(e => matchEvaluationToCriterion(e, t));
+                  return ev ? formatScore(ev.score) : "-";
+              }),
+              ...rubricTasks.d2.map(t => {
+                  const ev = c.evaluation?.taskBreakdown?.find(e => matchEvaluationToCriterion(e, t));
+                  return ev ? formatScore(ev.score) : "-";
+              }),
+              formatScore(score),
+              `${formatScore(percent)}%`,
+              // v8.6.2: Use deterministic grade calculation
+              calculateGrade(score, adjustedMax)
+          ];
+          return cols.join(";");
+      });
+      
+      const csvContent = [headers.join(";"), ...rows].join("\n");
+      const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement("a");
+      if (link.download !== undefined) {
+          const url = URL.createObjectURL(blob);
+          link.setAttribute("href", url);
+          link.setAttribute("download", `Resultater_${activeProject.name}.csv`);
+          link.style.visibility = 'hidden';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+      }
+  };
+
+  // v8.6.1: Handle Batch Print
+  const handleBatchPrint = () => {
+      if (evaluatedCandidates.length === 0) {
+          alert("Ingen kandidater er vurdert ennå.");
+          return;
+      }
+      setIsBatchPrinting(true);
+      setTimeout(() => {
+          window.print();
+          setIsBatchPrinting(false);
+      }, 500); // Allow render
+  };
+
+  // v8.3.8: Render Persistent Sidebar for Candidate View
+  if (selectedCandidate) {
+      return (
+          <div className="flex h-full w-full overflow-hidden bg-[#F8FAFC]">
+              {/* v8.3.8: Persistent Sidebar for Navigation */}
+              <aside className="w-72 bg-white border-r flex flex-col shrink-0 no-print shadow-sm h-full z-10">
+                  <div className="p-4 border-b shrink-0 bg-white/80 sticky top-0 z-20">
+                      <button onClick={() => setSelectedResultCandidateId(null)} className="w-full text-left flex items-center gap-2 text-slate-500 hover:text-indigo-600 font-black text-[10px] uppercase tracking-widest transition-colors mb-2">
+                          <span>←</span> Tilbake til oversikt
+                      </button>
+                      <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Kandidater</h3>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar bg-slate-50/30">
+                      {displayCandidates
+                          .sort((a, b) => a.name.localeCompare(b.name))
+                          .map(c => {
+                              const isSelected = c.id === selectedCandidate.id;
+                              const { d1, d2, adjustedMax } = getCandidatePartStatus(c, activeProject);
+                              const cScore = c.evaluation?.score || 0;
+                              // v8.6.2: Deterministic Grade
+                              const cGrade = c.status === 'evaluated' ? calculateGrade(cScore, adjustedMax) : '-';
+
+                              return (
+                                  <button
+                                      key={c.id}
+                                      onClick={() => setSelectedResultCandidateId(c.id)}
+                                      className={`w-full text-left p-3 rounded-xl border transition-all flex items-center justify-between group ${isSelected ? 'bg-indigo-600 text-white shadow-md border-indigo-600' : 'bg-white hover:bg-indigo-50 text-slate-600 border-slate-100'}`}
+                                  >
+                                      <div className="flex items-center gap-2 min-w-0">
+                                          <span className={`font-bold text-xs truncate ${isSelected ? 'text-white' : 'text-slate-700'}`}>{c.name}</span>
+                                          <div className={`flex gap-1 text-[8px] font-black uppercase tracking-widest shrink-0 ${isSelected ? 'text-indigo-200' : 'text-slate-400'}`}>
+                                                {d1.status === 'complete' ? <span title="Del 1">1️⃣✅</span> : d1.status === 'missing' ? <span title="Ingen Del 1">1️⃣🚫</span> : <span>1️⃣⚠️</span>}
+                                                {d2.status === 'complete' ? <span title="Del 2">2️⃣✅</span> : d2.status === 'missing' ? <span title="Ingen Del 2">2️⃣🚫</span> : <span>2️⃣⚠️</span>}
+                                          </div>
+                                      </div>
+                                      <span className={`text-[10px] font-black ${isSelected ? 'text-white' : 'text-emerald-600'}`}>{cGrade}</span>
+                                  </button>
+                              );
+                          })}
+                  </div>
+              </aside>
+
+              <main className="flex-1 overflow-y-auto custom-scrollbar p-8 print:p-0 print:overflow-visible h-full bg-[#F8FAFC]">
+                  <div className="max-w-[1600px] mx-auto pb-20 print:pb-0">
+                      {/* v8.3.0: Print Config Menu */}
+                      <div className="flex justify-end mb-6 print:hidden gap-2">
+                          <button onClick={() => window.print()} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-md">
+                              🖨️ Skriv ut
+                          </button>
+                          
+                          <button onClick={() => onNavigateToReview(selectedCandidate.id)} className="bg-white border border-indigo-100 text-indigo-600 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-50 transition-all">
+                              Se Transkripsjon →
+                          </button>
+                          <button onClick={() => handleEvaluateCandidate(selectedCandidate.id)} className="bg-white border border-slate-200 text-slate-500 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-50 transition-all shadow-sm">
+                              {selectedCandidate.evaluation ? 'Vurder på nytt ↻' : 'Start vurdering 🚀'}
                           </button>
                       </div>
-                  )}
 
-                  <div className="flex justify-between items-center mb-6 print:hidden">
-                     <button onClick={() => setShowPrintMenu(!showPrintMenu)} className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-50 transition-all flex items-center gap-2 shadow-sm">
-                        <span>🖨️</span> Utskriftsvalg {showPrintMenu ? '▲' : '▼'}
-                     </button>
-                     
-                     <div className="flex gap-2">
-                        {/* Config Toggles could go here as a dropdown */}
-                        <button onClick={() => onNavigateToReview(selectedCandidate.id)} className="bg-white border border-indigo-100 text-indigo-600 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-50 transition-all">
-                           Se Transkripsjon →
-                        </button>
-                        <button onClick={() => handleEvaluateCandidate(selectedCandidate.id)} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-md">
-                           Vurder på nytt ↻
-                        </button>
-                     </div>
+                      <CandidateReport
+                          candidate={selectedCandidate}
+                          project={activeProject}
+                          config={printConfig}
+                          onNavigateToTask={onNavigateToTask}
+                          groupSkillStats={groupSkillStats} // v8.3.3
+                          onUpdateCandidate={handleUpdateCandidate} // v8.3.6
+                      />
                   </div>
+              </main>
+          </div>
+      );
+  }
 
-                  <CandidateReport 
-                     candidate={selectedCandidate} 
-                     project={activeProject} 
-                     config={printConfig} 
-                     onNavigateToTask={onNavigateToTask}
-                  />
-               </div>
-            )}
-         </div>
-      </main>
+  // v8.6.1: Invisible Batch Print Container
+  // This is only visible during print when isBatchPrinting is true.
+  if (isBatchPrinting) {
+      return (
+          <div className="print:block hidden bg-white">
+              {evaluatedCandidates.map(c => (
+                  <div key={c.id} className="print:block print:break-after-page min-h-screen">
+                      <CandidateReport
+                          candidate={c}
+                          project={activeProject}
+                          config={printConfig}
+                          groupSkillStats={groupSkillStats}
+                          // No callbacks for print view
+                      />
+                  </div>
+              ))}
+          </div>
+      );
+  }
+
+  return (
+    <div className="h-full bg-[#F8FAFC] p-8 overflow-y-auto custom-scrollbar">
+       <div className="max-w-[1800px] mx-auto space-y-8 pb-20">
+            {/* Overview Mode */}
+            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4">
+              <header className="flex justify-between items-end">
+                  <div>
+                      <h2 className="text-3xl font-black text-slate-800 tracking-tighter">Klasseoversikt</h2>
+                      <p className="text-[10px] font-black uppercase text-indigo-500 tracking-[0.2em] mt-2">Samlet statistikk for {evaluatedCandidates.length} vurderte kandidater</p>
+                  </div>
+                  
+                  {/* v8.6.1: Central Action Bar */}
+                  <div className="flex gap-3 items-center bg-white p-2 rounded-2xl shadow-sm border border-slate-100">
+                        {rubricStatus.loading ? (
+                            <div className="flex items-center gap-2 px-4 py-2 bg-indigo-50 rounded-xl">
+                                <Spinner size="w-4 h-4" />
+                                <span className="text-[10px] font-black uppercase text-indigo-600 tracking-widest">{rubricStatus.text}</span>
+                                {progress?.etaSeconds && <span className="text-[10px] text-emerald-600 font-bold ml-2">{formatEta(progress.etaSeconds)}</span>}
+                            </div>
+                        ) : (
+                            <>
+                                <button 
+                                    onClick={executeSelectedEvaluation}
+                                    disabled={selectedCandidateIds.size === 0} 
+                                    className={`px-4 py-2 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all shadow-sm active:scale-95 flex items-center gap-2 ${selectedCandidateIds.size > 0 ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`}
+                                >
+                                    <span>🚀</span> Vurder {selectedCandidateIds.size > 0 ? `${selectedCandidateIds.size} Markerte` : '...'}
+                                </button>
+                                <div className="w-[1px] h-6 bg-slate-200 mx-1"></div>
+                                <button onClick={handleExportCSV} className="bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2">
+                                    <span>📊</span> CSV
+                                </button>
+                                <button onClick={handleBatchPrint} disabled={evaluatedCandidates.length === 0} className="bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 disabled:opacity-50">
+                                    <span>🖨️</span> Skriv ut Alle (Batch)
+                                </button>
+                            </>
+                        )}
+                  </div>
+              </header>
+              
+              {/* v8.4.5: Use displayCandidates (all completed) to decide emptiness, but render UI if > 0 */}
+              {displayCandidates.length === 0 ? (
+                  <div className="p-20 text-center border-2 border-dashed border-slate-200 rounded-[32px] opacity-50">
+                    <div className="text-6xl mb-4 grayscale opacity-30">📊</div>
+                    <h3 className="text-lg font-black text-slate-400 uppercase tracking-widest">Ingen resultater ennå</h3>
+                    <p className="text-sm text-slate-400 mt-2">Start vurdering av kandidater i menyen til venstre.</p>
+                  </div>
+              ) : (
+                  <>
+                    {/* Stats only show if we have evaluated candidates */}
+                    {evaluatedCandidates.length > 0 && (
+                        <>
+                            <GroupStats candidates={activeProject.candidates} project={activeProject} />
+                            
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 h-[400px]">
+                                <TaskAnalysisChart data={analysisData} />
+                                <div className="bg-white p-8 rounded-[32px] border border-slate-100 shadow-sm flex flex-col items-center justify-center">
+                                  <h3 className="text-xl font-black text-slate-800 mb-8 tracking-tighter self-start">Ferdighetsprofil (Snitt)</h3>
+                                  {(() => {
+                                      const stats = (groupSkillStats || {}) as Record<string, { total: number, max: number }>;
+                                      const skills = Object.entries(stats)
+                                          .filter(([_, data]) => data.max > 0)
+                                          .map(([tema, data]) => ({
+                                              tema,
+                                              value: 0,
+                                              avg: Math.round((data.total / data.max) * 100)
+                                          }));
+                                      
+                                      return <SkillRadarChart skills={skills} isGroupView={true} />;
+                                  })()}
+                                </div>
+                            </div>
+                        </>
+                    )}
+
+                    {/* v8.3.3: Restored Unified Matrix Table - Shows ALL ready candidates */}
+                    <ResultMatrix 
+                        project={activeProject} 
+                        candidates={displayCandidates} 
+                        onNavigate={(id) => setSelectedResultCandidateId(id)}
+                        selectedIds={selectedCandidateIds}
+                        onToggle={toggleCandidateSelection}
+                        onToggleAll={toggleAllCandidates} 
+                    />
+                  </>
+              )}
+            </div>
+       </div>
     </div>
   );
 };

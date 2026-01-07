@@ -1,6 +1,8 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { SYSTEM_VERSION } from '../types';
+import { renderAsync } from 'docx-preview';
+import { getMedia } from '../services/storageService';
 
 export const Spinner: React.FC<{ size?: string; color?: string }> = ({ size = "w-4 h-4", color = "text-indigo-600" }) => (
   <svg className={`animate-spin ${size} ${color}`} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -8,6 +10,68 @@ export const Spinner: React.FC<{ size?: string; color?: string }> = ({ size = "w
     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
   </svg>
 );
+
+// v8.5.7: Docx Visual Renderer
+export const DocxRenderer: React.FC<{ pageId: string, className?: string }> = ({ pageId, className }) => {
+    const containerRef = useRef<HTMLDivElement>(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        const renderDoc = async () => {
+            if (!containerRef.current) return;
+            setLoading(true);
+            try {
+                const base64 = await getMedia(pageId);
+                if (!base64) throw new Error("Filen finnes ikke lokalt");
+                
+                // Convert base64 to Blob
+                const byteCharacters = atob(base64.split(',')[1]);
+                const byteNumbers = new Array(byteCharacters.length);
+                for (let i = 0; i < byteCharacters.length; i++) {
+                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                const blob = new Blob([byteArray], {type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
+                
+                containerRef.current.innerHTML = ''; // Clear previous
+                await renderAsync(blob, containerRef.current, undefined, {
+                    inWrapper: false,
+                    ignoreWidth: false,
+                    ignoreHeight: false,
+                    ignoreFonts: false,
+                    breakPages: true,
+                    useBase64URL: true,
+                    experimental: true
+                });
+            } catch (e: any) {
+                console.error("Docx render error:", e);
+                setError("Kunne ikke vise dokumentet: " + e.message);
+            } finally {
+                setLoading(false);
+            }
+        };
+        renderDoc();
+    }, [pageId]);
+
+    return (
+        <div className={`bg-white rounded-xl border border-slate-200 shadow-md p-4 min-h-[400px] relative overflow-auto custom-scrollbar ${className}`}>
+            {loading && (
+                <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10">
+                    <Spinner size="w-8 h-8" />
+                </div>
+            )}
+            {error ? (
+                <div className="flex flex-col items-center justify-center h-full text-rose-500 gap-2">
+                    <span className="text-2xl">📄❌</span>
+                    <p className="text-xs font-bold uppercase tracking-widest">{error}</p>
+                </div>
+            ) : (
+                <div ref={containerRef} className="docx-container" />
+            )}
+        </div>
+    );
+};
 
 /**
  * LatexRenderer v8.2.11: The Formatter
@@ -127,28 +191,67 @@ export const LatexRenderer: React.FC<{ content: string; className?: string }> = 
   const processContent = (text: string) => {
     const cleanText = sanitizeLatex(text);
 
-    // v8.2.10: Multi-Pass Parser
-    // Pass 1: Split by Visual Evidence (Images)
-    // Pass 2: Split by Code Blocks (Markdown)
+    // v8.5.3: Balanced Bracket Parser
+    // Replaces regex split to handle nested brackets in visual evidence.
+    const splitByImagesBalanced = (input: string) => {
+        const parts: { type: 'text' | 'image', content: string }[] = [];
+        const triggers = ["AI-TOLKNING AV FIGUR", "FIGURTOLKNING", "BESKRIVELSE AV BILDE", "VISUAL-EVIDENCE", "BILDEVEDLEGG"];
+        // Regex to match the start of a tag: [TRIGGER...
+        const triggerRegex = new RegExp(`^\\s*(?:${triggers.join('|')})(?:\\s*\\d*)?\\s*:?\\s*`, 'i');
     
-    const imageRegex = /\[\s*(?:AI-TOLKNING AV FIGUR|FIGURTOLKNING|BESKRIVELSE AV BILDE|VISUAL-EVIDENCE|BILDEVEDLEGG)(?:\s*\d*)?\s*:?\s*([\s\S]*?)\s*\]/gi;
+        let currentIndex = 0;
+        let textBufferStart = 0;
     
-    const splitByImages = (input: string) => {
-        const parts = [];
-        let lastIndex = 0;
-        let match;
-        while ((match = imageRegex.exec(input)) !== null) {
-            if (match.index > lastIndex) parts.push({ type: 'text', content: input.substring(lastIndex, match.index) });
-            
-            const content = match[1].trim();
-            const isNegative = content.length < 2 || /^(?:ingen|ikke|nei|tom|mangler|fant ikke)/i.test(content);
-            
-            if (!isNegative) {
-                parts.push({ type: 'image', content });
+        while (currentIndex < input.length) {
+            if (input[currentIndex] === '[') {
+                // Check if this bracket starts a known tag
+                const substring = input.substring(currentIndex + 1);
+                const match = substring.match(triggerRegex);
+                
+                if (match) {
+                    // It is a tag!
+                    // 1. Flush existing text buffer
+                    if (currentIndex > textBufferStart) {
+                        parts.push({ type: 'text', content: input.substring(textBufferStart, currentIndex) });
+                    }
+                    
+                    // 2. Find the matching closing bracket (handling nesting)
+                    let balance = 1;
+                    let searchIndex = currentIndex + 1;
+                    
+                    while (searchIndex < input.length && balance > 0) {
+                        if (input[searchIndex] === '[') balance++;
+                        else if (input[searchIndex] === ']') balance--;
+                        searchIndex++;
+                    }
+                    
+                    if (balance === 0) {
+                        // Found complete block
+                        const fullInnerContent = input.substring(currentIndex + 1, searchIndex - 1);
+                        // Strip the trigger prefix to get pure content
+                        const cleanContent = fullInnerContent.substring(match[0].length);
+                        
+                        const isNegative = cleanContent.length < 2 || /^(?:ingen|ikke|nei|tom|mangler|fant ikke)/i.test(cleanContent.trim());
+                
+                        if (!isNegative) {
+                            parts.push({ type: 'image', content: cleanContent });
+                        }
+                        
+                        // Advance cursor
+                        currentIndex = searchIndex;
+                        textBufferStart = searchIndex;
+                        continue; 
+                    }
+                }
             }
-            lastIndex = match.index + match[0].length;
+            currentIndex++;
         }
-        if (lastIndex < input.length) parts.push({ type: 'text', content: input.substring(lastIndex) });
+        
+        // Flush remaining text
+        if (textBufferStart < input.length) {
+            parts.push({ type: 'text', content: input.substring(textBufferStart) });
+        }
+        
         return parts;
     };
 
@@ -171,7 +274,7 @@ export const LatexRenderer: React.FC<{ content: string; className?: string }> = 
         return parts;
     };
 
-    const initialParts = splitByImages(cleanText);
+    const initialParts = splitByImagesBalanced(cleanText);
     const finalElements: React.ReactNode[] = [];
 
     initialParts.forEach((part, idx) => {

@@ -1,9 +1,9 @@
 
-# Vurderingshjelp - Master Documentation (v8.3.0)
+# Vurderingshjelp - Master Documentation (v8.5.1)
 
 Profesjonelt verktøy for digitalisering, kontroll og pedagogisk vurdering av elevbesvarelser.
 
-## 🚀 Hovedfunksjoner (v8.3.x)
+## 🚀 Hovedfunksjoner (v8.5.x)
 
 ### 1. Oppgaver & Fasit (Rettemanual)
 *   **Multi-Phase Construction:** Genererer rettemanual i tre faser (Skann -> Bygg -> Tema) for høyest mulig presisjon.
@@ -27,15 +27,16 @@ Profesjonelt verktøy for digitalisering, kontroll og pedagogisk vurdering av el
 
 ## 🛡️ Teknisk Standard (Regresjonsvern)
 Se [TECHNICAL_STANDARD.md](./TECHNICAL_STANDARD.md) for de absolutte reglene som styrer systemets logikk, inkludert:
+*   **Flash Mandate:** Systemet kjører 100% på Gemini 3 Flash for kostnadseffektivitet.
 *   **Aggressiv Task ID Sanitization:** Alle IDer vaskes for støy ("1bDel1" -> "1b").
 *   **Manual Override Supremacy:** Lærerens manuelle endringer overstyrer alltid KI.
 *   **Standard Point Policy:** Maks 2.0 poeng per deloppgave som default.
 
 ## 🛠️ Arkitektur
 *   **Frontend:** React 19, TypeScript, Vite.
-*   **AI:** Gemini 3 Flash (OCR/Fasit) + Gemini 3 Pro (Vurdering).
+*   **AI:** Gemini 3 Flash (Unified Architecture).
 *   **Database:** IndexedDB (Lokal lagring).
 *   **Personvern:** Ingen lagring på tredjepartsserver.
 
 ---
-*Systemversjon: v8.3.0*
+*Systemversjon: v8.5.1*

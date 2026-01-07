@@ -36,14 +36,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
-  const toggleForceFlash = () => {
-      if (setForceFlash) {
-          const newVal = !forceFlash;
-          setForceFlash(newVal);
-          saveSetting('FORCE_FLASH', newVal);
-      }
-  };
-
   const getProjectStats = (p: Project) => {
     const candidateCount = p.candidates?.length ?? (p.candidateCount || 0);
     // v7.9.44: Use stored evaluatedCount if candidates are not loaded (Dashboard view)
@@ -92,15 +84,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
   return (
     <div className="min-h-screen bg-[#F8FAFC] p-8 md:p-12">
       <header className="max-w-6xl mx-auto flex flex-col md:flex-row justify-between mb-12 items-start md:items-end gap-6">
-        <div className="max-w-2xl">
+        <div className="max-w-3xl">
           <div className="flex items-center gap-3 mb-1">
              <h1 className="text-4xl md:text-5xl font-black text-slate-800 tracking-tighter">Vurderingshjelp</h1>
              <span className="bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border border-indigo-100 mt-2">
                 {SYSTEM_VERSION}
              </span>
           </div>
-          <p className="text-slate-500 font-medium text-sm mt-4 leading-relaxed">
-            Profesjonell digitalisering og analyse av elevbesvarelser. Trygt lagret i din nettleser.
+          <p className="text-slate-500 font-medium text-sm mt-4 leading-relaxed max-w-2xl">
+            Kvalitetssikret og kontrollert digitalisering og analyse av elevbesvarelser. Utfyllende tilbakemeldinger. Alt trygt lagret i din nettleser.
           </p>
         </div>
         <div className="flex gap-3">
@@ -206,26 +198,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
                      All behandling av elevbesvarelser skjer <strong>lokalt i din nettleser</strong> (IndexedDB). Ingen filer lagres på våre servere. KI-analysen sendes som krypterte transienter til Gemini API og dataene brukes <strong>ikke</strong> til trening av modeller. Du har full kontroll over dine data.
                    </p>
                  </section>
-
-                 {setForceFlash && (
-                     <section className="bg-emerald-50/50 p-6 rounded-2xl border border-emerald-100 flex justify-between items-center">
-                        <div>
-                            <h4 className="font-black uppercase text-[10px] tracking-widest text-emerald-600 mb-1 flex items-center gap-2">
-                                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                                Kostnadsmodus (Sparebluss)
-                            </h4>
-                            <p className="text-[10px] text-slate-500 max-w-[280px]">
-                                Tving systemet til å bruke <strong>Gemini Flash</strong> overalt (også på fasit og vurdering). Sparer penger og kvote, men kan gi litt enklere begrunnelser.
-                            </p>
-                        </div>
-                        <button 
-                            onClick={toggleForceFlash}
-                            className={`w-12 h-7 rounded-full p-1 transition-colors duration-300 relative ${forceFlash ? 'bg-emerald-500' : 'bg-slate-200'}`}
-                        >
-                            <div className={`w-5 h-5 bg-white rounded-full shadow-sm transition-transform duration-300 ${forceFlash ? 'translate-x-5' : 'translate-x-0'}`}></div>
-                        </button>
-                     </section>
-                 )}
 
                  <div className="grid grid-cols-2 gap-4">
                    <section>

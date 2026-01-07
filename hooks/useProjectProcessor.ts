@@ -17,8 +17,7 @@ import {
 
 export const useProjectProcessor = (
   activeProject: Project | null, 
-  setActiveProject: React.Dispatch<React.SetStateAction<Project | null>>,
-  forceFlash: boolean = false // v8.1.2: New prop
+  setActiveProject: React.Dispatch<React.SetStateAction<Project | null>>
 ) => {
   const [processingCount, setProcessingCount] = useState(0);
   const [batchTotal, setBatchTotal] = useState(0);
@@ -41,11 +40,9 @@ export const useProjectProcessor = (
   
   const activeProjectRef = useRef(activeProject);
   const useFlashFallbackRef = useRef(useFlashFallback);
-  const forceFlashRef = useRef(forceFlash);
 
   useEffect(() => { activeProjectRef.current = activeProject; }, [activeProject]);
   useEffect(() => { useFlashFallbackRef.current = useFlashFallback; }, [useFlashFallback]);
-  useEffect(() => { forceFlashRef.current = forceFlash; }, [forceFlash]);
 
   // v7.9.15: Auto-resume when network is restored
   useEffect(() => {
@@ -61,7 +58,8 @@ export const useProjectProcessor = (
   }, []);
 
   // v8.1.2: If Force Flash is on, use OCR_MODEL (Flash). Else check fallback.
-  const getActiveReasoningModel = () => (forceFlashRef.current || useFlashFallbackRef.current) ? OCR_MODEL : PRO_MODEL;
+  // v8.5.0: Always Flash now.
+  const getActiveReasoningModel = () => OCR_MODEL;
 
   const updateActiveProject = useCallback((updates: Partial<Project>) => {
     setActiveProject(prev => prev ? { ...prev, ...updates, updatedAt: Date.now() } : null);

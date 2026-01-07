@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Project, Candidate, Page, Rubric } from '../types';
-import { LatexRenderer, Spinner } from './SharedUI';
+import { LatexRenderer, Spinner, DocxRenderer } from './SharedUI';
 import { getMedia, saveCandidate } from '../services/storageService';
 import { cleanTaskPair } from '../services/geminiService';
 
@@ -43,6 +43,41 @@ const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
 
     return () => observer.disconnect();
   }, []);
+
+  // v8.5.7: Docx Visual Preview
+  if (page.fileName.toLowerCase().endsWith('.docx')) {
+      return (
+          <div ref={containerRef} className="relative w-full overflow-hidden rounded-xl border border-slate-200 shadow-md bg-white min-h-[400px]">
+              <div className="absolute top-2 right-2 z-20 px-2 py-0.5 rounded bg-blue-500 text-white text-[7px] font-black uppercase tracking-widest opacity-80">
+                  WORD DOKUMENT
+              </div>
+              {isVisible ? (
+                  <DocxRenderer pageId={page.id} />
+              ) : (
+                  <div className="h-full flex items-center justify-center bg-slate-50">
+                      <p className="text-[8px] font-black uppercase text-slate-400 tracking-widest">Laster dokument...</p>
+                  </div>
+              )}
+          </div>
+      );
+  }
+
+  // Fallback for pure text files that are not docx
+  if (page.mimeType === 'text/plain') {
+    return (
+      <div className="relative w-full overflow-hidden rounded-xl border border-slate-200 shadow-md bg-white p-8 min-h-[400px]">
+        <div className="absolute top-2 right-2 px-2 py-0.5 rounded bg-blue-500 text-white text-[7px] font-black uppercase tracking-widest opacity-80">
+          TEKSTFIL
+        </div>
+        <div className="text-[10px] font-black text-slate-300 uppercase tracking-widest mb-4 border-b pb-2">
+          {page.fileName}
+        </div>
+        <div className="text-slate-600 text-sm whitespace-pre-wrap font-medium leading-relaxed font-serif italic">
+          {page.rawText || page.transcription}
+        </div>
+      </div>
+    );
+  }
 
   useEffect(() => {
     let currentUrl: string | null = null;
@@ -89,22 +124,6 @@ const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
     };
   }, [isVisible, page.id]);
 
-  if (page.mimeType === 'text/plain') {
-    return (
-      <div className="relative w-full overflow-hidden rounded-xl border border-slate-200 shadow-md bg-white p-8 min-h-[400px]">
-        <div className="absolute top-2 right-2 px-2 py-0.5 rounded bg-blue-500 text-white text-[7px] font-black uppercase tracking-widest opacity-80">
-          DIGITAL BESVARELSE
-        </div>
-        <div className="text-[10px] font-black text-slate-300 uppercase tracking-widest mb-4 border-b pb-2">
-          {page.fileName}
-        </div>
-        <div className="text-slate-600 text-sm whitespace-pre-wrap font-medium leading-relaxed font-serif italic">
-          {page.rawText || page.transcription}
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div 
       ref={containerRef}
@@ -146,6 +165,190 @@ const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
           <p className="text-[8px] font-black uppercase tracking-widest Fil mangler">Fil mangler (Slett & Last opp på nytt)</p>
         </div>
       )}
+    </div>
+  );
+};
+
+// Helper for hydration
+const hydrateEvidence = (text: string, evidence?: string) => {
+  if (!evidence || !text) return text;
+  return text.replace(/\[BILDEVEDLEGG:\s*Se visualEvidence\s*\]/gi, `[BILDEVEDLEGG: ${evidence}]`);
+};
+
+// v8.3.5: Extracted PageEditor to handle local state for deferred updates (Enter to commit)
+const PageEditor: React.FC<{
+  page: Page;
+  index: number;
+  isEditing: boolean;
+  isRefreshing: boolean;
+  onToggleEdit: () => void;
+  onRotate: () => void;
+  onRescan: () => void;
+  onDelete: () => void;
+  onMetadataChange: (field: 'candidateId' | 'pageNumber' | 'part', value: string | number) => void;
+  onTaskUpdate: (tasks: string) => void;
+  onTextChange: (val: string) => void;
+  onEvidenceChange: (val: string) => void;
+}> = ({ 
+  page, index, isEditing, isRefreshing, 
+  onToggleEdit, onRotate, onRescan, onDelete, 
+  onMetadataChange, onTaskUpdate, onTextChange, onEvidenceChange 
+}) => {
+  // Local state for page number to prevent jumping
+  const [localPageNum, setLocalPageNum] = useState(page.pageNumber || index + 1);
+
+  useEffect(() => {
+    setLocalPageNum(page.pageNumber || index + 1);
+  }, [page.pageNumber, index]);
+
+  const commitPageNum = () => {
+    if (localPageNum !== (page.pageNumber || index + 1)) {
+        onMetadataChange('pageNumber', localPageNum);
+    }
+  };
+
+  const handlePageNumKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+        commitPageNum();
+        (e.target as HTMLInputElement).blur();
+    }
+  };
+
+  return (
+    <div className={`grid grid-cols-1 lg:grid-cols-2 gap-8 items-start relative ${isRefreshing ? 'opacity-50 pointer-events-none' : ''}`}>
+      {isRefreshing && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-white/40 backdrop-blur-[2px] rounded-3xl animate-in fade-in duration-300">
+          <Spinner size="w-12 h-12" />
+          <p className="text-[10px] font-black uppercase tracking-[0.3em] text-indigo-600 animate-pulse">Transkriberer på nytt...</p>
+        </div>
+      )}
+      
+      <div className="space-y-4">
+         <div className="flex justify-between items-center px-2">
+           <div className="flex items-center gap-4">
+             <div className="flex flex-col items-center">
+               <span className="text-[7px] font-black uppercase text-slate-400 mb-0.5 tracking-widest">Side</span>
+               <input 
+                 type="number"
+                 title="Endre sidetall (Trykk Enter for å lagre)"
+                 value={localPageNum}
+                 onChange={e => setLocalPageNum(parseInt(e.target.value) || 0)}
+                 onBlur={commitPageNum}
+                 onKeyDown={handlePageNumKeyDown}
+                 className="w-10 h-10 rounded-xl bg-slate-800 text-white flex items-center justify-center font-black text-xs text-center outline-none ring-indigo-500/30 focus:ring-2"
+               />
+             </div>
+
+             <div className="flex flex-col">
+               <span className="text-[7px] font-black uppercase text-slate-400 mb-0.5 tracking-widest">Kandidat / Del</span>
+               <div className="flex items-center gap-1.5">
+                  <input 
+                    type="text"
+                    title="Flytt denne siden til et annet kandidatnummer"
+                    value={page.candidateId || ""}
+                    placeholder="ID"
+                    onChange={e => onMetadataChange('candidateId', e.target.value)}
+                    className="w-14 h-7 bg-white border border-slate-200 rounded-md text-center font-black text-[10px] outline-none"
+                  />
+                  <select 
+                    value={page.part || "Del 1"}
+                    title="Bytt mellom Del 1 og Del 2 for denne siden"
+                    onChange={e => onMetadataChange('part', e.target.value)}
+                    className="h-7 bg-white border border-slate-200 rounded-md px-1 font-black text-[10px] outline-none"
+                  >
+                    <option value="Del 1">Del 1</option>
+                    <option value="Del 2">Del 2</option>
+                  </select>
+                </div>
+             </div>
+           </div>
+           <div className="flex gap-2">
+             <button onClick={onRotate} title="Roter bildet 90 grader med klokken" className="w-10 h-10 flex items-center justify-center bg-white border rounded-xl hover:bg-slate-50 transition-all text-xs">↻</button>
+             <button 
+               onClick={onRescan} 
+               title="Slett nåværende tekst og tving KI-en til å se på bildet helt på nytt (høyeste presisjon)" 
+               className="h-10 px-3 flex items-center justify-center bg-white border rounded-xl hover:bg-indigo-50 text-indigo-600 transition-all text-[9px] font-black gap-1.5"
+             >
+               ↻ Transkriber på nytt
+             </button>
+             <button onClick={onDelete} title="Slett denne siden" className="w-10 h-10 flex items-center justify-center bg-white border rounded-xl hover:bg-rose-50 text-rose-400 transition-all">✕</button>
+           </div>
+         </div>
+         <LazyImage page={page} />
+      </div>
+      <div className="space-y-4">
+         <div className="flex items-center justify-between px-2 h-10">
+            <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Elevens tekst & Bevis</span>
+            <button onClick={onToggleEdit} className={`text-[9px] font-black uppercase px-4 py-2 rounded-full border transition-all ${isEditing ? 'bg-emerald-600 text-white' : 'bg-white text-indigo-600 hover:bg-indigo-50'}`}>
+              {isEditing ? 'Lagre ✓' : 'Rediger ✎'}
+            </button>
+         </div>
+         <div className="bg-indigo-600 rounded-2xl p-8 shadow-xl min-h-[400px] flex flex-col relative overflow-hidden group/trans">
+            <div className="flex justify-between items-center mb-6 border-b border-indigo-400/40 pb-4 relative z-10">
+              <span className="text-[9px] font-black uppercase text-indigo-100 tracking-[0.2em]">LaTeX Matematikk</span>
+              {isEditing ? (
+                <input 
+                  type="text" 
+                  defaultValue={page.identifiedTasks?.map(t => `${t.taskNumber}${t.subTask}`).join(", ") || ""}
+                  placeholder="Oppgaver (f.eks 1a, 2b)..."
+                  className="text-[10px] font-black bg-indigo-800 text-white px-3 py-1.5 rounded-lg border border-indigo-500 outline-none w-1/2 placeholder-indigo-400"
+                  onBlur={(e) => onTaskUpdate(e.target.value)}
+                />
+              ) : (
+                page.identifiedTasks && page.identifiedTasks.length > 0 && (
+                  <div className="flex flex-wrap justify-end gap-1 max-w-[60%]">
+                     {page.identifiedTasks.map(t => {
+                       const label = `${t.taskNumber || ''}${t.subTask || ''}`;
+                       if (!label) return null;
+                       return (
+                         <span key={label} className="text-[8px] font-black px-2 py-1 rounded-md uppercase bg-white/20 text-white">
+                           {label}
+                         </span>
+                       );
+                     })}
+                  </div>
+                )
+              )}
+            </div>
+            <div className="flex-1 relative z-10 custom-scrollbar overflow-y-auto">
+               {isEditing ? (
+                 <div className="flex flex-col gap-4 h-full">
+                   <div className="flex-1 flex flex-col">
+                     <label className="text-[7px] font-black uppercase text-indigo-200 mb-1 block tracking-widest">Hovedtranskripsjon</label>
+                     <textarea 
+                        autoFocus 
+                        value={(page.transcription || '').replace(/\\n/g, '\n').replace(/\\\\/g, '\\\\\n')} 
+                        onChange={e => onTextChange(e.target.value)} 
+                        className="w-full min-h-[600px] flex-1 bg-indigo-700/40 text-white p-4 rounded-xl text-sm font-medium outline-none resize-none custom-scrollbar border border-indigo-500/30" 
+                     />
+                     <label className="text-[7px] font-black uppercase text-indigo-200 mt-4 mb-1 block tracking-widest">CAS / Figurtolkning (visualEvidence)</label>
+                     <textarea 
+                        value={(page.visualEvidence || '').replace(/\\n/g, '\n')} 
+                        onChange={e => onEvidenceChange(e.target.value)} 
+                        className="w-full h-32 bg-indigo-700/40 text-white p-4 rounded-xl text-xs font-mono outline-none resize-none custom-scrollbar border border-indigo-500/30" 
+                     />
+                   </div>
+                 </div>
+               ) : (
+                 <div className="text-white space-y-6">
+                   <div className="pl-1">
+                     <LatexRenderer content={hydrateEvidence(page.transcription || "", page.visualEvidence)} className="text-base text-white font-medium leading-relaxed" />
+                     
+                     {page.visualEvidence && !page.transcription?.match(/\[(?:AI-TOLKNING AV FIGUR|BILDEVEDLEGG)/) && (
+                       <div className="mt-8">
+                          <LatexRenderer content={`[BILDEVEDLEGG: ${page.visualEvidence}]`} />
+                       </div>
+                     )}
+
+                     {(!page.transcription || page.transcription.trim() === "") && !page.visualEvidence && (
+                       <div className="py-10 text-center opacity-40 italic font-black uppercase text-[9px] tracking-widest">Tom side</div>
+                     )}
+                   </div>
+                 </div>
+               )}
+            </div>
+         </div>
+      </div>
     </div>
   );
 };
@@ -297,7 +500,6 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
     };
   };
 
-  // ... handleMetadataChange, allUniqueTasks, finalCandidates, sortedReviewPages, hydrateEvidence logic remains same ...
   const handleMetadataChange = async (pageId: string, field: 'candidateId' | 'pageNumber' | 'part', value: string | number) => {
     setActiveProject(prev => {
       if (!prev) return null;
@@ -415,11 +617,6 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
     });
   }, [currentReviewCandidate]);
 
-  const hydrateEvidence = (text: string, evidence?: string) => {
-    if (!evidence || !text) return text;
-    return text.replace(/\[BILDEVEDLEGG:\s*Se visualEvidence\s*\]/gi, `[BILDEVEDLEGG: ${evidence}]`);
-  };
-
   return (
     <div className="flex h-full w-full overflow-hidden bg-[#F1F5F9]">
       <aside className="w-64 bg-white border-r flex flex-col shrink-0 no-print shadow-sm h-full">
@@ -500,7 +697,6 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
       </aside>
 
       <main ref={mainScrollRef} className="flex-1 overflow-y-auto custom-scrollbar p-6 h-full bg-[#F1F5F9]">
-        {/* ... Main content (LazyImages) remains identical ... */}
         <div className="max-w-[1400px] mx-auto space-y-8 pb-32">
           {!currentReviewCandidate ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-300 py-20">
@@ -516,153 +712,27 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
               </header>
 
               <div className="space-y-12">
-                {sortedReviewPages.map((p, idx) => {
-                  const isEditing = editingPageIds.has(p.id);
-                  const isRefreshing = pageLoadingIds.has(p.id);
-                  
-                  return (
-                    <div key={p.id} className={`grid grid-cols-1 lg:grid-cols-2 gap-8 items-start relative ${isRefreshing ? 'opacity-50 pointer-events-none' : ''}`}>
-                      {isRefreshing && (
-                        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-white/40 backdrop-blur-[2px] rounded-3xl animate-in fade-in duration-300">
-                          <Spinner size="w-12 h-12" />
-                          <p className="text-[10px] font-black uppercase tracking-[0.3em] text-indigo-600 animate-pulse">Transkriberer på nytt...</p>
-                        </div>
-                      )}
-                      
-                      <div className="space-y-4">
-                         <div className="flex justify-between items-center px-2">
-                           <div className="flex items-center gap-4">
-                             <div className="flex flex-col items-center">
-                               <span className="text-[7px] font-black uppercase text-slate-400 mb-0.5 tracking-widest">Side</span>
-                               <input 
-                                 type="number"
-                                 title="Endre sidetall for denne siden"
-                                 value={p.pageNumber || idx + 1}
-                                 onChange={e => handleMetadataChange(p.id, 'pageNumber', parseInt(e.target.value) || 0)}
-                                 className="w-10 h-10 rounded-xl bg-slate-800 text-white flex items-center justify-center font-black text-xs text-center outline-none ring-indigo-500/30 focus:ring-2"
-                               />
-                             </div>
-
-                             <div className="flex flex-col">
-                               <span className="text-[7px] font-black uppercase text-slate-400 mb-0.5 tracking-widest">Kandidat / Del</span>
-                               <div className="flex items-center gap-1.5">
-                                  <input 
-                                    type="text"
-                                    title="Flytt denne siden til et annet kandidatnummer"
-                                    value={p.candidateId || ""}
-                                    placeholder="ID"
-                                    onChange={e => handleMetadataChange(p.id, 'candidateId', e.target.value)}
-                                    className="w-14 h-7 bg-white border border-slate-200 rounded-md text-center font-black text-[10px] outline-none"
-                                  />
-                                  <select 
-                                    value={p.part || "Del 1"}
-                                    title="Bytt mellom Del 1 og Del 2 for denne siden"
-                                    onChange={e => handleMetadataChange(p.id, 'part', e.target.value)}
-                                    className="h-7 bg-white border border-slate-200 rounded-md px-1 font-black text-[10px] outline-none"
-                                  >
-                                    <option value="Del 1">Del 1</option>
-                                    <option value="Del 2">Del 2</option>
-                                  </select>
-                                </div>
-                             </div>
-                           </div>
-                           <div className="flex gap-2">
-                             <button onClick={() => rotatePage(p.id)} title="Roter bildet 90 grader med klokken" className="w-10 h-10 flex items-center justify-center bg-white border rounded-xl hover:bg-slate-50 transition-all text-xs">↻</button>
-                             <button 
-                               onClick={() => onRescan(currentReviewCandidate.id, p.id)} 
-                               title="Slett nåværende tekst og tving KI-en til å se på bildet helt på nytt (høyeste presisjon)" 
-                               className="h-10 px-3 flex items-center justify-center bg-white border rounded-xl hover:bg-indigo-50 text-indigo-600 transition-all text-[9px] font-black gap-1.5"
-                             >
-                               ↻ Transkriber på nytt
-                             </button>
-                             <button onClick={() => { if(confirm('Slett denne siden permanent?')) deletePage(currentReviewCandidate.id, p.id); }} title="Slett denne siden" className="w-10 h-10 flex items-center justify-center bg-white border rounded-xl hover:bg-rose-50 text-rose-400 transition-all">✕</button>
-                           </div>
-                         </div>
-                         <LazyImage page={p} />
-                      </div>
-                      <div className="space-y-4">
-                         <div className="flex items-center justify-between px-2 h-10">
-                            <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Elevens tekst & Bevis</span>
-                            <button onClick={() => toggleEdit(p.id)} className={`text-[9px] font-black uppercase px-4 py-2 rounded-full border transition-all ${isEditing ? 'bg-emerald-600 text-white' : 'bg-white text-indigo-600 hover:bg-indigo-50'}`}>
-                              {isEditing ? 'Lagre ✓' : 'Rediger ✎'}
-                            </button>
-                         </div>
-                         <div className="bg-indigo-600 rounded-2xl p-8 shadow-xl min-h-[400px] flex flex-col relative overflow-hidden group/trans">
-                            <div className="flex justify-between items-center mb-6 border-b border-indigo-400/40 pb-4 relative z-10">
-                              <span className="text-[9px] font-black uppercase text-indigo-100 tracking-[0.2em]">LaTeX Matematikk</span>
-                              {isEditing ? (
-                                <input 
-                                  type="text" 
-                                  defaultValue={p.identifiedTasks?.map(t => `${t.taskNumber}${t.subTask}`).join(", ") || ""}
-                                  placeholder="Oppgaver (f.eks 1a, 2b)..."
-                                  className="text-[10px] font-black bg-indigo-800 text-white px-3 py-1.5 rounded-lg border border-indigo-500 outline-none w-1/2 placeholder-indigo-400"
-                                  onBlur={(e) => updatePageTasks(currentReviewCandidate.id, p.id, e.target.value)}
-                                />
-                              ) : (
-                                p.identifiedTasks && p.identifiedTasks.length > 0 && (
-                                  <div className="flex flex-wrap justify-end gap-1 max-w-[60%]">
-                                     {p.identifiedTasks.map(t => {
-                                       const label = `${t.taskNumber || ''}${t.subTask || ''}`;
-                                       if (!label) return null;
-                                       return (
-                                         <span key={label} className="text-[8px] font-black px-2 py-1 rounded-md uppercase bg-white/20 text-white">
-                                           {label}
-                                         </span>
-                                       );
-                                     })}
-                                  </div>
-                                )
-                              )}
-                            </div>
-                            <div className="flex-1 relative z-10 custom-scrollbar overflow-y-auto">
-                               {isEditing ? (
-                                 <div className="flex flex-col gap-4 h-full">
-                                   <div className="flex-1 flex flex-col">
-                                     <label className="text-[7px] font-black uppercase text-indigo-200 mb-1 block tracking-widest">Hovedtranskripsjon</label>
-                                     <textarea 
-                                        autoFocus 
-                                        // v8.0.43: Force line breaks on double backslash for readability in editor
-                                        value={(p.transcription || '').replace(/\\n/g, '\n').replace(/\\\\/g, '\\\\\n')} 
-                                        onChange={e => {
-                                          const val = e.target.value;
-                                          setActiveProject(prev => prev ? ({ ...prev, candidates: prev.candidates.map(c => c.id === currentReviewCandidate.id ? { ...c, pages: c.pages.map(pg => pg.id === p.id ? { ...pg, transcription: val } : pg) } : c) }) : null);
-                                        }} 
-                                        className="w-full min-h-[600px] flex-1 bg-indigo-700/40 text-white p-4 rounded-xl text-sm font-medium outline-none resize-none custom-scrollbar border border-indigo-500/30" 
-                                     />
-                                     <label className="text-[7px] font-black uppercase text-indigo-200 mt-4 mb-1 block tracking-widest">CAS / Figurtolkning (visualEvidence)</label>
-                                     <textarea 
-                                        value={(p.visualEvidence || '').replace(/\\n/g, '\n')} 
-                                        onChange={e => {
-                                          const val = e.target.value;
-                                          setActiveProject(prev => prev ? ({ ...prev, candidates: prev.candidates.map(c => c.id === currentReviewCandidate.id ? { ...c, pages: c.pages.map(pg => pg.id === p.id ? { ...pg, visualEvidence: val } : pg) } : c) }) : null);
-                                        }} 
-                                        className="w-full h-32 bg-indigo-700/40 text-white p-4 rounded-xl text-xs font-mono outline-none resize-none custom-scrollbar border border-indigo-500/30" 
-                                     />
-                                   </div>
-                                 </div>
-                               ) : (
-                                 <div className="text-white space-y-6">
-                                   <div className="pl-1">
-                                     <LatexRenderer content={hydrateEvidence(p.transcription || "", p.visualEvidence)} className="text-base text-white font-medium leading-relaxed" />
-                                     
-                                     {p.visualEvidence && !p.transcription?.match(/\[(?:AI-TOLKNING AV FIGUR|BILDEVEDLEGG)/) && (
-                                       <div className="mt-8">
-                                          <LatexRenderer content={`[BILDEVEDLEGG: ${p.visualEvidence}]`} />
-                                       </div>
-                                     )}
-
-                                     {(!p.transcription || p.transcription.trim() === "") && !p.visualEvidence && (
-                                       <div className="py-10 text-center opacity-40 italic font-black uppercase text-[9px] tracking-widest">Tom side</div>
-                                     )}
-                                   </div>
-                                 </div>
-                               )}
-                            </div>
-                         </div>
-                      </div>
-                    </div>
-                  );
-                })}
+                {sortedReviewPages.map((p, idx) => (
+                  <PageEditor
+                    key={p.id}
+                    page={p}
+                    index={idx}
+                    isEditing={editingPageIds.has(p.id)}
+                    isRefreshing={pageLoadingIds.has(p.id)}
+                    onToggleEdit={() => toggleEdit(p.id)}
+                    onRotate={() => rotatePage(p.id)}
+                    onRescan={() => onRescan(currentReviewCandidate.id, p.id)}
+                    onDelete={() => { if(confirm('Slett denne siden permanent?')) deletePage(currentReviewCandidate.id, p.id); }}
+                    onMetadataChange={(field, value) => handleMetadataChange(p.id, field, value)}
+                    onTaskUpdate={(val) => updatePageTasks(currentReviewCandidate.id, p.id, val)}
+                    onTextChange={(val) => {
+                       setActiveProject(prev => prev ? ({ ...prev, candidates: prev.candidates.map(c => c.id === currentReviewCandidate.id ? { ...c, pages: c.pages.map(pg => pg.id === p.id ? { ...pg, transcription: val } : pg) } : c) }) : null);
+                    }}
+                    onEvidenceChange={(val) => {
+                       setActiveProject(prev => prev ? ({ ...prev, candidates: prev.candidates.map(c => c.id === currentReviewCandidate.id ? { ...c, pages: c.pages.map(pg => pg.id === p.id ? { ...pg, visualEvidence: val } : pg) } : c) }) : null);
+                    }}
+                  />
+                ))}
               </div>
             </>
           )}

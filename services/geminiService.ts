@@ -4,7 +4,8 @@ import { Page, Candidate, Rubric, Project, RubricCriterion, IdentifiedTask } fro
 import { getFromGlobalCache, saveToGlobalCache } from "./storageService";
 
 export const OCR_MODEL = 'gemini-3-flash-preview';
-export const PRO_MODEL = 'gemini-3-pro-preview';
+// v8.5.0: "Flash Standard" - Pro model identifier now points to Flash to enforce low-cost mode globally.
+export const PRO_MODEL = 'gemini-3-flash-preview'; 
 
 // v8.2.11: Updated LaTeX Mandate with stricter Line Break rules
 const LATEX_MANDATE = `
@@ -72,6 +73,26 @@ const formatCommonErrors = (text: string | undefined): string => {
   let clean = text.replace(/\[\s*(-?[\d.,]+)\s*p\s*\]/gi, "[$1 p]"); // Normalize spaces
   clean = clean.replace(/([^\n])\s*(\[-[\d.,]+\s*p\])/g, "$1\n$2");
   return clean;
+};
+
+// v8.6.2: Deterministic Grading Function with +/- Logic
+export const calculateGrade = (score: number, maxPoints: number): string => {
+    if (maxPoints <= 0) return "-";
+    const percent = Math.round((score / maxPoints) * 100);
+    
+    // Helper to add + or - based on proximity to boundary (2 percent points)
+    const getSuffix = (p: number, low: number, high: number) => {
+        if (p >= high - 1) return "+"; // Top 2 points
+        if (p <= low + 1) return "-";  // Bottom 2 points
+        return "";
+    };
+
+    if (percent >= 90) return "6" + getSuffix(percent, 90, 100);
+    if (percent >= 75) return "5" + getSuffix(percent, 75, 89);
+    if (percent >= 60) return "4" + getSuffix(percent, 60, 74);
+    if (percent >= 40) return "3" + getSuffix(percent, 40, 59);
+    if (percent >= 20) return "2" + getSuffix(percent, 20, 39);
+    return "1";
 };
 
 const cleanJson = (text: string | undefined): string => {
@@ -380,14 +401,37 @@ const assignThemesToRubric = async (criteria: RubricCriterion[], model: string):
             model: model,
             contents: { parts: [{ text: `ASSIGN THEMES AND GENERATE TITLE:\n${criteriaSummary}` }] },
             config: {
-                systemInstruction: `Analyze the exam tasks.
-                1. Assign a pedagogical theme to each task.
-                   - CRITICAL: You MUST select between 5 and 8 DISTINCT themes (e.g. Algebra, Funksjoner, Sannsynlighet, Geometri, Vektorer, Modellering).
-                   - If you find fewer than 5 themes, you MUST split broad themes (e.g. split 'Algebra' into 'Likninger' and 'Faktorisering').
-                   - Avoid too narrow themes (e.g. "Question 1a theme"), but ensure you have enough distinct categories for a Radar Chart.
-                2. Generate a SHORT, descriptive title for the entire exam based on the themes.
-                   - Format: "Prøve: [Tema1] & [Tema2]" or "Heldagsprøve R1".
-                   - Max 5 words.`,
+                systemInstruction: `SYSTEM INSTRUCTION FOR GEMINI FLASH v8.5.5:
+
+OBJECTIVE: Analyze a math test and generate a Skill Profile (Edderkoppdiagram).
+
+*** CRITICAL FAILURE PREVENTION ***
+DO NOT return "Generelt", "Matematikk", "Diverse", "Del 1" or "Del 2" as themes. These are useless.
+You MUST generate between 5 and 8 DISTINCT, SPECIFIC mathematical themes.
+
+STRATEGY FOR NARROW TESTS (TVUNGEN OPPSPLITTING):
+If the test covers only ONE main topic (e.g. "Derivasjon"), you MUST split it into sub-skills.
+Example: Instead of just "Derivasjon", use:
+- "Kjerneregelen"
+- "Produktregelen"
+- "Topp/Bunnpunkt"
+- "Stigningstall"
+- "Funksjonsanalyse"
+
+STRATEGY FOR BROAD TESTS:
+Group tasks by their core mathematical concept:
+- "Algebra", "Geometri", "Sannsynlighet", "Statistikk", "Funksjoner".
+
+MICRO-TOPIC ANALYSIS:
+Look at the VERBS in the tasks:
+- "Tegn graf" -> "Grafisk løsning"
+- "Regn ut" -> "Aritmetikk/Algebra"
+- "Forklar" -> "Teoriforståelse"
+- "Bruk CAS" -> "Digital kompetanse"
+
+OUTPUT REQUIREMENT:
+1. examTitle: A short, descriptive name (e.g. "Prøve: Funksjoner og Derivasjon").
+2. criteriaWithThemes: Assign a specific theme to EVERY task.`,
                 responseMimeType: "application/json",
                 responseSchema: {
                     type: Type.OBJECT,
@@ -429,6 +473,17 @@ const assignThemesToRubric = async (criteria: RubricCriterion[], model: string):
     }, 2, 1000, 60000);
 };
 
+// v8.4.1: Regenerate Themes (Standalone)
+// v8.4.2: Changed default to OCR_MODEL (Flash) to save costs
+export const regenerateRubricThemes = async (rubric: Rubric, modelOverride: string = OCR_MODEL): Promise<Rubric> => {
+    const res = await assignThemesToRubric(rubric.criteria, modelOverride);
+    return {
+        ...rubric,
+        title: res.title,
+        criteria: res.criteria
+    };
+};
+
 export const generateRubricFromTaskAndSamples = async (
     taskFiles: Page[], 
     modelOverride: string = PRO_MODEL,
@@ -443,7 +498,7 @@ export const generateRubricFromTaskAndSamples = async (
 
   try {
       // 1. SCAN
-      if (onProgress) onProgress("Fase 1: Kartlegger oppgavestruktur...");
+      if (onProgress) onProgress("Fase 1: Kartlegger oppgaver...");
       const rawStructure = await scanForTaskStructure(parts, activeModel);
       
       const cleanStructure = rawStructure.map((t: any) => {
@@ -480,8 +535,9 @@ export const generateRubricFromTaskAndSamples = async (
       }
 
       // 3. THEME & TITLE
-      if (onProgress) onProgress("Fase 3: Analyserer temaer og lager tittel...", currentRubric);
-      const finalResult = await assignThemesToRubric(completedCriteria, activeModel);
+      if (onProgress) onProgress("Fase 3: Analyserer temaer og lager tittel (Flash)...", currentRubric);
+      // v8.4.2: Always use Flash (OCR_MODEL) for themes unless forced otherwise, to save costs.
+      const finalResult = await assignThemesToRubric(completedCriteria, OCR_MODEL);
 
       return {
           title: finalResult.title,
@@ -605,6 +661,19 @@ PEDAGOGISKE PRINSIPPER (Vurderings-grunnlov v8.1.2):
 5. DEL 1 vs DEL 2 FOKUS:
    - DEL 1 (Uten hjelpemidler): Vurder strengt på algebraisk føring, aritmetikk og nøyaktighet.
    - DEL 2 (Med hjelpemidler): Vurder primært på forståelse, tolkning av resultater, metodevalg, argumentasjon og svarsetninger. Små regnefeil er mindre kritisk her enn manglende forståelse.
+
+6. STANDARDISERT KARAKTERSKALA (v8.6.0):
+   - 1: 0-19%
+   - 2: 20-39%
+   - 3: 40-59%
+   - 4: 60-74%
+   - 5: 75-89%
+   - 6: 90-100%
+
+VIKTIG KOMMUNIKASJON:
+- Skriv ALLTID direkte til eleven ('Du'). Bruk aldri 'Kandidaten' eller 'Eleven'.
+- Vær konstruktiv og oppmuntrende, men tydelig på feil.
+- Eksempel: "Du viser god forståelse for..." (IKKE "Kandidaten viser...")
           `,
           responseMimeType: "application/json",
           responseSchema: {
@@ -642,6 +711,26 @@ PEDAGOGISKE PRINSIPPER (Vurderings-grunnlov v8.1.2):
               const cleaned = cleanTaskPair(t.taskNumber, t.subTask);
               return { ...t, taskNumber: cleaned.taskNumber, subTask: cleaned.subTask };
           });
+          
+          // v8.6.0: Force Deterministic Grading Logic
+          // We calculate the grade ourselves to prevent AI math errors or "kindness".
+          const totalScore = result.taskBreakdown.reduce((acc: number, t: any) => acc + (t.score || 0), 0);
+          
+          // Calculate max points from the provided rubric (we need to be careful if user missed parts)
+          // For initial evaluation, we assume full max score from rubric is the baseline. 
+          // The frontend will adjust for missing parts later if needed, but for the raw evaluation object, 
+          // we should base grade on the "Adjusted Max" if we can, or just use the rubric max.
+          // Since we don't have the 'missing part' logic here inside the AI call easily (it's in frontend),
+          // we use the AI's suggested grade but verify it against the total score and total rubric max.
+          
+          // BETTER: Just sum the rubric max points passed in rubricSpec? 
+          // Actually, let's just stick to the total score calculation. 
+          // We will update the grade based on TOTAL rubric max.
+          const totalMax = rubric.totalMaxPoints;
+          if (totalMax > 0) {
+              result.score = totalScore; // Ensure summary matches breakdown
+              result.grade = calculateGrade(totalScore, totalMax);
+          }
       }
       return result;
     }, 3, 1000, 600000); // 10 min timeout for heavy reasoning

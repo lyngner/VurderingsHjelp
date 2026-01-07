@@ -26,12 +26,6 @@ const App: React.FC = () => {
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [view, setView] = useState<'dashboard' | 'editor'>('dashboard');
   const [currentStep, setCurrentStep] = useState<'setup' | 'review' | 'rubric' | 'results'>('setup');
-  // v8.1.2: Force Flash Mode Setting
-  const [forceFlash, setForceFlash] = useState<boolean>(false);
-
-  useEffect(() => {
-      setForceFlash(getSetting('FORCE_FLASH'));
-  }, []);
   
   const {
     processingCount,
@@ -56,7 +50,7 @@ const App: React.FC = () => {
     updateActiveProject,
     handleSkipFile, // v7.9.33: New skip handler
     handleRetryFailed // v7.9.44: Retry Failed
-  } = useProjectProcessor(activeProject, setActiveProject, forceFlash); // Pass setting to processor
+  } = useProjectProcessor(activeProject, setActiveProject); // Pass setting to processor
 
   const [selectedResultCandidateId, setSelectedResultCandidateId] = useState<string | null>(null);
   const [selectedReviewCandidateId, setSelectedReviewCandidateId] = useState<string | null>(null);
@@ -237,8 +231,6 @@ const App: React.FC = () => {
         onSelectProject={handleSelectProject} 
         onCreateProject={createNewProject} 
         onDeleteProject={handleDeleteProject}
-        forceFlash={forceFlash}
-        setForceFlash={setForceFlash} 
       />
     );
   }
@@ -249,13 +241,8 @@ const App: React.FC = () => {
         <button onClick={() => setView('dashboard')} className="text-[10px] font-black text-slate-400 uppercase tracking-widest hover:text-indigo-600 transition-colors">← Oversikt</button>
         <div className="flex gap-2">{steps.map(s => (<button key={s.id} onClick={() => setCurrentStep(s.id as any)} className={`px-6 py-2.5 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all ${currentStep === s.id ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-50'}`}>{s.icon} {s.label}</button>))}</div>
         
-        {/* v8.1.2: Visual Indicator for Forced Flash */}
         <div className="w-20 flex justify-end">
-            {forceFlash && (
-                <div title="Systemet er satt til å kun bruke Flash-modellen for å spare penger" className="bg-emerald-50 text-emerald-600 px-2 py-1 rounded text-[8px] font-black uppercase border border-emerald-200 cursor-help">
-                    ⚡ Flash Mode
-                </div>
-            )}
+            {/* v8.5.0: Removed Flash Mode indicator as it is now standard */}
         </div>
       </header>
 
@@ -323,6 +310,7 @@ const App: React.FC = () => {
                 rubricStatus={rubricStatus}
                 onNavigateToReview={handleNavigateToCandidate}
                 onNavigateToTask={handleNavigateToTask} // v8.0.53
+                updateActiveProject={updateActiveProject} // v8.3.6: Enabled Manual Edits
                 // v8.1.3: Progress props
                 progress={{
                     batchTotal,

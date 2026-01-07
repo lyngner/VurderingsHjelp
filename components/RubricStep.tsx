@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Project, Rubric, RubricCriterion } from '../types';
 import { LatexRenderer, Spinner } from './SharedUI';
-import { improveRubricWithStudentData } from '../services/geminiService';
+import { improveRubricWithStudentData, regenerateRubricThemes, OCR_MODEL } from '../services/geminiService';
 
 interface RubricStepProps {
   activeProject: Project;
@@ -28,12 +28,13 @@ export const RubricStep: React.FC<RubricStepProps> = ({
   const [editingErrorsId, setEditingErrorsId] = useState<string | null>(null);
   const [localLoading, setLocalLoading] = useState<string | null>(null);
   const [isImproving, setIsImproving] = useState(false);
+  const [isRegeneratingThemes, setIsRegeneratingThemes] = useState(false); // v8.4.1
   const [progressSim, setProgressSim] = useState(0);
 
   // Simulated progress bar for heavy tasks (v8.2.0: Now with real text updates)
   useEffect(() => {
       let interval: any;
-      if (rubricStatus.loading || isImproving) {
+      if (rubricStatus.loading || isImproving || isRegeneratingThemes) {
           setProgressSim(5);
           interval = setInterval(() => {
               setProgressSim(prev => {
@@ -46,7 +47,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
           setTimeout(() => setProgressSim(0), 500);
       }
       return () => clearInterval(interval);
-  }, [rubricStatus.loading, isImproving]);
+  }, [rubricStatus.loading, isImproving, isRegeneratingThemes]);
 
   const criteria = activeProject.rubric?.criteria || [];
 
@@ -153,6 +154,20 @@ export const RubricStep: React.FC<RubricStepProps> = ({
     setLocalLoading(name);
     await handleRegenerateCriterion(name);
     setLocalLoading(null);
+  };
+
+  const handleRegenerateThemes = async () => {
+      if (!activeProject.rubric || !updateActiveProject) return;
+      setIsRegeneratingThemes(true);
+      try {
+          // v8.4.2: Use Flash (OCR_MODEL) to save costs
+          const newRubric = await regenerateRubricThemes(activeProject.rubric, OCR_MODEL);
+          updateActiveProject({ rubric: newRubric });
+      } catch (e: any) {
+          alert("Feil ved generering av temaer: " + e.message);
+      } finally {
+          setIsRegeneratingThemes(false);
+      }
   };
 
   const handleAnalyzeStudentErrors = async () => {
@@ -269,11 +284,11 @@ export const RubricStep: React.FC<RubricStepProps> = ({
         </nav>
 
         <div className="p-3 border-t bg-slate-50/50 shrink-0 space-y-2">
-           {(isImproving || (rubricStatus.loading && activeProject.rubric)) ? (
+           {(isImproving || isRegeneratingThemes || (rubricStatus.loading && activeProject.rubric)) ? (
                <div className="bg-white p-4 rounded-xl border border-indigo-100 shadow-sm animate-in fade-in slide-in-from-bottom-2">
                    <div className="flex justify-between items-center mb-2">
                        <span className="text-[9px] font-black uppercase text-indigo-600 tracking-widest">
-                           {isImproving ? "Analyserer..." : "Genererer..."}
+                           {isImproving ? "Analyserer..." : isRegeneratingThemes ? "Fordeler temaer..." : "Genererer..."}
                        </span>
                        <Spinner size="w-3 h-3" />
                    </div>
@@ -320,9 +335,8 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                 <h2 className="text-xl font-black text-slate-800 leading-tight tracking-tighter">
                    {activeProject.rubric.title}
                 </h2>
-                {uniqueThemes.length > 0 && (
-                  <div className="flex flex-wrap gap-2 mt-3">
-                    {uniqueThemes.map(t => {
+                <div className="flex flex-wrap gap-2 mt-3 items-center">
+                    {uniqueThemes.length > 0 && uniqueThemes.map(t => {
                       const isSelected = selectedTheme === t;
                       return (
                         <button 
@@ -334,8 +348,16 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                         </button>
                       );
                     })}
-                  </div>
-                )}
+                    {/* v8.4.1: Regenerate Themes Button */}
+                    <button 
+                        onClick={handleRegenerateThemes} 
+                        disabled={isRegeneratingThemes}
+                        className="text-[9px] font-black uppercase tracking-wide px-2 py-1 rounded-md border bg-white border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-indigo-600 transition-all flex items-center gap-1"
+                        title="Fordel temaer på nytt med Gemini Flash (Rask & Billig)"
+                    >
+                       ↻ Regenerer temaer
+                    </button>
+                </div>
                 {/* v8.2.5: Removed static "Viser hele rettemanualen" text */}
                 <div className="flex gap-2 mt-3 h-4">
                    {(selectedTask || selectedTheme) && (

@@ -1,22 +1,26 @@
 
-# KI-Modeller & Kostnadsoversikt (v6.5.9)
+# KI-Modeller & Kostnadsoversikt (v8.5.1)
 
-Dette dokumentet beskriver hvilke modeller som driver prosessene.
+Dette dokumentet beskriver den enhetlige AI-strategien som driver systemet.
 
-## 1. Hybrid Modell-strategi v6.5.9
-Vi bruker nå en "Universal Parity" strategi for å sikre 100% konsistens mellom Pro og Flash.
+## 1. Unified Flash Strategy
+Fra v8.5.0 bruker systemet **Gemini 3 Flash** til alle operasjoner. Det er ingen bruk av Pro-modellen.
 
-### Gemini 3 Flash (OCR & Layout Master)
-- **Oppgave:** All transkribering og fysisk bilde-analyse.
-- **Geometri:** Tvinges nå til streng portrett-visning og splitting av landskaps-ark (A3 to A4).
-- **Paritet:** Mottar nå identiske instrukser som Pro for matematisk formatering.
+### Gemini 3 Flash (The Workhorse)
+- **OCR & Layout:** Lynrask bildeanalyse og transkribering.
+- **Fasit & Resonnering:** Ved å gi modellen "Thinking Budget" (tenketid) eller dele opp oppgaven i steg, oppnår Flash en kvalitet som er mer enn god nok for vurdering av elevbesvarelser.
+- **Kostnad:** Ekstremt lav. Ca 1/20 av prisen til Pro.
 
-### Gemini 3 Pro Preview (Reasoning Master)
-- **Oppgave:** Master-modell for fasit-generering og pedagogisk vurdering.
-- **Surgical Precision:** Brukes nå målrettet for kirurgisk regenerering av enkelt-oppgaver i rettemanualen for å unngå full refresh.
+## 2. Kostnadsanalyse (Estimat)
+Med dagens priser for Gemini Flash (Paid Tier):
 
-## 2. Symmetrisk Paritet (v6.5.9)
-Fra og med v6.5.x er instruksjonene for Flash og Pro synkronisert på tre områder:
+For en klasse på **30 elever** med **8 sider** hver (totalt 240 sider):
+*   **Transkribering (OCR):** ~0,25 NOK.
+*   **Vurdering (Sensor):** ~0,50 NOK.
+*   **Total kostnad for hele bunken:** Under 2 kroner.
+
+## 3. Symmetrisk Paritet
+Selv om vi kun bruker Flash, opprettholder vi strenge krav til output:
 1. **Layout:** Tvungen A3-til-A4 splitting (Rule 8).
 2. **Matematikk:** Tvungen bruk av `aligned` med `& =` for vertikal orden.
-3. **Kontekst:** Kirurgisk isolasjon ved regenerering for å hindre uønsket full-refresh.
+3. **Resonnering:** Flash bruker `reasoning`-feltet til å begrunne poengsetting før den setter score.
