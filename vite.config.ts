@@ -5,12 +5,11 @@ import react from '@vitejs/plugin-react';
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
-  // VIKTIG: Hvis du legger dette på https://brukernavn.github.io/repo-navn/
-  // må du endre base til '/repo-navn/'. Hvis du bruker eget domene, la den være '/'.
-  base: '/repo-navn/', 
+  // VIKTIG: Dette matcher navnet på ditt repository nøyaktig (se URL i skjermbildet ditt)
+  base: '/VurderingsHjelp/', 
   define: {
-    // Dette er nødvendig fordi koden bruker 'process.env.API_KEY'.
-    // Dette hindrer appen i å krasje i nettleseren.
+    // Dette hindrer appen i å krasje fordi 'process' ikke finnes i nettleseren.
+    // Vi setter den til en tom streng som standard.
     'process.env': {
       API_KEY: JSON.stringify(process.env.API_KEY || "")
     }
