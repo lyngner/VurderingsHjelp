@@ -527,7 +527,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
             const newCand: Candidate = {
               id: targetCandidateId,
               projectId: prev.id,
-              name: `Kandidat ${targetCandidateId}`,
+              name: targetCandidateId, // v8.9.8: Fixed hardcoded 'Kandidat ' prefix
               status: 'completed',
               pages: [pageToMove]
             };

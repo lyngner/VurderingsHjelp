@@ -1,9 +1,9 @@
 
-# Vurderingshjelp - Master Documentation (v8.5.1)
+# Vurderingshjelp - Master Documentation (v8.7.0)
 
 Profesjonelt verktøy for digitalisering, kontroll og pedagogisk vurdering av elevbesvarelser.
 
-## 🚀 Hovedfunksjoner (v8.5.x)
+## 🚀 Hovedfunksjoner
 
 ### 1. Oppgaver & Fasit (Rettemanual)
 *   **Multi-Phase Construction:** Genererer rettemanual i tre faser (Skann -> Bygg -> Tema) for høyest mulig presisjon.
@@ -12,6 +12,7 @@ Profesjonelt verktøy for digitalisering, kontroll og pedagogisk vurdering av el
 *   **Dynamiske Temaer:** Systemet tvinges til å finne 5-8 brede temaer for god ferdighetsanalyse.
 
 ### 2. Digitalisering & Kontroll
+*   **Lokal Opplasting:** Last opp bilder/PDF/Word fra disk. Ingen skytjenester involvert.
 *   **Smart Regex Context:** Systemet husker kontekst (f.eks. "Oppgave 1") nedover siden.
 *   **Code Block Support:** Python-kode og CAS rendres nå i lekre mørke kodeblokker.
 *   **Verbatim Transkripsjon:** Kode og teknisk innhold transkriberes tegn-for-tegn uten "AI-oppsummering".
@@ -39,4 +40,4 @@ Se [TECHNICAL_STANDARD.md](./TECHNICAL_STANDARD.md) for de absolutte reglene som
 *   **Personvern:** Ingen lagring på tredjepartsserver.
 
 ---
-*Systemversjon: v8.5.1*
+*Systemversjon: v8.7.0*

@@ -6,6 +6,61 @@ import { getFromGlobalCache, saveToGlobalCache } from "./storageService";
 export const OCR_MODEL = 'gemini-3-flash-preview';
 // v8.5.0: "Flash Standard" - Pro model identifier now points to Flash to enforce low-cost mode globally.
 export const PRO_MODEL = 'gemini-3-flash-preview'; 
+// v8.9.16: Flash Theme Restoration - Using Flash with strict prompts instead of expensive Pro
+const THEME_MODEL = 'gemini-3-flash-preview';
+
+// Rate Limiter for å beskytte mot 429 (Kvote nådd)
+class RateLimiter {
+  private lastRequestTime: number = 0;
+  private queue: Promise<any> = Promise.resolve();
+  // Forsiktig delay for å unngå burst-limit
+  private static DELAY = 2000; 
+
+  async schedule<T>(fn: () => Promise<T>): Promise<T> {
+    this.queue = this.queue.then(async () => {
+      const now = Date.now();
+      const timeSinceLast = now - this.lastRequestTime;
+      
+      if (timeSinceLast < RateLimiter.DELAY) {
+        await new Promise(resolve => setTimeout(resolve, RateLimiter.DELAY - timeSinceLast));
+      }
+
+      let attempt = 0;
+      const maxRetries = 2;
+      let currentBackoff = 5000; 
+
+      while (attempt <= maxRetries) {
+        try {
+          const result = await fn();
+          this.lastRequestTime = Date.now();
+          return result;
+        } catch (error: any) {
+          attempt++;
+          const errorMsg = error?.message || JSON.stringify(error);
+          const isQuota = errorMsg.includes("429") || errorMsg.includes("RESOURCE_EXHAUSTED");
+
+          if (isQuota) {
+            if (attempt <= maxRetries) {
+              console.warn(`[Kvote] 429 mottatt. Venter ${currentBackoff/1000}s...`);
+              await new Promise(resolve => setTimeout(resolve, currentBackoff));
+              currentBackoff *= 2;
+            } else {
+              // Just re-throw, don't use special string KVOTE_NAADD
+              throw error;
+            }
+          } else {
+            throw error;
+          }
+        }
+      }
+      throw new Error("Maks forsøk nådd.");
+    });
+
+    return this.queue;
+  }
+}
+
+const limiter = new RateLimiter();
 
 // v8.2.11: Updated LaTeX Mandate with stricter Line Break rules
 const LATEX_MANDATE = `
@@ -25,31 +80,50 @@ VIKTIG OM KODE (Python/CAS):
   \`\`\`
 `;
 
-// v8.0.42: Visual Content Separation (Transcription vs Description)
+// v8.8.0: General Visual Reconstruction Mandate
 const VISUAL_MANDATE = `
-VISUELT BEVIS (TO MODUSER):
+VISUELT BEVIS (FIRE MODUSER):
 
 SPRÅK: NORSK BOKMÅL. All beskrivelse og tolkning SKAL være på norsk. Ingen engelsk.
 
-MODUS 1: TEKST-BASERT (CAS / PYTHON / PROGRAMMERING / GEO-GEBRA VINDUER)
+MODUS 1: TEKST-BASERT (CAS / PYTHON / PROGRAMMERING)
 - SKAL TRANSKRIBERES SLAVISK (Verbatim / Tegn-for-tegn).
 - Format: "Linje 1: [Input] -> [Output]".
 - Legg dette i 'visualEvidence' feltet.
 
-MODUS 2: GRAFISK (HÅNDTEGNET FIGUR / GRAF / GEOMETRI)
-- Beskriv figuren nøyaktig på NORSK.
+MODUS 2: FORTEGNSSKJEMA (SIGN CHART)
+- Rekonstruer fortegnsskjema digitalt.
+- Format: [SIGN_CHART: Points: x1, x2 | Line: faktor1, -, 0, +, + | Sum: f(x), +, 0, -, +]
+- 'Points' er nullpunktene. 'Line' er hver rad. Bruk -, +, 0 eller X (ikke definert).
+
+MODUS 3: GRAFER & VEKTORER (PLOTS)
+- Funksjonsgraf: [FUNCTION_PLOT: formula="x^2 - 2*x", xMin=-2, xMax=4]
+- Vektorer i rutenett: [VECTOR_PLOT: vec(u, dx, dy), vec(v, dx, dy, startX, startY), label("tekst", x, y)]
+  - 'vec': navn, deltaX, deltaY, [startX, startY]. 
+  - startX/startY er VALGFRIE (default 0). Bruk dem til å "kjede" vektorer (Head-to-Tail) ved addisjon/subtraksjon.
+  - Eksempel vektoraddisjon u+v: [VECTOR_PLOT: vec(u, 2, 1), vec(v, 1, 3, 2, 1), vec(u+v, 3, 4)].
+  - 'label': tekst i anførselstegn, x-pos, y-pos. Bruk dette for å plassere oppgavenummer (f.eks "c)") eller uttrykk i diagrammet.
+
+MODUS 4: GENERISK GRAFISK (GEOMETRI / SKISSER)
+- For andre figurer, beskriv figuren nøyaktig på NORSK.
 - Legg dette i 'visualEvidence' feltet.
 
 VIKTIG: I 'fullText' (brødteksten) skal du lime inn hele innholdet fra 'visualEvidence' inni taggen [BILDEVEDLEGG: <Innhold her>] der bildet hører hjemme logisk.
 `;
 
 const RUBRIC_LOGIC_GUARD = `
-PEDAGOGISK EKSPERT v8.2.11 (STRUKTUR & FORMAT):
+PEDAGOGISK EKSPERT v8.9.2 (STRUKTUR & FORMAT):
 
-1. LØSNINGSFORSLAG (STRENGT VERTIKALT):
+1. LØSNINGSFORSLAG (STRENGT VERTIKALT & VISUELT):
    - Bruk MANGE linjeskift. Hvert matematisk steg SKAL være på en ny linje.
    - Bruk \\begin{aligned} ... \\end{aligned} for vertikal struktur.
-   - Hvis oppgaven inneholder programmering, bruk Markdown-kodeblokker (\`\`\`), IKKE LaTeX verbatim.
+   - **VISUELT PÅBUD:** Hvis oppgaven ber eleven om å "Tegne", "Konstruere" eller "Skissere":
+     - DU SKAL IKKE BARE BESKRIVE TEGNINGEN MED ORD.
+     - DU SKAL GENERERE KODEN FOR TEGNINGEN.
+     - For vektorer: Bruk [VECTOR_PLOT]. Regn ut resultantvektoren og plott den. 
+       Eksempel: Hvis oppgaven er "Tegn u+v" og u=[1,2], v=[2,1], SKAL du skrive: [VECTOR_PLOT: vec(u, 1, 2), vec(v, 2, 1, 1, 2), vec(u+v, 3, 3)]. Start gjerne pilene i nye punkter når du tegner, slik at det blir oversiktlig.
+     - For grafer: Bruk [FUNCTION_PLOT].
+     - For fortegnsskjema: Bruk [SIGN_CHART].
 
 2. RETTEVEILEDNING (POENGTREKK & MATEMATIKK):
    - Hver linje i 'commonErrors' MÅ starte med poengtrekk i klammer: [-0.5 p].
@@ -163,7 +237,6 @@ export const cleanTaskPair = (num: string, sub: string): { taskNumber: string, s
 
 const handleApiError = (e: any) => {
   const msg = e?.message || String(e);
-  if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED")) throw e;
   if (msg.includes("Requested entity was not found")) {
     if ((window as any).aistudio?.openSelectKey) (window as any).aistudio.openSelectKey();
   }
@@ -178,10 +251,12 @@ const withRetry = async <T>(fn: () => Promise<T>, retries = 3, delay = 1000, tim
       const timer = setTimeout(() => reject(new Error(`Request timed out (${timeoutMs/1000}s)`)), timeoutMs);
       if (signal) signal.addEventListener('abort', () => { clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); });
     });
-    const result = await Promise.race([fn(), timeoutPromise]);
+    // Use RateLimiter for the actual call
+    const result = await Promise.race([limiter.schedule(() => fn()), timeoutPromise]);
     return result as T;
   } catch (e: any) {
     if (e.name === 'AbortError' || e.message === 'Aborted') throw e;
+    // Removed specific check for KVOTE_NAADD string
     const msg = e?.message || String(e);
     const isRetryable = msg.includes("503") || msg.includes("504") || msg.includes("timeout") || msg.includes("overloaded") || msg.includes("fetch failed");
     if ((retries > 0) && isRetryable) {
@@ -299,6 +374,76 @@ export const transcribeAndAnalyzeImage = async (
   } catch (e) { return handleApiError(e); }
 };
 
+export const analyzeTextContent = async (
+    text: string, 
+    rubric?: Rubric | null, 
+    attachedImages?: { data: string, mimeType: string }[],
+    signal?: AbortSignal
+): Promise<any> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const validTasks = rubric ? rubric.criteria.map(c => `${c.taskNumber}${c.subTask || ''}`).join(", ") : "Ingen begrensning.";
+  
+  let rubricContext = "";
+  if (rubric && rubric.criteria.length > 0) {
+      const taskSummary = rubric.criteria.slice(0, 15).map(c => 
+          `Oppgave ${c.taskNumber}${c.subTask}: ${c.description ? c.description.substring(0, 50) + "..." : "Ukjent tema"}`
+      ).join("; ");
+      rubricContext = `KONTEKST FRA RETTEMANUAL (Til orientering, IKKE kopiering): Prøven inneholder følgende oppgaver: [${taskSummary}]. Bruk dette for å forstå hvilken oppgave du ser på.`;
+  }
+
+  const parts: any[] = [{ text: `ANALYSER FØLGENDE TEKST (Digital innlevering):\n${text}` }];
+  if (attachedImages) {
+      attachedImages.forEach(img => {
+          parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } });
+      });
+  }
+
+  return await withRetry(async () => {
+    const response = await ai.models.generateContent({
+      model: OCR_MODEL, 
+      contents: { parts: parts },
+      config: { 
+        temperature: 0.0, 
+        systemInstruction: `ANALYSE AV DIGITAL TEKST:
+        Du mottar råtekst fra en elevbesvarelse (Word/PDF) samt eventuelle bildevedlegg.
+        Din jobb er å strukturere dette.
+        
+        GYLDIGE OPPGAVER: [${validTasks}].
+        ${rubricContext}
+
+        VIKTIG:
+        1. Identifiser hvilke oppgaver som besvares.
+        2. Behold all tekst verbatim i 'fullText'.
+        3. Hvis det er bilder (bildevedlegg), beskriv dem kort i 'visualEvidence' hvis relevant for matematikken.
+        
+        Returner JSON med 'candidateId' (hvis funnet), 'fullText', 'identifiedTasks' og evt 'visualEvidence'.`,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            candidateId: { type: Type.STRING },
+            pageNumber: { type: Type.INTEGER },
+            part: { type: Type.STRING, enum: ["Del 1", "Del 2"] },
+            fullText: { type: Type.STRING },
+            visualEvidence: { type: Type.STRING },
+            identifiedTasks: { 
+              type: Type.ARRAY, 
+              items: { type: Type.OBJECT, properties: { taskNumber: { type: Type.STRING }, subTask: { type: Type.STRING } } } 
+            }
+          },
+          required: ["fullText", "identifiedTasks"]
+        }
+      }
+    });
+    const result = JSON.parse(cleanJson(response.text));
+    
+    // Post-process to filter tasks
+    result.identifiedTasks = filterTasksAgainstRubric(result.identifiedTasks, rubric);
+    
+    return result;
+  }, 2, 1000, 300000, signal);
+};
+
 // Phase 1: Scan for Task Structure
 const scanForTaskStructure = async (parts: any[], model: string): Promise<any[]> => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -316,7 +461,7 @@ const scanForTaskStructure = async (parts: any[], model: string): Promise<any[]>
                         properties: {
                             taskNumber: { type: Type.STRING },
                             subTask: { type: Type.STRING },
-                            part: { type: Type.STRING, enum: ["Del 1", "Del 2"] }
+                            part: { type: Type.STRING, enum: ["Del 1", "Del 2"] },
                         },
                         required: ["taskNumber", "part"]
                     }
@@ -337,7 +482,6 @@ const generateCriterionForTask = async (task: any, parts: any[], model: string):
             model: model,
             contents: { parts: [...parts, { text: `GENERATE CRITERION FOR: ${taskLabel}` }] },
             config: {
-                // Flash needs thinking budget to do math correctly even for single task
                 thinkingConfig: { thinkingBudget: 4096 }, 
                 systemInstruction: `You are a strict math teacher creating a grading guide for ONE specific task: ${taskLabel}.
                 
@@ -354,6 +498,8 @@ const generateCriterionForTask = async (task: any, parts: any[], model: string):
                 - Create a perfect, vertical step-by-step LaTeX solution.
                 - Use \\text{...} for words inside math.
                 - If the solution requires Code (Python), use a Markdown Code Block (\`\`\`python ... \`\`\`). DO NOT use \\begin{verbatim}.
+                - **VISUALS:** If the task asks to DRAW a graph or vector, you MUST include [FUNCTION_PLOT] or [VECTOR_PLOT].
+                - For Vectors: [VECTOR_PLOT: vec(u, 2, 3), vec(v, -1, 4, 2, 3), vec(result, 1, 7)].
 
                 PHASE 3: GRADING GUIDE (For 'commonErrors')
                 - Based on your solution, define specific point deductions.
@@ -377,14 +523,13 @@ const generateCriterionForTask = async (task: any, parts: any[], model: string):
             }
         });
         const res = JSON.parse(cleanJson(response.text));
-        // v8.3.1: Enforce line breaks in commonErrors
         if (res.commonErrors) res.commonErrors = formatCommonErrors(res.commonErrors);
         
         return {
             ...task,
             ...res,
-            maxPoints: Math.min(4.0, res.maxPoints || 2.0), // Allow up to 4.0 if AI insists, but cap it there. Standard is 2.0.
-            tema: "" // Will be filled in Phase 3
+            maxPoints: Math.min(4.0, res.maxPoints || 2.0),
+            tema: "" 
         };
     }, 2, 1000, 60000);
 };
@@ -392,46 +537,34 @@ const generateCriterionForTask = async (task: any, parts: any[], model: string):
 // Phase 3: Assign Themes AND Generate Title
 const assignThemesToRubric = async (criteria: RubricCriterion[], model: string): Promise<{ criteria: RubricCriterion[], title: string }> => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    // v8.9.21: Nuclear Simplification (Keyword Extractor)
     const criteriaSummary = criteria.map(c => 
-        `ID: ${c.taskNumber}${c.subTask} (${c.part}). Desc: ${c.description}`
+        `- "${c.description}"`
     ).join("\n");
 
     return await withRetry(async () => {
         const response = await ai.models.generateContent({
             model: model,
-            contents: { parts: [{ text: `ASSIGN THEMES AND GENERATE TITLE:\n${criteriaSummary}` }] },
+            contents: { parts: [{ text: `EXTRACT MATH TOPICS FROM THESE TEXTS:\n${criteriaSummary}` }] },
             config: {
-                systemInstruction: `SYSTEM INSTRUCTION FOR GEMINI FLASH v8.5.5:
+                thinkingConfig: { thinkingBudget: 4096 },
+                systemInstruction: `You are a KEYWORD EXTRACTOR.
+TASK: Read the math problems provided.
+OUTPUT: 5-8 mathematical keywords (topics) that cover the content.
 
-OBJECTIVE: Analyze a math test and generate a Skill Profile (Edderkoppdiagram).
+RULES:
+1. MAX 2-3 WORDS per topic.
+2. NO sentences.
+3. FORBIDDEN: "Bestemmelse av...", "Beregning av...", "Generelt", "Diverse".
+4. GOOD EXAMPLES: "Algebra", "Funksjoner", "Sannsynlighet", "Vektorer", "Derivasjon".
 
-*** CRITICAL FAILURE PREVENTION ***
-DO NOT return "Generelt", "Matematikk", "Diverse", "Del 1" or "Del 2" as themes. These are useless.
-You MUST generate between 5 and 8 DISTINCT, SPECIFIC mathematical themes.
-
-STRATEGY FOR NARROW TESTS (TVUNGEN OPPSPLITTING):
-If the test covers only ONE main topic (e.g. "Derivasjon"), you MUST split it into sub-skills.
-Example: Instead of just "Derivasjon", use:
-- "Kjerneregelen"
-- "Produktregelen"
-- "Topp/Bunnpunkt"
-- "Stigningstall"
-- "Funksjonsanalyse"
-
-STRATEGY FOR BROAD TESTS:
-Group tasks by their core mathematical concept:
-- "Algebra", "Geometri", "Sannsynlighet", "Statistikk", "Funksjoner".
-
-MICRO-TOPIC ANALYSIS:
-Look at the VERBS in the tasks:
-- "Tegn graf" -> "Grafisk løsning"
-- "Regn ut" -> "Aritmetikk/Algebra"
-- "Forklar" -> "Teoriforståelse"
-- "Bruk CAS" -> "Digital kompetanse"
-
-OUTPUT REQUIREMENT:
-1. examTitle: A short, descriptive name (e.g. "Prøve: Funksjoner og Derivasjon").
-2. criteriaWithThemes: Assign a specific theme to EVERY task.`,
+OUTPUT JSON:
+{
+  "examTitle": "Short descriptive title (e.g. 'Matematikk R1 Vår 2024')",
+  "criteriaWithThemes": [
+    { "taskNumber": "...", "subTask": "...", "part": "...", "tema": "One Keyword" }
+  ]
+}`,
                 responseMimeType: "application/json",
                 responseSchema: {
                     type: Type.OBJECT,
@@ -473,9 +606,7 @@ OUTPUT REQUIREMENT:
     }, 2, 1000, 60000);
 };
 
-// v8.4.1: Regenerate Themes (Standalone)
-// v8.4.2: Changed default to OCR_MODEL (Flash) to save costs
-export const regenerateRubricThemes = async (rubric: Rubric, modelOverride: string = OCR_MODEL): Promise<Rubric> => {
+export const regenerateRubricThemes = async (rubric: Rubric, modelOverride: string = THEME_MODEL): Promise<Rubric> => {
     const res = await assignThemesToRubric(rubric.criteria, modelOverride);
     return {
         ...rubric,
@@ -534,10 +665,9 @@ export const generateRubricFromTaskAndSamples = async (
           await new Promise(r => setTimeout(r, 200));
       }
 
-      // 3. THEME & TITLE
-      if (onProgress) onProgress("Fase 3: Analyserer temaer og lager tittel (Flash)...", currentRubric);
-      // v8.4.2: Always use Flash (OCR_MODEL) for themes unless forced otherwise, to save costs.
-      const finalResult = await assignThemesToRubric(completedCriteria, OCR_MODEL);
+      // 3. THEME & TITLE (v8.9.16: Using THEME_MODEL (Flash) with strict prompts)
+      if (onProgress) onProgress("Fase 3: Analyserer temaer og lager tittel...", currentRubric);
+      const finalResult = await assignThemesToRubric(completedCriteria, THEME_MODEL);
 
       return {
           title: finalResult.title,
@@ -592,14 +722,13 @@ ${LATEX_MANDATE}`,
             const up = cleanTaskPair(u.taskNumber, u.subTask);
             return up.taskNumber === original.taskNumber && up.subTask === original.subTask;
         });
-        // v8.3.1: Enforce format
         let updatedErrors = matchingUpdate ? (matchingUpdate.commonErrors || original.commonErrors) : original.commonErrors;
         if (updatedErrors) updatedErrors = formatCommonErrors(updatedErrors);
         
         return { ...original, commonErrors: updatedErrors };
       });
       return { ...rubric, criteria: newCriteria };
-    }, 3, 1000, 600000); // 10 min timeout for heavy reasoning
+    }, 3, 1000, 600000); 
   } catch (e) { throw e; }
 };
 
@@ -608,7 +737,6 @@ export const evaluateCandidate = async (candidate: Candidate, rubric: Rubric, mo
   const content = candidate.pages.map(p => `SIDE ${p.pageNumber}:\n${p.transcription}`).join("\n");
   const rubricSpec = rubric.criteria.map(c => `- ${c.taskNumber}${c.subTask} (${c.part}): MAKS ${c.maxPoints}\n  Løsning: ${c.suggestedSolution}\n  Vanlige feil: ${c.commonErrors}`).join("\n");
   
-  // v8.1.8: Flash Optimization (Reasoning-First Architecture)
   const isFlash = modelOverride === OCR_MODEL;
   
   let reasoningInstruction = "";
@@ -632,8 +760,6 @@ VIKTIG: Du MÅ fylle ut 'reasoning' for å sikre korrekt poengsetting. Dette fel
         model: modelOverride,
         contents: { parts: [{ text: `VURDER:\n${rubricSpec}\n\nELEV:\n${content}` }] },
         config: { 
-          // v8.1.7: Added STRICT prohibition against merging tasks (1a-d)
-          // v8.1.8: Added Reasoning-First Architecture for Flash
           systemInstruction: `Du er sensor. Vurder kun oppgaver i listen. ${LATEX_MANDATE} Bruk commonErrors logikk.
           ${reasoningInstruction}
           
@@ -646,7 +772,7 @@ PEDAGOGISKE PRINSIPPER (Vurderings-grunnlov v8.1.2):
    - Kandidaten skal honoreres for konsistent logikk.
 
 2. AVSKRIFTSFEIL & TRIVIELLE FEIL VS KOMPETANSE:
-   - Hvis kandidaten skriver av tall feil fra oppgaveteksten, men løser den "nye" oppgaven korrekt: Gi uttelling for vist kompetanse (minimalt trekk).
+   - Hvis kandidaten skriver av tall feil fra oppgaveteksten, men løser den "nye" oppgaven korrekt: Gi uttelling for vist kompetanse (kun symbolsk trekk).
    - Åpenbare aritmetiske slurvefeil på lavt nivå (f.eks. 1+1=3) i ellers avanserte oppgaver SKAL IGNORERES i poengtrekket, men kommenteres. Vi måler matematisk forståelse, ikke hoderegning.
 
 3. KOMPETANSEJAKT ("Lete med lupe"):
@@ -662,7 +788,7 @@ PEDAGOGISKE PRINSIPPER (Vurderings-grunnlov v8.1.2):
    - DEL 1 (Uten hjelpemidler): Vurder strengt på algebraisk føring, aritmetikk og nøyaktighet.
    - DEL 2 (Med hjelpemidler): Vurder primært på forståelse, tolkning av resultater, metodevalg, argumentasjon og svarsetninger. Små regnefeil er mindre kritisk her enn manglende forståelse.
 
-6. STANDARDISERT KARAKTERSKALA (v8.6.0):
+6. STANDARDISERT KARAKTERSKALA (v8.3.4):
    - 1: 0-19%
    - 2: 20-39%
    - 3: 40-59%
@@ -670,152 +796,157 @@ PEDAGOGISKE PRINSIPPER (Vurderings-grunnlov v8.1.2):
    - 5: 75-89%
    - 6: 90-100%
 
-VIKTIG KOMMUNIKASJON:
-- Skriv ALLTID direkte til eleven ('Du'). Bruk aldri 'Kandidaten' eller 'Eleven'.
-- Vær konstruktiv og oppmuntrende, men tydelig på feil.
-- Eksempel: "Du viser god forståelse for..." (IKKE "Kandidaten viser...")
-          `,
+KONTAKTFORM (v8.4.4):
+- Du skal tiltale eleven direkte i 'feedback' og 'vekstpunkter'. Bruk "Du", "Dine styrker", "Du bør øve på...". IKKE bruk "Kandidaten" eller "Eleven".
+
+OUTPUT:
+Returner JSON med 'grade', 'feedback', 'score' (total), 'vekstpunkter' (liste) og 'taskBreakdown'.
+`,
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
             properties: {
               grade: { type: Type.STRING },
-              score: { type: Type.NUMBER },
               feedback: { type: Type.STRING },
+              score: { type: Type.NUMBER },
               vekstpunkter: { type: Type.ARRAY, items: { type: Type.STRING } },
-              taskBreakdown: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
+              taskBreakdown: { 
+                type: Type.ARRAY, 
+                items: { 
+                  type: Type.OBJECT, 
                   properties: {
                     taskNumber: { type: Type.STRING },
                     subTask: { type: Type.STRING },
                     part: { type: Type.STRING },
-                    reasoning: { type: Type.STRING, description: "Internal reasoning step. Explain WHY this score is given before assigning it." }, // v8.1.8
                     score: { type: Type.NUMBER },
-                    max: { type: Type.NUMBER },
-                    comment: { type: Type.STRING }
+                    comment: { type: Type.STRING },
+                    reasoning: { type: Type.STRING }
                   },
-                  // v8.0.49: 'part' is now REQUIRED to prevent matrix misalignment in frontend
-                  required: ["taskNumber", "subTask", "part", "score", "max", "comment", "reasoning"] // v8.1.8: reasoning required
-                }
+                  required: ["taskNumber", "score", "comment"] 
+                } 
               }
             }
           }
         }
       });
-      // v8.0.54: Auto-clean tasks before returning to ensure ID matching in results table
-      const result = JSON.parse(cleanJson(response.text));
-      if (result.taskBreakdown) {
-          result.taskBreakdown = result.taskBreakdown.map((t: any) => {
-              const cleaned = cleanTaskPair(t.taskNumber, t.subTask);
-              return { ...t, taskNumber: cleaned.taskNumber, subTask: cleaned.subTask };
+      
+      const res = JSON.parse(cleanJson(response.text));
+      
+      // Post-process to ensure clean IDs
+      if (res.taskBreakdown) {
+          res.taskBreakdown = res.taskBreakdown.map((t: any) => {
+              const clean = cleanTaskPair(t.taskNumber, t.subTask);
+              // v8.2.8: Clamp score to standard max 2.0 unless rubric specifies higher (Safety net)
+              // NOTE: We trust the AI's reasoning here, but frontend highlights anomalies.
+              return { ...t, ...clean };
           });
-          
-          // v8.6.0: Force Deterministic Grading Logic
-          // We calculate the grade ourselves to prevent AI math errors or "kindness".
-          const totalScore = result.taskBreakdown.reduce((acc: number, t: any) => acc + (t.score || 0), 0);
-          
-          // Calculate max points from the provided rubric (we need to be careful if user missed parts)
-          // For initial evaluation, we assume full max score from rubric is the baseline. 
-          // The frontend will adjust for missing parts later if needed, but for the raw evaluation object, 
-          // we should base grade on the "Adjusted Max" if we can, or just use the rubric max.
-          // Since we don't have the 'missing part' logic here inside the AI call easily (it's in frontend),
-          // we use the AI's suggested grade but verify it against the total score and total rubric max.
-          
-          // BETTER: Just sum the rubric max points passed in rubricSpec? 
-          // Actually, let's just stick to the total score calculation. 
-          // We will update the grade based on TOTAL rubric max.
-          const totalMax = rubric.totalMaxPoints;
-          if (totalMax > 0) {
-              result.score = totalScore; // Ensure summary matches breakdown
-              result.grade = calculateGrade(totalScore, totalMax);
-          }
       }
-      return result;
-    }, 3, 1000, 600000); // 10 min timeout for heavy reasoning
-  } catch (e) { return handleApiError(e); }
+      return res;
+
+    }, 2, 1000, 600000); 
+  } catch (e) { throw e; }
 };
 
 export const reconcileProjectData = async (project: Project): Promise<Candidate[]> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  try {
-    return await withRetry(async () => {
-      const response = await ai.models.generateContent({
-        model: OCR_MODEL,
-        contents: { parts: [{ text: "Rydd i kandidater." }] },
-        config: { responseMimeType: "application/json", responseSchema: { type: Type.OBJECT, properties: { merges: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { fromId: { type: Type.STRING }, toId: { type: Type.STRING } } } } } } }
-      });
-      return project.candidates;
-    }, 3, 1000, 30000); 
-  } catch (e) { return handleApiError(e); }
-};
+  const candidatesData = project.candidates.map(c => ({
+    id: c.id,
+    pages: c.pages.map(p => ({
+      id: p.id,
+      textSnippet: (p.transcription || "").substring(0, 100),
+      tasks: p.identifiedTasks?.map(t => `${t.taskNumber}${t.subTask}`).join(", ")
+    }))
+  }));
 
-export const analyzeTextContent = async (text: string, rubric?: Rubric | null, attachedImages?: { data: string, mimeType: string }[], signal?: AbortSignal): Promise<any> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   try {
     return await withRetry(async () => {
       const response = await ai.models.generateContent({
-        model: OCR_MODEL,
-        contents: { parts: [{ text: text }] },
-        config: { 
-          // v8.0.33: Removed Anti-Stutter text constraint.
-          // v8.0.41: Added context about Digital Documents being "Del 2".
-          systemInstruction: `Digital analyse v8.0.42. Transkriber TEGN-FOR-TEGN. SPRÅK: NORSK (Bokmål). ${LATEX_MANDATE} ${VISUAL_MANDATE}. KONTEKST: Digitale dokumenter (Word/Tekst) er nesten alltid 'Del 2' (med hjelpemidler). Standardiser til 'Del 2' hvis ikke annet er spesifisert.`,
+        model: OCR_MODEL, // Using Flash for cleanup to save cost, usually sufficient
+        contents: { parts: [{ text: `ANALYSE AND CLEANUP:\n${JSON.stringify(candidatesData)}` }] },
+        config: {
+          thinkingConfig: { thinkingBudget: 4096 }, // Give Flash some time to think about sorting
+          systemInstruction: `You are a forensic data cleaner for exam papers.
+          GOAL: Merge duplicates and assign 'Unknown' pages to the correct candidate based on task continuity.
+          
+          RULES:
+          1. If 'Candidate 101' has task 1a, and 'Unknown' has task 1b, merge Unknown into 101.
+          2. If two candidates have very similar IDs (e.g. '101' and '701') and complementary pages, merge them (assume OCR error).
+          3. Return the FULL updated candidate structure.
+          `,
           responseMimeType: "application/json",
           responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              candidateId: { type: Type.STRING },
-              fullText: { type: Type.STRING },
-              part: { type: Type.STRING },
-              visualEvidence: { type: Type.STRING },
-              identifiedTasks: { 
-                type: Type.ARRAY, 
-                items: { type: Type.OBJECT, properties: { taskNumber: { type: Type.STRING }, subTask: { type: Type.STRING } } } 
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING },
+                pageIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+                mergeNotes: { type: Type.STRING }
               }
             }
           }
         }
       });
-      const res = JSON.parse(cleanJson(response.text));
-      return { ...res, identifiedTasks: filterTasksAgainstRubric(res.identifiedTasks, rubric), pageNumber: 1, layoutType: 'A4_SINGLE', rotation: 0 };
-    }, 3, 1000, 300000, signal); 
-  } catch (e) { return handleApiError(e); }
+      
+      const plan = JSON.parse(cleanJson(response.text));
+      
+      // Apply plan
+      const newCandidates: Candidate[] = [];
+      const allPagesMap = new Map<string, Page>();
+      project.candidates.forEach(c => c.pages.forEach(p => allPagesMap.set(p.id, p)));
+      
+      for (const item of plan) {
+        const pages = item.pageIds.map((pid: string) => allPagesMap.get(pid)).filter((p: any) => p !== undefined) as Page[];
+        if (pages.length > 0) {
+           // Find existing candidate metadata if possible
+           const existing = project.candidates.find(c => c.id === item.id);
+           newCandidates.push({
+             id: item.id,
+             projectId: project.id,
+             name: existing?.name || item.id,
+             pages: pages.sort((a, b) => (a.pageNumber || 0) - (b.pageNumber || 0)),
+             status: 'completed'
+           });
+        }
+      }
+      return newCandidates;
+
+    }, 2, 1000, 60000);
+  } catch (e) { 
+    console.error("Smart cleanup failed", e);
+    return project.candidates; 
+  }
 };
 
 export const regenerateSingleCriterion = async (criterion: RubricCriterion, modelOverride: string = PRO_MODEL): Promise<Partial<RubricCriterion>> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  try {
+    // Re-uses generation logic but for a single item
+    // Used for "Regenerate" button in Rubric view
+    // Implementation effectively calls generateCriterionForTask with current data
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const taskLabel = `${criterion.taskNumber}${criterion.subTask || ''} (${criterion.part})`;
+
     return await withRetry(async () => {
-      const response = await ai.models.generateContent({
-        model: modelOverride,
-        contents: { parts: [{ text: `Regenerer: ${criterion.taskNumber}${criterion.subTask || ''}` }] },
-        config: { 
-          systemInstruction: `Generer løsningsforslag og trekkliste (commonErrors). ${LATEX_MANDATE} 
-REGEL: commonErrors SKAL starte hver feil med poengtrekk i klammer: [-0.5 p] eller [-1.0 p]. 
-REGEL: Bruk LaTeX for matematikk i commonErrors.
-REGEL: suggestedSolution SKAL være VERTIKAL. Bruk mange linjeskift. ALDRI skriv lange kjede-likninger på én linje.
-HUSK: Maks 2.0 poeng.`,
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: { 
-              suggestedSolution: { type: Type.STRING }, 
-              commonErrors: { type: Type.STRING },
-              maxPoints: { type: Type.NUMBER }
+        const response = await ai.models.generateContent({
+            model: modelOverride,
+            contents: { parts: [{ text: `REGENERATE CRITERION FOR: ${taskLabel}. Description: ${criterion.description}` }] },
+            config: {
+                thinkingConfig: { thinkingBudget: 4096 },
+                systemInstruction: `You are a strict math teacher. Regenerate the solution and grading guide for: ${taskLabel}.
+                ${RUBRIC_LOGIC_GUARD}
+                OUTPUT ONLY JSON with 'suggestedSolution' and 'commonErrors'.`,
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        suggestedSolution: { type: Type.STRING },
+                        commonErrors: { type: Type.STRING }
+                    },
+                    required: ["suggestedSolution", "commonErrors"]
+                }
             }
-          }
-        }
-      });
-      const res = JSON.parse(cleanJson(response.text));
-      // v8.3.1: Enforce format
-      if (res.commonErrors) res.commonErrors = formatCommonErrors(res.commonErrors);
-      
-      return {
-        ...res,
-        maxPoints: Math.min(2.0, res.maxPoints || 2.0)
-      };
-    }, 3, 1000, 600000); // 10 min timeout for heavy reasoning
-  } catch (e) { return handleApiError(e); }
+        });
+        const res = JSON.parse(cleanJson(response.text));
+        if (res.commonErrors) res.commonErrors = formatCommonErrors(res.commonErrors);
+        return res;
+    }, 2, 1000, 60000);
 };

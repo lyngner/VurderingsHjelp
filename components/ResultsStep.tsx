@@ -27,17 +27,45 @@ const DEFAULT_PRINT_CONFIG: PrintConfig = {
   showCommentsInTable: true
 };
 
+// v8.6.4: Print Settings Menu Component
+const PrintSettingsMenu: React.FC<{ config: PrintConfig, onChange: (key: keyof PrintConfig) => void, onClose: () => void }> = ({ config, onChange, onClose }) => {
+    return (
+        <div className="absolute top-12 right-0 bg-white rounded-2xl shadow-xl border border-slate-100 p-4 z-50 w-64 animate-in fade-in slide-in-from-top-2" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4 border-b border-slate-50 pb-2">
+                <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Utskriftinnhold</h4>
+                <button onClick={onClose} className="text-slate-300 hover:text-slate-500">✕</button>
+            </div>
+            <div className="space-y-2">
+                {[
+                    { key: 'showGrade', label: 'Karakter' },
+                    { key: 'showScore', label: 'Poengsum' },
+                    { key: 'showPercent', label: 'Prosent' },
+                    { key: 'showFeedback', label: 'Hovedkommentar' },
+                    { key: 'showGrowth', label: 'Vekstpunkter' },
+                    { key: 'showRadar', label: 'Ferdighetsprofil' },
+                    { key: 'showTable', label: 'Oppgavetabell' }
+                ].map(item => (
+                    <label key={item.key} className="flex items-center gap-3 cursor-pointer group p-2 hover:bg-slate-50 rounded-lg transition-colors" onClick={(e) => { e.stopPropagation(); onChange(item.key as keyof PrintConfig); }}>
+                        <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${config[item.key as keyof PrintConfig] ? 'bg-indigo-600 border-indigo-600' : 'border-slate-300 bg-white'}`}>
+                            {config[item.key as keyof PrintConfig] && <span className="text-white text-[10px] font-black">✓</span>}
+                        </div>
+                        <span className="text-xs font-bold text-slate-600 group-hover:text-slate-900">{item.label}</span>
+                    </label>
+                ))}
+            </div>
+        </div>
+    );
+};
+
 const renderTaskLabel = (num: unknown, sub: unknown): string => {
     const pair = cleanTaskPair(String(num || ""), String(sub || ""));
     return `${pair.taskNumber}${pair.subTask}`;
 };
 
-// Helper to format numbers with comma as decimal separator (Norwegian standard)
 const formatScore = (num: number): string => {
     return String(num).replace('.', ',');
 };
 
-// v8.0.49: Robust Task Matcher
 const matchEvaluationToCriterion = (evalTask: TaskEvaluation, criterion: RubricCriterion): boolean => {
     const evalLabel = renderTaskLabel(evalTask.taskNumber, evalTask.subTask);
     const critLabel = renderTaskLabel(criterion.taskNumber, criterion.subTask);
@@ -52,8 +80,6 @@ const matchEvaluationToCriterion = (evalTask: TaskEvaluation, criterion: RubricC
     return true;
 };
 
-// v8.0.35: Helper to calculate Part status and adjusted max score
-// v8.2.12: Page existence check to prevent missing status if no tasks found
 const getCandidatePartStatus = (candidate: Candidate, project: Project) => {
     if (!project.rubric) return { 
         d1: { status: 'missing', max: 0 }, 
@@ -83,15 +109,9 @@ const getCandidatePartStatus = (candidate: Candidate, project: Project) => {
     const foundD1 = new Set<string>();
     const foundD2 = new Set<string>();
 
-    // Check for page presence
     const hasPagesD1 = candidate.pages.some(p => !(p.part || "Del 1").toLowerCase().includes("2"));
     const hasPagesD2 = candidate.pages.some(p => (p.part || "").toLowerCase().includes("2"));
 
-    // v8.1.6: Improved Presence Detection
-    // Logic: A task is "present" if OCR found it (candidate.pages) OR if Evaluation gave it > 0 points.
-    // We ignore Evaluation entries with 0 points because the AI auto-fills them even if missing.
-
-    // 1. Scan raw pages (OCR evidence)
     candidate.pages.forEach(p => {
         const pPart = (p.part || "Del 1").toLowerCase().includes("2") ? "Del 2" : "Del 1";
         p.identifiedTasks?.forEach(t => {
@@ -101,32 +121,17 @@ const getCandidatePartStatus = (candidate: Candidate, project: Project) => {
         });
     });
 
-    // 2. Scan evaluation (Score evidence)
-    // Only trust evaluation presence if score > 0. 
-    // This prevents "Not Answered" tasks (auto-filled with 0) from counting as "Present".
     if (candidate.evaluation?.taskBreakdown) {
         candidate.evaluation.taskBreakdown.forEach(t => {
             if (t.score > 0) {
                 const label = renderTaskLabel(t.taskNumber, t.subTask);
-                
-                // v8.2.4 Fix: Robust Part Logic
-                // Always check Rubric for Part belonging first. 
-                // Only trust 't.part' if the task name exists in BOTH parts (ambiguous).
-                
                 const inD1 = rubricTasksD1.has(label);
                 const inD2 = rubricTasksD2.has(label);
                 
                 let isD2 = false;
-                
-                if (inD2 && !inD1) {
-                    isD2 = true; // Unique to D2
-                } else if (inD1 && !inD2) {
-                    isD2 = false; // Unique to D1
-                } else {
-                    // Ambiguous or Unknown -> Fallback to evaluation metadata
-                    const rawPart = String(t.part || "Del 1");
-                    isD2 = rawPart.toLowerCase().includes("2");
-                }
+                if (inD2 && !inD1) isD2 = true;
+                else if (inD1 && !inD2) isD2 = false;
+                else isD2 = String(t.part || "Del 1").toLowerCase().includes("2");
                 
                 if (isD2) foundD2.add(label);
                 else foundD1.add(label);
@@ -135,11 +140,8 @@ const getCandidatePartStatus = (candidate: Candidate, project: Project) => {
     }
 
     const getStatus = (found: Set<string>, rubric: Set<string>, hasPages: boolean) => {
-        if (rubric.size === 0) return 'none'; // No tasks in rubric for this part
-        if (found.size === 0) {
-            // If pages exist but no tasks found, assume incomplete/partial instead of missing
-            return hasPages ? 'partial' : 'missing';
-        }
+        if (rubric.size === 0) return 'none';
+        if (found.size === 0) return hasPages ? 'partial' : 'missing';
         const allFound = Array.from(rubric).every(t => found.has(t));
         return allFound ? 'complete' : 'partial';
     };
@@ -150,7 +152,6 @@ const getCandidatePartStatus = (candidate: Candidate, project: Project) => {
     let adjustedMax = 0;
     if (d1Status !== 'missing') adjustedMax += maxD1;
     if (d2Status !== 'missing') adjustedMax += maxD2;
-    
     if (adjustedMax === 0) adjustedMax = maxD1 + maxD2;
 
     return {
@@ -168,12 +169,9 @@ const GroupStats: React.FC<{ candidates: Candidate[], project: Project }> = ({ c
 
   const totalScore = evaluated.reduce((acc, c) => acc + (c.evaluation?.score || 0), 0);
   const avgScore = totalScore / evaluated.length;
-  
-  // Calculate average grade (assuming grade is number 1-6)
   const grades = evaluated.map(c => parseInt(c.evaluation?.grade || "0") || 0).filter(g => g > 0);
   const avgGrade = grades.length > 0 ? grades.reduce((a,b) => a+b, 0) / grades.length : 0;
 
-  // v8.1.3: Average Percentage Calculation
   const totalPercent = evaluated.reduce((acc, c) => {
       const { adjustedMax } = getCandidatePartStatus(c, project);
       const score = c.evaluation?.score || 0;
@@ -182,7 +180,6 @@ const GroupStats: React.FC<{ candidates: Candidate[], project: Project }> = ({ c
   }, 0);
   const avgPercent = totalPercent / evaluated.length;
 
-  // Distribution
   const distribution: Record<string, number> = { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0, '6': 0 };
   grades.forEach(g => {
     if (distribution[g] !== undefined) distribution[g]++;
@@ -285,7 +282,6 @@ const SkillRadarChart: React.FC<{
   };
 
   return (
-    // v8.5.8: Increased scale for print and forced color rendering
     <div className="flex flex-col items-center print:scale-100 print:mt-4" style={{ printColorAdjust: 'exact', WebkitPrintColorAdjust: 'exact' }}>
       <div className="flex gap-4 mb-4 print:hidden">
          {!isGroupView && (
@@ -296,7 +292,7 @@ const SkillRadarChart: React.FC<{
          )}
          <div className="flex items-center gap-2">
             <div className={`w-8 h-3 ${isGroupView ? 'bg-indigo-500 border-2 border-indigo-200' : 'border-t-2 border-dashed border-slate-300'}`}></div>
-            <span className="text-[10px] font-black text-slate-400 uppercase print:hidden">{isGroupView ? 'Snitt' : 'Snitt'}</span>
+            <span className="text-[10px] font-black text-slate-400 uppercase print:text-black">{isGroupView ? 'Snitt' : 'Snitt'}</span>
          </div>
       </div>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="overflow-visible">
@@ -325,13 +321,13 @@ const SkillRadarChart: React.FC<{
 
         {!isGroupView ? (
           <>
-            <polygon points={getPoints(true)} fill="none" stroke="#94a3b8" strokeWidth="2" strokeDasharray="4,2" className="print:hidden" />
+            {/* v8.9.13: Show average line in print too (removed print:hidden) */}
+            <polygon points={getPoints(true)} fill="none" stroke="#94a3b8" strokeWidth="2" strokeDasharray="4,2" />
             <polygon 
               points={getPoints(false)} 
               fill="rgba(99, 102, 241, 0.2)" 
               stroke="#6366f1" 
               strokeWidth="3" 
-              // v8.5.8: Force colors in print
               className="print:fill-indigo-100 print:stroke-indigo-600 print:stroke-[3px] print:opacity-80" 
               style={{ printColorAdjust: 'exact', WebkitPrintColorAdjust: 'exact' }}
             />
@@ -391,9 +387,6 @@ const CandidateReport: React.FC<{
     });
 
   const percent = adjustedMax > 0 ? Math.round((score / adjustedMax) * 100) : 0;
-
-  // v8.6.2: Ensure display grade matches strict calculation based on ADJUSTED max, not raw max.
-  // Unless we are editing or the user has manually set a grade that differs.
   const displayGrade = isEditing ? localGrade : (candidate.evaluation?.grade || calculateGrade(score, adjustedMax));
 
   const handleTaskScoreChange = (taskId: string, newScore: number) => {
@@ -427,9 +420,7 @@ const CandidateReport: React.FC<{
   }, [candidate.evaluation?.grade]);
 
   return (
-    // v8.6.1: Added page-break-after-always for batch printing
     <div className="bg-white rounded-[32px] shadow-sm border border-slate-100 p-8 md:p-12 print:shadow-none print:border-none print:p-0 print:rounded-none print:break-after-page min-h-[90vh]">
-      {/* v8.5.8: Compact Header for Print */}
       <div className="flex flex-col md:flex-row justify-between gap-8 border-b border-slate-100 pb-8 mb-8 print:pb-2 print:mb-4 print:flex-row print:gap-4 print:items-center">
          <div>
             <h2 className="text-3xl font-black text-slate-800 tracking-tighter mb-2 print:text-xl print:mb-0">{candidate.name}</h2>
@@ -471,11 +462,7 @@ const CandidateReport: React.FC<{
       </div>
 
       <div className="flex flex-col gap-10 print:block">
-          {/* v8.6.3: Print Block Flow - Guaranteed Vertical Stacking */}
-          {/* Screen: Grid Side-by-Side */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 print:block">
-              
-              {/* Text Section (Left on screen, Top on print) */}
               <div className="flex flex-col gap-6 print:gap-4 print:mb-8">
                   {config.showFeedback && (
                       <div className="">
@@ -483,32 +470,26 @@ const CandidateReport: React.FC<{
                          <LatexRenderer content={feedback} className="text-sm text-slate-700 leading-relaxed font-medium print:text-xs print:leading-snug" />
                       </div>
                   )}
-                  
                   {config.showGrowth && vekstpunkter && vekstpunkter.length > 0 && (
                       <div className="print:mt-2">
                          <h3 className="text-[10px] font-black uppercase text-emerald-600 tracking-widest mb-3 print:mb-1">Ting å jobbe med</h3>
-                         
-                         {/* Screen View (Styled Boxes) */}
                          <ul className="space-y-2 print:hidden">
                             {vekstpunkter.map((vp, i) => (
                                <li key={i} className="flex gap-3 items-start p-3 rounded-xl bg-emerald-50/50 border border-emerald-100 text-emerald-800 text-xs font-medium leading-relaxed">
-                                  <span className="text-emerald-400 font-bold">↗</span>
-                                  <span>{vp}</span>
+                                  <span className="text-emerald-400 font-bold mt-0.5">↗</span>
+                                  <div className="flex-1"><LatexRenderer content={vp} /></div>
                                </li>
                             ))}
                          </ul>
-
-                         {/* Print View (Compact List) */}
                          <ul className="hidden print:block list-disc pl-4 space-y-1 text-xs text-slate-700">
                             {vekstpunkter.map((vp, i) => (
-                               <li key={i} className="leading-snug">{vp}</li>
+                               <li key={i} className="leading-snug"><LatexRenderer content={vp} /></li>
                             ))}
                          </ul>
                       </div>
                   )}
               </div>
 
-              {/* Radar Section (Right on screen, Below text on print) */}
               {config.showRadar && skills.length > 0 && (
                   <div className="flex flex-col items-center pt-8 border-t border-slate-100 md:border-none md:pt-0 print:border-none print:pt-0 print:w-full print:items-center print:mb-8 print:break-inside-avoid">
                      <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-6 print:mb-0 print:hidden">Ferdighetsprofil</h3>
@@ -519,10 +500,8 @@ const CandidateReport: React.FC<{
       </div>
 
       {config.showTable && project.rubric && (
-          <div className="mt-12 print:mt-4 print:break-inside-avoid">
+          <div className="mt-12 print:mt-4 print:break-inside-avoid print:break-before-page">
              <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-6 print:mb-2 print:hidden">Oppgavedetaljer</h3>
-             
-             {/* SCREEN TABLE (Standard) */}
              <div className="overflow-hidden rounded-2xl border border-slate-200 print:hidden">
                 <table className="w-full text-left border-collapse">
                    <thead>
@@ -538,12 +517,9 @@ const CandidateReport: React.FC<{
                           const ev = taskBreakdown?.find(t => matchEvaluationToCriterion(t, crit));
                           const isDel2 = (crit.part || "").toLowerCase().includes("2");
                           const isMissingPart = isDel2 ? d2.status === 'missing' : d1.status === 'missing';
-                          
                           if (isMissingPart) return null;
-                          
                           const cleanTask = cleanTaskPair(crit.taskNumber, crit.subTask);
                           const taskLabel = `${cleanTask.taskNumber}${cleanTask.subTask}`;
-
                           return (
                               <tr 
                                 key={idx} 
@@ -589,21 +565,18 @@ const CandidateReport: React.FC<{
                    </tbody>
                 </table>
              </div>
-
-             {/* PRINT LIST (Simplified v8.6.2) */}
-             <div className="hidden print:block text-[10px]">
+             {/* v8.9.24: Compact Print Table */}
+             <div className="hidden print:block text-[9px] leading-tight print:columns-2 print:gap-6">
                 <ul className="border-t border-slate-200">
                     {project.rubric.criteria.map((crit, idx) => {
                         const ev = taskBreakdown?.find(t => matchEvaluationToCriterion(t, crit));
                         const isDel2 = (crit.part || "").toLowerCase().includes("2");
                         const isMissingPart = isDel2 ? d2.status === 'missing' : d1.status === 'missing';
                         if (isMissingPart) return null;
-                        
                         const cleanTask = cleanTaskPair(crit.taskNumber, crit.subTask);
                         const taskLabel = `${cleanTask.taskNumber}${cleanTask.subTask}`;
-
                         return (
-                            <li key={idx} className="flex gap-2 py-1 border-b border-slate-200 break-inside-avoid items-start">
+                            <li key={idx} className="flex gap-2 py-1 print:py-0.5 border-b border-slate-200 break-inside-avoid items-start">
                                 <span className="font-bold w-8 shrink-0">{taskLabel}</span>
                                 <span className="flex-1 text-slate-700">
                                     {ev ? <LatexRenderer content={ev.comment} /> : '-'}
@@ -622,7 +595,6 @@ const CandidateReport: React.FC<{
   );
 };
 
-// v8.3.3: Re-introduced Matrix Component
 const ResultMatrix: React.FC<{ 
     project: Project, 
     candidates: Candidate[], 
@@ -632,7 +604,6 @@ const ResultMatrix: React.FC<{
     onToggleAll: () => void
 }> = ({ project, candidates, onNavigate, selectedIds, onToggle, onToggleAll }) => {
     
-    // Sort tasks
     const rubricTasks = useMemo(() => {
         if (!project.rubric) return { d1: [], d2: [] };
         const d1: RubricCriterion[] = [];
@@ -686,12 +657,10 @@ const ResultMatrix: React.FC<{
                     </thead>
                     <tbody className="text-xs font-medium text-slate-700">
                         {candidates.map((c, i) => {
-                            const { totalMax, adjustedMax, isTotalComplete, d1, d2 } = getCandidatePartStatus(c, project);
+                            const { d1, d2, adjustedMax } = getCandidatePartStatus(c, project);
                             const score = c.evaluation?.score || 0;
                             const percent = adjustedMax > 0 ? Math.round((score/adjustedMax)*100) : 0;
                             const isSelected = selectedIds.has(c.id);
-                            
-                            // v8.6.2: Ensure table grade matches adjusted calculation
                             const grade = calculateGrade(score, adjustedMax);
 
                             return (
@@ -704,7 +673,6 @@ const ResultMatrix: React.FC<{
                                             <button onClick={() => onNavigate(c.id)} className="font-bold text-slate-700 hover:text-indigo-600 hover:underline text-left truncate">
                                                 {c.name}
                                             </button>
-                                            {/* v8.3.8: Inline Badges */}
                                             <div className="flex gap-1 text-[9px] font-black uppercase tracking-widest text-slate-400 opacity-80 shrink-0">
                                                 {d1.status === 'complete' ? <span title="Del 1 Komplett">1️⃣✅</span> : d1.status === 'missing' ? <span title="Ingen Del 1">1️⃣🚫</span> : <span title="Del 1 Delvis">1️⃣⚠️</span>}
                                                 {d2.status === 'complete' ? <span title="Del 2 Komplett">2️⃣✅</span> : d2.status === 'missing' ? <span title="Ingen Del 2">2️⃣🚫</span> : <span title="Del 2 Delvis">2️⃣⚠️</span>}
@@ -712,7 +680,6 @@ const ResultMatrix: React.FC<{
                                         </div>
                                     </td>
                                     {rubricTasks.d1.map((t, idx) => {
-                                        // v8.4.0: Blank Cell Policy for missing parts
                                         if (d1.status === 'missing') {
                                             return <td key={`d1-${idx}`} className="p-2 border-r border-slate-50 bg-slate-50/30"></td>;
                                         }
@@ -724,7 +691,6 @@ const ResultMatrix: React.FC<{
                                         );
                                     })}
                                     {rubricTasks.d2.map((t, idx) => {
-                                        // v8.4.0: Blank Cell Policy for missing parts
                                         if (d2.status === 'missing') {
                                             return <td key={`d2-${idx}`} className="p-2 border-r border-slate-50 bg-slate-50/30"></td>;
                                         }
@@ -759,7 +725,7 @@ interface ResultsStepProps {
   rubricStatus: { loading: boolean; text: string };
   onNavigateToReview: (id: string) => void;
   onNavigateToTask?: (candidateId: string, taskId: string, part: 1 | 2) => void;
-  updateActiveProject?: (updates: Partial<Project>) => void; // v8.3.6: Editing
+  updateActiveProject?: (updates: Partial<Project>) => void;
   progress?: {
     batchTotal: number;
     batchCompleted: number;
@@ -784,10 +750,15 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
 }) => {
   const [printConfig, setPrintConfig] = useState<PrintConfig>(DEFAULT_PRINT_CONFIG);
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(new Set());
-  const [isBatchPrinting, setIsBatchPrinting] = useState(false); // v8.6.1
+  const [isBatchPrinting, setIsBatchPrinting] = useState(false);
+  const [showPrintMenu, setShowPrintMenu] = useState(false); // v8.6.4: UI state
   
-  // v8.4.5: Split display and stats candidates
-  
+  // v8.6.5: Default select all ready candidates
+  useEffect(() => {
+      const ready = activeProject.candidates.filter(c => c.status === 'completed' || c.status === 'evaluated').map(c => c.id);
+      setSelectedCandidateIds(new Set(ready));
+  }, [activeProject.candidates.length]);
+
   const displayCandidates = useMemo(() => {
     return activeProject.candidates.filter(c => c.status === 'completed' || c.status === 'evaluated');
   }, [activeProject.candidates]);
@@ -798,7 +769,6 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
 
   const selectedCandidate = displayCandidates.find(c => c.id === selectedResultCandidateId);
 
-  // v8.3.3: Calculate Group Skills for Individual Report (Only based on EVALUATED)
   const groupSkillStats = useMemo(() => {
       const skillsMap: Record<string, { total: number, max: number }> = {};
       if (!activeProject.rubric) return undefined;
@@ -829,17 +799,13 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
 
   const analysisData = useMemo(() => {
     if (!activeProject.rubric) return [];
-    
     return activeProject.rubric.criteria.map(crit => {
         const evals = evaluatedCandidates.map(c => c.evaluation?.taskBreakdown?.find(t => matchEvaluationToCriterion(t, crit)));
         const validEvals = evals.filter(e => e !== undefined);
-        
         if (validEvals.length === 0) return { label: `${crit.taskNumber}`, percent: 0, isDel2: false };
-        
         const totalScore = validEvals.reduce((a, b) => a + (b?.score || 0), 0);
         const maxPossible = validEvals.length * (crit.maxPoints || 0);
         const percent = maxPossible > 0 ? Math.round((totalScore / maxPossible) * 100) : 0;
-        
         const clean = cleanTaskPair(crit.taskNumber, crit.subTask);
         return {
             label: `${clean.taskNumber}${clean.subTask}`,
@@ -852,7 +818,6 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
     });
   }, [evaluatedCandidates, activeProject.rubric]);
 
-  // v8.3.6: Handle Candidate Update (Edit Mode)
   const handleUpdateCandidate = async (updatedCandidate: Candidate) => {
       await saveCandidate(updatedCandidate);
       if (updateActiveProject) {
@@ -879,12 +844,9 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
   const executeSelectedEvaluation = () => {
       if (selectedCandidateIds.size === 0) return;
       handleBatchEvaluation(Array.from(selectedCandidateIds), true);
-      setSelectedCandidateIds(new Set());
   };
 
-  // v8.6.1: Handle Batch Export CSV
   const handleExportCSV = () => {
-      // Logic copied from ResultMatrix, centralized here
       const rubricTasks = (() => {
           if (!activeProject.rubric) return { d1: [], d2: [] };
           const d1: RubricCriterion[] = [];
@@ -920,7 +882,6 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
               }),
               formatScore(score),
               `${formatScore(percent)}%`,
-              // v8.6.2: Use deterministic grade calculation
               calculateGrade(score, adjustedMax)
           ];
           return cols.join(";");
@@ -940,7 +901,6 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
       }
   };
 
-  // v8.6.1: Handle Batch Print
   const handleBatchPrint = () => {
       if (evaluatedCandidates.length === 0) {
           alert("Ingen kandidater er vurdert ennå.");
@@ -950,14 +910,12 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
       setTimeout(() => {
           window.print();
           setIsBatchPrinting(false);
-      }, 500); // Allow render
+      }, 500); 
   };
 
-  // v8.3.8: Render Persistent Sidebar for Candidate View
   if (selectedCandidate) {
       return (
           <div className="flex h-full w-full overflow-hidden bg-[#F8FAFC]">
-              {/* v8.3.8: Persistent Sidebar for Navigation */}
               <aside className="w-72 bg-white border-r flex flex-col shrink-0 no-print shadow-sm h-full z-10">
                   <div className="p-4 border-b shrink-0 bg-white/80 sticky top-0 z-20">
                       <button onClick={() => setSelectedResultCandidateId(null)} className="w-full text-left flex items-center gap-2 text-slate-500 hover:text-indigo-600 font-black text-[10px] uppercase tracking-widest transition-colors mb-2">
@@ -972,7 +930,6 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
                               const isSelected = c.id === selectedCandidate.id;
                               const { d1, d2, adjustedMax } = getCandidatePartStatus(c, activeProject);
                               const cScore = c.evaluation?.score || 0;
-                              // v8.6.2: Deterministic Grade
                               const cGrade = c.status === 'evaluated' ? calculateGrade(cScore, adjustedMax) : '-';
 
                               return (
@@ -984,8 +941,8 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
                                       <div className="flex items-center gap-2 min-w-0">
                                           <span className={`font-bold text-xs truncate ${isSelected ? 'text-white' : 'text-slate-700'}`}>{c.name}</span>
                                           <div className={`flex gap-1 text-[8px] font-black uppercase tracking-widest shrink-0 ${isSelected ? 'text-indigo-200' : 'text-slate-400'}`}>
-                                                {d1.status === 'complete' ? <span title="Del 1">1️⃣✅</span> : d1.status === 'missing' ? <span title="Ingen Del 1">1️⃣🚫</span> : <span>1️⃣⚠️</span>}
-                                                {d2.status === 'complete' ? <span title="Del 2">2️⃣✅</span> : d2.status === 'missing' ? <span title="Ingen Del 2">2️⃣🚫</span> : <span>2️⃣⚠️</span>}
+                                                {d1.status === 'complete' ? <span title="Del 1">1️⃣✅</span> : d1.status === 'missing' ? <span title="Ingen Del 1">1️⃣🚫</span> : <span title="Del 1 Delvis">1️⃣⚠️</span>}
+                                                {d2.status === 'complete' ? <span title="Del 2">2️⃣✅</span> : d2.status === 'missing' ? <span title="Ingen Del 2">2️⃣🚫</span> : <span title="Del 2 Delvis">2️⃣⚠️</span>}
                                           </div>
                                       </div>
                                       <span className={`text-[10px] font-black ${isSelected ? 'text-white' : 'text-emerald-600'}`}>{cGrade}</span>
@@ -997,12 +954,13 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
 
               <main className="flex-1 overflow-y-auto custom-scrollbar p-8 print:p-0 print:overflow-visible h-full bg-[#F8FAFC]">
                   <div className="max-w-[1600px] mx-auto pb-20 print:pb-0">
-                      {/* v8.3.0: Print Config Menu */}
-                      <div className="flex justify-end mb-6 print:hidden gap-2">
+                      <div className="flex justify-end mb-6 print:hidden gap-2 relative">
+                          <button onClick={() => setShowPrintMenu(!showPrintMenu)} className="bg-white border border-slate-200 text-slate-600 w-10 h-10 rounded-xl flex items-center justify-center hover:bg-slate-50 transition-all shadow-sm text-lg">⚙️</button>
+                          {showPrintMenu && <PrintSettingsMenu config={printConfig} onChange={(k) => setPrintConfig(p => ({...p, [k]: !p[k]}))} onClose={() => setShowPrintMenu(false)} />}
+                          
                           <button onClick={() => window.print()} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-md">
                               🖨️ Skriv ut
                           </button>
-                          
                           <button onClick={() => onNavigateToReview(selectedCandidate.id)} className="bg-white border border-indigo-100 text-indigo-600 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-50 transition-all">
                               Se Transkripsjon →
                           </button>
@@ -1016,8 +974,8 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
                           project={activeProject}
                           config={printConfig}
                           onNavigateToTask={onNavigateToTask}
-                          groupSkillStats={groupSkillStats} // v8.3.3
-                          onUpdateCandidate={handleUpdateCandidate} // v8.3.6
+                          groupSkillStats={groupSkillStats} 
+                          onUpdateCandidate={handleUpdateCandidate} 
                       />
                   </div>
               </main>
@@ -1025,8 +983,6 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
       );
   }
 
-  // v8.6.1: Invisible Batch Print Container
-  // This is only visible during print when isBatchPrinting is true.
   if (isBatchPrinting) {
       return (
           <div className="print:block hidden bg-white">
@@ -1037,7 +993,6 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
                           project={activeProject}
                           config={printConfig}
                           groupSkillStats={groupSkillStats}
-                          // No callbacks for print view
                       />
                   </div>
               ))}
@@ -1048,7 +1003,6 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
   return (
     <div className="h-full bg-[#F8FAFC] p-8 overflow-y-auto custom-scrollbar">
        <div className="max-w-[1800px] mx-auto space-y-8 pb-20">
-            {/* Overview Mode */}
             <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4">
               <header className="flex justify-between items-end">
                   <div>
@@ -1056,8 +1010,7 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
                       <p className="text-[10px] font-black uppercase text-indigo-500 tracking-[0.2em] mt-2">Samlet statistikk for {evaluatedCandidates.length} vurderte kandidater</p>
                   </div>
                   
-                  {/* v8.6.1: Central Action Bar */}
-                  <div className="flex gap-3 items-center bg-white p-2 rounded-2xl shadow-sm border border-slate-100">
+                  <div className="flex gap-3 items-center bg-white p-2 rounded-2xl shadow-sm border border-slate-100 relative">
                         {rubricStatus.loading ? (
                             <div className="flex items-center gap-2 px-4 py-2 bg-indigo-50 rounded-xl">
                                 <Spinner size="w-4 h-4" />
@@ -1077,6 +1030,10 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
                                 <button onClick={handleExportCSV} className="bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2">
                                     <span>📊</span> CSV
                                 </button>
+                                
+                                <button onClick={() => setShowPrintMenu(!showPrintMenu)} className="bg-white border border-slate-200 text-slate-600 w-10 h-10 rounded-xl flex items-center justify-center hover:bg-slate-50 transition-all shadow-sm text-lg">⚙️</button>
+                                {showPrintMenu && <PrintSettingsMenu config={printConfig} onChange={(k) => setPrintConfig(p => ({...p, [k]: !p[k]}))} onClose={() => setShowPrintMenu(false)} />}
+
                                 <button onClick={handleBatchPrint} disabled={evaluatedCandidates.length === 0} className="bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 disabled:opacity-50">
                                     <span>🖨️</span> Skriv ut Alle (Batch)
                                 </button>
@@ -1085,7 +1042,6 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
                   </div>
               </header>
               
-              {/* v8.4.5: Use displayCandidates (all completed) to decide emptiness, but render UI if > 0 */}
               {displayCandidates.length === 0 ? (
                   <div className="p-20 text-center border-2 border-dashed border-slate-200 rounded-[32px] opacity-50">
                     <div className="text-6xl mb-4 grayscale opacity-30">📊</div>
@@ -1094,7 +1050,6 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
                   </div>
               ) : (
                   <>
-                    {/* Stats only show if we have evaluated candidates */}
                     {evaluatedCandidates.length > 0 && (
                         <>
                             <GroupStats candidates={activeProject.candidates} project={activeProject} />
@@ -1120,7 +1075,6 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({
                         </>
                     )}
 
-                    {/* v8.3.3: Restored Unified Matrix Table - Shows ALL ready candidates */}
                     <ResultMatrix 
                         project={activeProject} 
                         candidates={displayCandidates} 

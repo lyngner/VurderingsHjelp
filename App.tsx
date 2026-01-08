@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { Project, Candidate, IdentifiedTask } from './types';
-import { saveProject, getAllProjects, deleteProject as deleteProjectFromStorage, loadFullProject, saveCandidate, deleteMedia, deleteCandidate, getSetting } from './services/storageService';
+import { saveProject, getAllProjects, deleteProject as deleteProjectFromStorage, loadFullProject, saveCandidate, deleteMedia, deleteCandidate } from './services/storageService';
 import { useProjectProcessor } from './hooks/useProjectProcessor';
 
 import { Dashboard } from './components/Dashboard';
@@ -15,10 +15,10 @@ if (typeof window !== 'undefined' && (window as any).pdfjsLib) {
 }
 
 const steps = [
-  { id: 'setup', label: 'Innlasting', icon: '📥' },
+  { id: 'setup', label: 'Oppsett', icon: '📥' },
   { id: 'review', label: 'Kontroll', icon: '🔍' },
-  { id: 'rubric', label: 'Rettemanual', icon: '📋' },
-  { id: 'results', label: 'Resultater', icon: '🏆' },
+  { id: 'rubric', label: 'Manual', icon: '📋' },
+  { id: 'results', label: 'Resultat', icon: '🏆' },
 ];
 
 const App: React.FC = () => {
@@ -36,11 +36,11 @@ const App: React.FC = () => {
     rubricStatus,
     useFlashFallback,
     setUseFlashFallback,
-    etaSeconds, // v7.9.28
+    etaSeconds,
     handleTaskFileSelect,
     handleCandidateFileSelect,
     handleEvaluateAll,
-    handleBatchEvaluation, // Added this
+    handleBatchEvaluation,
     handleEvaluateCandidate,
     handleGenerateRubric,
     handleRegenerateCriterion,
@@ -48,13 +48,12 @@ const App: React.FC = () => {
     handleRetryPage,
     handleSmartCleanup,
     updateActiveProject,
-    handleSkipFile, // v7.9.33: New skip handler
-    handleRetryFailed // v7.9.44: Retry Failed
-  } = useProjectProcessor(activeProject, setActiveProject); // Pass setting to processor
+    handleSkipFile,
+    handleRetryFailed
+  } = useProjectProcessor(activeProject, setActiveProject);
 
   const [selectedResultCandidateId, setSelectedResultCandidateId] = useState<string | null>(null);
   const [selectedReviewCandidateId, setSelectedReviewCandidateId] = useState<string | null>(null);
-  // v8.0.53: Deep link navigation state
   const [jumpToTask, setJumpToTask] = useState<{ id: string, part: 1 | 2 } | null>(null);
   const [reviewFilter, setReviewFilter] = useState('');
 
@@ -111,12 +110,9 @@ const App: React.FC = () => {
   };
 
   const handleDeleteProject = async (id: string) => {
-    // FIX v6.2.8: Hvis vi sletter det aktive prosjektet, må vi fjerne det fra state først.
-    // Ellers vil useEffect-en ovenfor prøve å lagre det på nytt (zombie-prosjekt).
     if (activeProject && activeProject.id === id) {
       setActiveProject(null);
     }
-    
     await deleteProjectFromStorage(id);
     setProjects(prev => prev.filter(p => p.id !== id));
   };
@@ -141,19 +137,15 @@ const App: React.FC = () => {
 
   const handleDeletePage = async (candidateId: string, pageId: string) => {
     await deleteMedia(pageId);
-
     setActiveProject(prev => {
       if (!prev) return null;
       const updatedCandidates = prev.candidates.map(c => {
         if (c.id !== candidateId) return c;
         const remainingPages = c.pages.filter(p => p.id !== pageId);
-        
         if (remainingPages.length === 0) return null;
-
         const updatedCand = { ...c, pages: remainingPages };
         return updatedCand;
       }).filter((c): c is Candidate => c !== null);
-
       return { ...prev, candidates: updatedCandidates };
     });
   };
@@ -174,7 +166,6 @@ const App: React.FC = () => {
   };
 
   const handleUpdatePageTasks = (candidateId: string, pageId: string, taskString: string) => {
-    // Parse "1a, 1b" -> IdentifiedTask[]
     const tasks: IdentifiedTask[] = taskString.split(/,| /).map(s => s.trim()).filter(s => s.length > 0).map(s => {
       const match = s.match(/^(\d+)([a-zA-Z]*)$/);
       if (match) {
@@ -202,7 +193,6 @@ const App: React.FC = () => {
     setCurrentStep('review');
   };
 
-  // v8.0.53: Navigate deep to task within a candidate
   const handleNavigateToTask = (candidateId: string, taskId: string, part: 1 | 2) => {
     setSelectedReviewCandidateId(candidateId);
     setJumpToTask({ id: taskId, part });
@@ -212,7 +202,6 @@ const App: React.FC = () => {
   const filteredCandidates = useMemo(() => {
     if (!activeProject?.candidates) return [];
     let list = activeProject.candidates.filter(c => !reviewFilter || c.name.toLowerCase().includes(reviewFilter.toLowerCase()));
-    // v7.9.5: Global alfabetisk sortering, Ukjent til slutt
     return [...list].sort((a, b) => {
       const aName = a.name.toLowerCase();
       const bName = b.name.toLowerCase();
@@ -223,6 +212,14 @@ const App: React.FC = () => {
       return a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' });
     });
   }, [activeProject, reviewFilter]);
+
+  const openKeySelector = async () => {
+    if ((window as any).aistudio && typeof (window as any).aistudio.openSelectKey === 'function') {
+      await (window as any).aistudio.openSelectKey();
+    } else {
+      window.open('https://ai.google.dev/gemini-api/docs/billing', '_blank');
+    }
+  };
 
   if (view === 'dashboard') {
     return (
@@ -240,10 +237,7 @@ const App: React.FC = () => {
       <header className="bg-white border-b px-8 py-4 flex items-center justify-between sticky top-0 z-50 no-print">
         <button onClick={() => setView('dashboard')} className="text-[10px] font-black text-slate-400 uppercase tracking-widest hover:text-indigo-600 transition-colors">← Oversikt</button>
         <div className="flex gap-2">{steps.map(s => (<button key={s.id} onClick={() => setCurrentStep(s.id as any)} className={`px-6 py-2.5 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all ${currentStep === s.id ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-50'}`}>{s.icon} {s.label}</button>))}</div>
-        
-        <div className="w-20 flex justify-end">
-            {/* v8.5.0: Removed Flash Mode indicator as it is now standard */}
-        </div>
+        <div className="w-8"></div> 
       </header>
 
       {(rubricStatus.loading || processingCount > 0) && (
@@ -274,7 +268,7 @@ const App: React.FC = () => {
                 updateActiveProject={updateActiveProject} 
                 onNavigateToCandidate={handleNavigateToCandidate} 
                 handleSkipFile={handleSkipFile}
-                handleRetryFailed={handleRetryFailed} // Pass new handler
+                handleRetryFailed={handleRetryFailed}
               />
             )}
             {currentStep === 'review' && (
@@ -294,7 +288,7 @@ const App: React.FC = () => {
                 handleSmartCleanup={handleSmartCleanup} 
                 isCleaning={rubricStatus.loading} 
                 handleRegeneratePage={handleRegeneratePage}
-                initialTaskFilter={jumpToTask} // v8.0.53
+                initialTaskFilter={jumpToTask} 
               />
             )}
             {currentStep === 'rubric' && <RubricStep activeProject={activeProject} handleGenerateRubric={() => handleGenerateRubric()} rubricStatus={rubricStatus} updateActiveProject={updateActiveProject} handleRegenerateCriterion={handleRegenerateCriterion} />}
@@ -309,9 +303,8 @@ const App: React.FC = () => {
                 handleGenerateRubric={() => handleGenerateRubric()} 
                 rubricStatus={rubricStatus}
                 onNavigateToReview={handleNavigateToCandidate}
-                onNavigateToTask={handleNavigateToTask} // v8.0.53
-                updateActiveProject={updateActiveProject} // v8.3.6: Enabled Manual Edits
-                // v8.1.3: Progress props
+                onNavigateToTask={handleNavigateToTask}
+                updateActiveProject={updateActiveProject}
                 progress={{
                     batchTotal,
                     batchCompleted,
