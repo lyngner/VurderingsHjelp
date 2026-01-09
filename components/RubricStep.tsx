@@ -9,7 +9,7 @@ interface RubricStepProps {
   handleGenerateRubric: () => void;
   rubricStatus: { loading: boolean; text: string };
   updateActiveProject?: (updates: Partial<Project>) => void;
-  handleRegenerateCriterion: (name: string) => Promise<void>;
+  handleRegenerateCriterion: (taskNumber: string, subTask: string, part: string) => Promise<void>;
 }
 
 export const RubricStep: React.FC<RubricStepProps> = ({
@@ -150,9 +150,10 @@ export const RubricStep: React.FC<RubricStepProps> = ({
     updateActiveProject({ rubric: { ...newRubric, totalMaxPoints } });
   };
 
-  const onRegenerate = async (name: string) => {
-    setLocalLoading(name);
-    await handleRegenerateCriterion(name);
+  const onRegenerate = async (crit: RubricCriterion) => {
+    const id = getUniqueId(crit);
+    setLocalLoading(id);
+    await handleRegenerateCriterion(crit.taskNumber, crit.subTask, crit.part || "Del 1");
     setLocalLoading(null);
   };
 
@@ -383,7 +384,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                   const isEditingHeader = editingHeaderId === uniqueId;
                   const isEditingSolution = editingId === uniqueId;
                   const isEditingErrors = editingErrorsId === uniqueId;
-                  const isLoading = localLoading === crit.name;
+                  const isLoading = localLoading === uniqueId;
                   const isDel2 = (crit.part || "").toLowerCase().includes('2');
                   const cleanNum = String(crit.taskNumber || "").replace(/[^0-9]/g, '');
                   const cleanSub = String(crit.subTask || "").toUpperCase().replace(/[^A-Z]/g, '');
@@ -415,7 +416,7 @@ export const RubricStep: React.FC<RubricStepProps> = ({
                                />
                                <div className="flex gap-3 items-center">
                                  <button 
-                                   onClick={() => onRegenerate(crit.name)} 
+                                   onClick={() => onRegenerate(crit)} 
                                    title="Be KI generere et nytt løsningsforslag for denne spesifikke oppgaven"
                                    className="text-[8px] font-black uppercase text-indigo-500 bg-indigo-50 px-2 py-1 rounded-md border border-indigo-100 hover:bg-indigo-100 transition-all flex items-center gap-1"
                                  >

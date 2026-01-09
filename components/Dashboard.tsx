@@ -8,6 +8,7 @@ interface DashboardProps {
   onSelectProject: (project: Project) => void;
   onCreateProject: () => void;
   onDeleteProject: (id: string) => void;
+  onRenameProject: (id: string, newName: string) => void;
   forceFlash?: boolean;
   setForceFlash?: (val: boolean) => void;
 }
@@ -17,11 +18,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onSelectProject, 
   onCreateProject, 
   onDeleteProject,
+  onRenameProject,
   forceFlash,
   setForceFlash
 }) => {
   const [showSettings, setShowSettings] = useState(false);
   const [storageStats, setStorageStats] = useState<{ projects: number, candidates: number, media: number } | null>(null);
+  
+  // Editing state
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
 
   useEffect(() => {
     if (showSettings) {
@@ -34,6 +40,28 @@ export const Dashboard: React.FC<DashboardProps> = ({
       await clearAllData();
       window.location.reload();
     }
+  };
+
+  const startEditing = (p: Project) => {
+    setEditingId(p.id);
+    setEditName(p.name);
+  };
+
+  const cancelEditing = () => {
+    setEditingId(null);
+    setEditName("");
+  };
+
+  const saveEditing = (id: string) => {
+    if (editName.trim()) {
+      onRenameProject(id, editName);
+    }
+    setEditingId(null);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent, id: string) => {
+    if (e.key === 'Enter') saveEditing(id);
+    if (e.key === 'Escape') cancelEditing();
   };
 
   const getProjectStats = (p: Project) => {
@@ -114,14 +142,36 @@ export const Dashboard: React.FC<DashboardProps> = ({
         ) : (
           projects.map(p => {
             const stats = getProjectStats(p);
+            const isEditing = editingId === p.id;
+
             return (
-              <div key={p.id} onClick={() => onSelectProject(p)} className="bg-white rounded-[32px] border border-slate-100 shadow-sm cursor-pointer hover:shadow-xl transition-all group relative overflow-hidden flex flex-col">
+              <div key={p.id} onClick={() => !isEditing && onSelectProject(p)} className={`bg-white rounded-[32px] border border-slate-100 shadow-sm transition-all group relative overflow-hidden flex flex-col ${!isEditing ? 'cursor-pointer hover:shadow-xl' : ''}`}>
                 <div className={`absolute top-0 left-0 w-1.5 h-full transition-colors ${stats.hasRubric ? 'bg-emerald-500' : 'bg-slate-200 group-hover:bg-indigo-500'}`}></div>
                 
                 <div className="p-8 pb-4 border-b border-slate-50">
-                  <div className="flex justify-between items-start mb-2">
-                    <h3 className="font-black text-lg text-slate-800 truncate pr-2">{p.name}</h3>
-                    <button className="text-slate-300 hover:text-rose-500 transition-colors p-1 -mr-2" onClick={(e) => { e.stopPropagation(); if(confirm('Slette prosjekt?')) onDeleteProject(p.id); }}>✕</button>
+                  <div className="flex justify-between items-start mb-2 min-h-[32px]">
+                    {isEditing ? (
+                        <div className="flex-1 flex items-center gap-2 mr-2" onClick={e => e.stopPropagation()}>
+                            <input 
+                                type="text" 
+                                value={editName} 
+                                onChange={e => setEditName(e.target.value)} 
+                                onKeyDown={e => handleKeyDown(e, p.id)}
+                                autoFocus
+                                className="w-full font-black text-lg text-slate-800 bg-slate-50 border border-indigo-200 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-100"
+                            />
+                            <button onClick={() => saveEditing(p.id)} className="text-emerald-500 hover:text-emerald-600 p-1">✅</button>
+                            <button onClick={cancelEditing} className="text-slate-400 hover:text-slate-600 p-1">❌</button>
+                        </div>
+                    ) : (
+                        <>
+                            <h3 className="font-black text-lg text-slate-800 truncate pr-2 flex-1" title={p.name}>{p.name}</h3>
+                            <div className="flex items-center gap-1 -mr-2">
+                                <button className="text-slate-300 hover:text-indigo-500 transition-colors p-1 opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); startEditing(p); }} title="Endre navn">✎</button>
+                                <button className="text-slate-300 hover:text-rose-500 transition-colors p-1" onClick={(e) => { e.stopPropagation(); if(confirm('Slette prosjekt?')) onDeleteProject(p.id); }} title="Slett prosjekt">✕</button>
+                            </div>
+                        </>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">{stats.createdDate}</span>

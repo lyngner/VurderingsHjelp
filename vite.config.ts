@@ -5,8 +5,10 @@ import react from '@vitejs/plugin-react';
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
-  // VIKTIG: Dette matcher navnet på ditt repository nøyaktig (se URL i skjermbildet ditt)
-  base: '/VurderingsHjelp/', 
+  // v9.1.13: Endret base til './' (relativ).
+  // Dette gjør at appen fungerer både på rotnivå (Vercel/Cloud Run) 
+  // OG i undermapper (GitHub Pages) uten konfigurasjonsendring.
+  base: './', 
   define: {
     // Dette hindrer appen i å krasje fordi 'process' ikke finnes i nettleseren.
     // Vi setter den til en tom streng som standard.

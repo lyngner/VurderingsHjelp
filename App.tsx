@@ -14,10 +14,11 @@ if (typeof window !== 'undefined' && (window as any).pdfjsLib) {
   (window as any).pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
 }
 
+// v8.9.36: Renamed 'Oppsett' to 'Innlasting' and reordered steps
 const steps = [
-  { id: 'setup', label: 'Oppsett', icon: '📥' },
+  { id: 'setup', label: 'Innlasting', icon: '📥' },
+  { id: 'rubric', label: 'Rettemanual', icon: '📋' },
   { id: 'review', label: 'Kontroll', icon: '🔍' },
-  { id: 'rubric', label: 'Manual', icon: '📋' },
   { id: 'results', label: 'Resultat', icon: '🏆' },
 ];
 
@@ -49,7 +50,8 @@ const App: React.FC = () => {
     handleSmartCleanup,
     updateActiveProject,
     handleSkipFile,
-    handleRetryFailed
+    handleRetryFailed,
+    handleDeleteUnprocessedPage
   } = useProjectProcessor(activeProject, setActiveProject);
 
   const [selectedResultCandidateId, setSelectedResultCandidateId] = useState<string | null>(null);
@@ -57,21 +59,7 @@ const App: React.FC = () => {
   const [jumpToTask, setJumpToTask] = useState<{ id: string, part: 1 | 2 } | null>(null);
   const [reviewFilter, setReviewFilter] = useState('');
 
-  useEffect(() => {
-    if (
-      activeProject && 
-      activeProject.taskFiles.length > 0 && 
-      !activeProject.rubric && 
-      !rubricStatus.loading && 
-      !rubricStatus.errorType && 
-      processingCount === 0
-    ) {
-      const timer = setTimeout(() => {
-        handleGenerateRubric();
-      }, 1000);
-      return () => clearTimeout(timer);
-    }
-  }, [activeProject?.taskFiles, activeProject?.rubric, rubricStatus.loading, rubricStatus.errorType, processingCount]);
+  // Auto-trigger logic moved to useProjectProcessor in v8.9.44
 
   useEffect(() => {
     getAllProjects().then(all => {
@@ -115,6 +103,15 @@ const App: React.FC = () => {
     }
     await deleteProjectFromStorage(id);
     setProjects(prev => prev.filter(p => p.id !== id));
+  };
+
+  const handleRenameProject = async (id: string, newName: string) => {
+    const project = projects.find(p => p.id === id);
+    if (!project) return;
+    const updated = { ...project, name: newName, updatedAt: Date.now() };
+    // saveProject handles updates to metadata store without overwriting candidates if candidates array is missing/empty in the object passed
+    await saveProject(updated);
+    setProjects(prev => prev.map(p => p.id === id ? updated : p).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)));
   };
 
   const handleRotatePage = (pageId: string) => {
@@ -228,6 +225,7 @@ const App: React.FC = () => {
         onSelectProject={handleSelectProject} 
         onCreateProject={createNewProject} 
         onDeleteProject={handleDeleteProject}
+        onRenameProject={handleRenameProject}
       />
     );
   }
@@ -269,6 +267,7 @@ const App: React.FC = () => {
                 onNavigateToCandidate={handleNavigateToCandidate} 
                 handleSkipFile={handleSkipFile}
                 handleRetryFailed={handleRetryFailed}
+                handleDeleteUnprocessedPage={handleDeleteUnprocessedPage}
               />
             )}
             {currentStep === 'review' && (

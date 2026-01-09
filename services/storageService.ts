@@ -136,6 +136,7 @@ export const saveProject = async (project: Project): Promise<void> => {
   const db = await openDB();
   
   // 1. Lagre/Oppdater eksisterende kandidater
+  // (Only if candidates array is present)
   if (project.candidates && project.candidates.length > 0) {
     const candTx = db.transaction(CANDIDATE_STORE, "readwrite");
     const candStore = candTx.objectStore(CANDIDATE_STORE);
@@ -147,20 +148,24 @@ export const saveProject = async (project: Project): Promise<void> => {
   }
 
   // 2. RYDDING v6.2.1: Slett foreldreløse kandidater i databasen som ikke lenger er i prosjektet
-  const allStoredCandidates: Candidate[] = await new Promise((resolve) => {
-    const tx = db.transaction(CANDIDATE_STORE, "readonly");
-    const index = tx.objectStore(CANDIDATE_STORE).index("projectId");
-    const req = index.getAll(project.id);
-    req.onsuccess = () => resolve(req.result || []);
-  });
+  // v8.9.30: Only run cleanup if candidates array is present (Full Save).
+  // If renaming from dashboard (Metadata Update), candidates is undefined, so we skip this to prevent crash/data loss.
+  if (project.candidates) {
+      const allStoredCandidates: Candidate[] = await new Promise((resolve) => {
+        const tx = db.transaction(CANDIDATE_STORE, "readonly");
+        const index = tx.objectStore(CANDIDATE_STORE).index("projectId");
+        const req = index.getAll(project.id);
+        req.onsuccess = () => resolve(req.result || []);
+      });
 
-  const currentIds = new Set(project.candidates.map(c => c.id));
-  const orphans = allStoredCandidates.filter(c => !currentIds.has(c.id));
-  
-  if (orphans.length > 0) {
-    const delTx = db.transaction(CANDIDATE_STORE, "readwrite");
-    const delStore = delTx.objectStore(CANDIDATE_STORE);
-    orphans.forEach(o => delStore.delete(o.id));
+      const currentIds = new Set(project.candidates.map(c => c.id));
+      const orphans = allStoredCandidates.filter(c => !currentIds.has(c.id));
+      
+      if (orphans.length > 0) {
+        const delTx = db.transaction(CANDIDATE_STORE, "readwrite");
+        const delStore = delTx.objectStore(CANDIDATE_STORE);
+        orphans.forEach(o => delStore.delete(o.id));
+      }
   }
 
   // 3. Lagre prosjekt-metadata
@@ -168,11 +173,16 @@ export const saveProject = async (project: Project): Promise<void> => {
     const transaction = db.transaction(STORE_NAME, "readwrite");
     const cleanProject = JSON.parse(JSON.stringify(project));
     const stripData = (p: Page) => { delete p.base64Data; };
-    cleanProject.taskFiles.forEach(stripData);
+    
+    cleanProject.taskFiles?.forEach(stripData);
     cleanProject.unprocessedPages?.forEach(stripData);
-    // v7.9.44: Calculate and store statistics
-    cleanProject.candidateCount = project.candidates?.length || 0;
-    cleanProject.evaluatedCount = project.candidates?.filter(c => c.status === 'evaluated').length || 0;
+    
+    // v7.9.44 / v8.9.30: Calculate stats only if candidates are loaded.
+    // Otherwise preserve existing counts (from the shallow project object).
+    if (project.candidates) {
+        cleanProject.candidateCount = project.candidates.length;
+        cleanProject.evaluatedCount = project.candidates.filter(c => c.status === 'evaluated').length;
+    }
     
     delete cleanProject.candidates;
     transaction.objectStore(STORE_NAME).put({ ...cleanProject, updatedAt: Date.now() });

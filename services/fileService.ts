@@ -67,9 +67,111 @@ export const getImageDimensions = async (base64: string): Promise<{ width: numbe
   });
 };
 
+// v9.0.5: Helper to optimize base64 images (Resize & Compress)
+// v9.1.9: Added safety timeout and mime-check to prevent hanging on EMF/WMF vectors
+const optimizeImage = async (base64Data: string, mimeType: string): Promise<{ data: string, mimeType: string }> => {
+    // Only attempt to optimize standard web images. Word often has wmf/emf which crash/hang Canvas.
+    if (!['image/jpeg', 'image/png', 'image/webp', 'image/bmp'].includes(mimeType.toLowerCase())) {
+        return { data: base64Data, mimeType };
+    }
+
+    return new Promise((resolve) => {
+        let isResolved = false;
+        
+        const safeResolve = (res: { data: string, mimeType: string }) => {
+            if (!isResolved) {
+                isResolved = true;
+                resolve(res);
+            }
+        };
+
+        // v9.1.9: Safety Timeout. If browser struggles to render image in 1.5s, give up and use raw.
+        const timer = setTimeout(() => {
+            if (!isResolved) {
+                console.warn(`Bildeoptimalisering timet ut (${mimeType}), bruker original.`);
+                safeResolve({ data: base64Data, mimeType });
+            }
+        }, 1500);
+
+        const img = new Image();
+        img.onload = () => {
+            clearTimeout(timer);
+            if (isResolved) return;
+
+            let width = img.width;
+            let height = img.height;
+            
+            // Check if resize is needed
+            if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+                const ratio = Math.min(MAX_DIMENSION / width, MAX_DIMENSION / height);
+                width = Math.round(width * ratio);
+                height = Math.round(height * ratio);
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                ctx.drawImage(img, 0, 0, width, height);
+                // Always convert to JPEG for consistency and compression
+                const optimizedBase64 = canvas.toDataURL('image/jpeg', COMPRESSION_QUALITY);
+                // Strip prefix for data storage
+                safeResolve({ data: optimizedBase64.split(',')[1], mimeType: 'image/jpeg' });
+            } else {
+                // Fallback if canvas fails
+                safeResolve({ data: base64Data, mimeType });
+            }
+        };
+        img.onerror = () => {
+            clearTimeout(timer);
+            console.warn("Failed to optimize image (load error), using raw.");
+            safeResolve({ data: base64Data, mimeType });
+        };
+        // Add prefix if missing for Image loading
+        img.src = base64Data.startsWith('data:') ? base64Data : `data:${mimeType};base64,${base64Data}`;
+    });
+};
+
+// v8.9.38: Improved Deep Math Extraction (Handles attributes in tags)
+const extractRawMathFromXML = async (zip: JSZip): Promise<string> => {
+    try {
+        const docXml = await zip.file("word/document.xml")?.async("text");
+        if (!docXml) return "";
+
+        // Find all Office Math (OMML) blocks: <m:oMath>...</m:oMath>
+        // Regex adjusted to handle namespaces better if needed, but standard is m:oMath
+        const mathBlocks = docXml.match(/<m:oMath(?:[^>]*)>(.*?)<\/m:oMath>/g);
+        if (!mathBlocks) return "";
+
+        let extractedMath = "";
+        mathBlocks.forEach((block, index) => {
+            // Extract text content from <m:t> tags. 
+            // v8.9.38: Updated regex to allow attributes inside <m:t ...> (e.g. xml:space="preserve")
+            const textMatches = block.match(/<m:t(?:[^>]*)>(.*?)<\/m:t>/g);
+            if (textMatches) {
+                const cleanText = textMatches.map(t => t.replace(/<\/?m:t(?:[^>]*)>/g, '')).join('');
+                if (cleanText.trim()) {
+                    extractedMath += `[MATH_BLOCK_${index + 1}]: ${cleanText}\n`;
+                }
+            }
+        });
+        
+        if (extractedMath) {
+            return "\n\n[DETECTED_RAW_MATH_FROM_XML (CRITICAL EVIDENCE)]:\n" + extractedMath + "\n[END_RAW_MATH]\n";
+        }
+        return "";
+    } catch (e) {
+        console.warn("Math extraction failed", e);
+        return "";
+    }
+};
+
 const extractWordMetadata = async (arrayBuffer: ArrayBuffer): Promise<string> => {
   try {
     const zip = await JSZip.loadAsync(arrayBuffer);
+    
+    // 1. Headers & Footers
     const metaFiles = Object.keys(zip.files).filter(name => 
       name.startsWith('word/header') || name.startsWith('word/footer')
     );
@@ -78,13 +180,16 @@ const extractWordMetadata = async (arrayBuffer: ArrayBuffer): Promise<string> =>
       const content = await zip.files[fileName].async('text');
       const matches = content.match(/<w:t[^>]*>(.*?)<\/w:t>/g);
       if (matches) {
-        // v7.9.38: Changed join('') to join(' ') to prevent "124" + "11.12.2025" becoming "12411.12.2025"
         metaText += matches.map(m => m.replace(/<[^>]+>/g, '')).join(' ') + "\n";
       }
     }
-    return metaText.trim();
+
+    // 2. v8.9.31: Math Content
+    const mathContent = await extractRawMathFromXML(zip);
+
+    return (metaText + mathContent).trim();
   } catch (e) {
-    console.warn("Klarte ikke å hente metadata fra Word-fil (header/footer):", e);
+    console.warn("Klarte ikke å hente metadata fra Word-fil (header/footer/math):", e);
     return "";
   }
 };
@@ -223,9 +328,13 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
             const options = {
                 ignoreEmptyParagraphs: false, // v8.0.19: Catch spacing in tables
                 convertImage: mammoth.images.inline((element) => {
-                    return element.read("base64").then((imageBuffer) => {
+                    return element.read("base64").then(async (imageBuffer) => {
                         const mime = element.contentType;
-                        attachedImages.push({ data: imageBuffer, mimeType: mime });
+                        // v9.0.5: OPTIMIZE IMAGE IMMEDIATELY
+                        // This prevents massive payloads from reaching the AI queue.
+                        // v9.1.9: optimizeImage now has internal safety timeout
+                        const optimized = await optimizeImage(imageBuffer, mime);
+                        attachedImages.push({ data: optimized.data, mimeType: optimized.mimeType });
                         return { src: "", alt: `[BILDEVEDLEGG ${attachedImages.length}]` };
                     });
                 })
@@ -234,8 +343,10 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
             const result = await mammoth.convertToHtml({ arrayBuffer: buffer }, options);
             
             let cleanText = result.value
-                .replace(/<img[^>]*alt="([^"]+)"[^>]*>/gi, "\n\n$1\n\n") 
-                .replace(/<\/p>/gi, "\n\n")
+                // v9.1.1: Use single newlines to avoid massive gaps around images
+                .replace(/<img[^>]*alt="([^"]+)"[^>]*>/gi, "\n$1\n") 
+                // v9.0.9: Reduced double newline to single newline for less "airy" text
+                .replace(/<\/p>/gi, "\n") 
                 .replace(/<\/(li|div|tr|h[1-6]|pre|blockquote)>/gi, "\n")
                 .replace(/<br\s*\/?>/gi, "\n")
                 .replace(/<\/td>/gi, " \t ")
@@ -264,7 +375,7 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
                txt = txt.substring(0, 500000) + "\n\n[TEKST KUTTET - FOR LANG FIL]";
             }
 
-            const combinedText = `[METADATA]:\n${metaText}\n\n[INNHOLD]:\n${txt}`;
+            const combinedText = `[METADATA & MATH]:\n${metaText}\n\n[INNHOLD]:\n${txt}`;
             const id = Math.random().toString(36).substring(7);
             
             // v8.5.7: Save original binary for Visual Preview
@@ -286,8 +397,8 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
         };
 
         const timeoutPromise = new Promise<Page[]>((_, reject) => 
-            // v8.0.19: Økt til 30s for tunge filer med tabeller/bilder
-            setTimeout(() => reject(new Error("Timeout ved lesing av Word-fil (lokal)")), 30000)
+            // v9.0.4: Increased to 180s for huge documents
+            setTimeout(() => reject(new Error("Timeout ved lesing av Word-fil (lokal)")), 180000)
         );
 
         const pages = await Promise.race([processPromise(), timeoutPromise]);
@@ -362,7 +473,7 @@ export const processFileToImages = async (file: File): Promise<Page[]> => {
 
           canvas.width = width; 
           canvas.height = height;
-          canvas.getContext('2d')!.drawImage(img, 0, 0, width, height);
+          canvas.getContext('2d')?.drawImage(img, 0, 0, width, height);
           
           const b64 = canvas.toDataURL('image/jpeg', COMPRESSION_QUALITY);
           const id = Math.random().toString(36).substring(7);

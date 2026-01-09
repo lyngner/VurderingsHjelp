@@ -74,8 +74,8 @@ const VectorGrid: React.FC<{ commandStr: string }> = ({ commandStr }) => {
   };
 
   return (
-    <div className="my-4 p-4 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col items-center">
-      <div className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2 self-start">Vektorisering</div>
+    <div className="my-2 p-2 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col items-center">
+      <div className="text-[9px] font-black uppercase text-slate-400 tracking-widest mb-1 self-start">Vektorisering</div>
       <svg width={width * scale} height={height * scale} viewBox={`${startX * scale} ${-endY * scale} ${width * scale} ${height * scale}`} className="overflow-visible font-mono text-xs">
         <defs>
           <marker id="arrowhead-indigo" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#4f46e5" /></marker>
@@ -180,8 +180,8 @@ const FunctionPlot: React.FC<{ commandStr: string }> = ({ commandStr }) => {
   const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${mapX(p.x).toFixed(1)} ${mapY(p.y).toFixed(1)}`).join(' ');
 
   return (
-    <div className="my-4 p-4 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col items-center">
-      <div className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2 self-start">Funksjonsgraf</div>
+    <div className="my-2 p-2 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col items-center">
+      <div className="text-[9px] font-black uppercase text-slate-400 tracking-widest mb-1 self-start">Funksjonsgraf</div>
       <svg width={width} height={height} className="overflow-visible border border-slate-100 bg-slate-50/30">
         {/* Axes */}
         {yMin < 0 && yMax > 0 && <line x1={0} y1={mapY(0)} x2={width} y2={mapY(0)} stroke="#cbd5e1" strokeWidth="1.5" />}
@@ -226,8 +226,8 @@ const SignChart: React.FC<{ commandStr: string }> = ({ commandStr }) => {
   const totalWidth = labelWidth + (parsed.criticalPoints.length * colWidth) + (parsed.rows[0].values.length * colWidth); // Approx
 
   return (
-    <div className="my-4 p-4 bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
-      <div className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-4">Fortegnsskjema</div>
+    <div className="my-2 p-2 bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
+      <div className="text-[9px] font-black uppercase text-slate-400 tracking-widest mb-2">Fortegnsskjema</div>
       <div className="flex flex-col gap-2 min-w-max">
         {/* Header Row (Critical Points) */}
         <div className="flex items-end h-8 relative pl-[80px]">
@@ -359,13 +359,38 @@ export const LatexRenderer: React.FC<{ content: string; className?: string }> = 
 
   // Sanitize logic
   const sanitizeLatex = (text: string): string => {
-      // v8.0.44: Clean up \t, \r, \f shorthands which cause MathJax errors
-      let clean = text.replace(/\\t(?!(ext|imes|heta|an|au))/g, (match) => {
+      // v8.9.33: Normalize newlines FIRST to ensure regexes can match multi-line patterns reliably.
+      let clean = text.replace(/\\n/g, '\n');
+
+      // v9.1.21: THE BIG SCRUB
+      // Aggressive cleaning of \b artifacts that break MathJax
+      // 1. Remove \b if immediately followed by \begin (e.g. \b\begin -> \begin)
+      clean = clean.replace(/\\b(?=\\begin)/g, '');
+      // 2. Remove \b if immediately followed by \text (e.g. \b\text -> \text)
+      clean = clean.replace(/\\b(?=\\text)/g, '');
+      // 3. Remove \b if surrounded by whitespace (standalone artifact)
+      clean = clean.replace(/\s\\b\s/g, ' ');
+      // 4. Remove \b at start of string or after newline
+      clean = clean.replace(/(^|\n)\\b\s/g, '$1');
+
+      // v9.1.8: REPAIR CORRUPTED BEGIN/END TAGS (Recovery from JSON parser control char eating)
+      // Fix \begin destruction (e.g. egin{aligned} -> \begin{aligned})
+      clean = clean.replace(/(^|[^\\])egin\{/g, '$1\\begin{');
+      // Fix \end destruction (e.g. nd{aligned} -> \end{aligned})
+      clean = clean.replace(/(^|[^\\])nd\{/g, '$1\\end{');
+
+      // v9.1.20: Strict JSON escaping fallback repair
+      // Fix \text destruction (\t -> tab char)
+      clean = clean.replace(/\t?ext\{/g, '\\text{');
+      
+      // v8.0.44: Clean up stray \t, \r, \f shorthands which cause MathJax errors
+      clean = clean.replace(/\\t(?!(ext|imes|heta|an|au))/g, (match) => {
           if (/^\\t[A-Z]/.test(match)) return match.replace('\\t', '\\mathrm{');
           return '';
       });
       clean = clean.replace(/\\f(?![a-zA-Z])/g, '');
-      clean = clean.replace(/\\r(?![h])/g, ''); // \rho is valid
+      // v9.1.3: Fix \r regex to NOT destroy \rightarrow or \right (allow h, i)
+      clean = clean.replace(/\\r(?![a-zA-Z])/g, '');
       
       // v8.0.37: Double exponent fix e^x' -> {e^x}'
       clean = clean.replace(/(\^\{?[^{}]+\}?)\'/g, '{$1}\'');
@@ -373,41 +398,74 @@ export const LatexRenderer: React.FC<{ content: string; className?: string }> = 
       // v8.0.39: \f replacement
       clean = clean.replace(/\\f([^a-zA-Z])/g, '\\frac$1');
       
+      // v8.9.46: Fix "Bracket argument to \\ must be a dimension" error
+      clean = clean.replace(/\\\\(\s*)\[/g, '\\\\$1{} [');
+
       // v8.2.3: Fix space after line break
       clean = clean.replace(/\\\\ \[/g, '\\\\[');
       clean = clean.replace(/\\ \[/g, '\\[');
 
-      // v8.0.51: Auto-balance environments
+      // v8.0.51: Auto-balance ALIGNED environments
       const beginCount = (clean.match(/\\begin\{aligned\}/g) || []).length;
       const endCount = (clean.match(/\\end\{aligned\}/g) || []).length;
       if (beginCount > endCount) {
           clean += '\\end{aligned}'.repeat(beginCount - endCount);
       }
 
+      // v9.1.21: Auto-balance CASES environments
+      const beginCases = (clean.match(/\\begin\{cases\}/g) || []).length;
+      const endCases = (clean.match(/\\end\{cases\}/g) || []).length;
+      if (beginCases > endCases) {
+          clean += '\\end{cases}'.repeat(beginCases - endCases);
+      }
+
       // v8.9.23: Promote inline aligned to display math to fix "Misplaced &"
       clean = clean.replace(/\\\(\s*\\begin\{aligned\}/g, '\\[\\begin{aligned}');
       clean = clean.replace(/\\end\{aligned\}\s*\\\)/g, '\\end{aligned}\\]');
 
-      // v8.9.22: Stronger Auto-wrap for aligned environments (Global Fix for "Misplaced &")
+      // v8.9.29: Smarter Context Check for Aligned Wrapping (Fix for "Misplaced &")
       clean = clean.replace(/(\\begin\{aligned\}[\s\S]*?\\end\{aligned\})/g, (match, p1, offset, string) => {
-          // Check context before to see if it's already wrapped in \[ or \(
-          const before = string.substring(0, offset).trimEnd();
-          if (before.endsWith('\\[') || before.endsWith('\\(') || before.endsWith('\\begin{equation}')) {
+          const before = string.substring(0, offset);
+          
+          // Check for unclosed display math \[ ...
+          const lastDisplayOpen = before.lastIndexOf('\\[');
+          const lastDisplayClose = before.lastIndexOf('\\]');
+          const isInsideDisplay = lastDisplayOpen !== -1 && lastDisplayOpen > lastDisplayClose;
+
+          // Check for unclosed inline math \( ...
+          const lastInlineOpen = before.lastIndexOf('\\(');
+          const lastInlineClose = before.lastIndexOf('\\)');
+          const isInsideInline = lastInlineOpen !== -1 && lastInlineOpen > lastInlineClose;
+
+          // Check for unclosed equation environment
+          const lastEqOpen = before.lastIndexOf('\\begin{equation}');
+          const lastEqClose = before.lastIndexOf('\\end{equation}');
+          const isInsideEq = lastEqOpen !== -1 && lastEqOpen > lastEqClose;
+
+          if (isInsideDisplay || isInsideInline || isInsideEq) {
               return match; // Already wrapped
           }
-          // Also strip empty lines inside aligned blocks as they break MathJax
+
+          // Strip empty lines which break MathJax
           const stripped = match.replace(/\n\s*\n/g, '\n');
           return `\\[\n${stripped}\n\\]`;
       });
 
-      return clean.replace(/\\n/g, '\n');
+      // v9.1.8: Absolute fallback wrapping for naked aligned blocks that regex might have missed
+      if (clean.trim().startsWith('\\begin{aligned}') && !clean.trim().endsWith('\\]')) {
+          clean = `\\[${clean}\\]`;
+      }
+
+      return clean;
   };
 
   const processContent = (text: string) => {
     // v8.9.7: Unicode Fix (Decode \u00e5 to å)
     const unicodeFixed = text.replace(/\\u([a-fA-F0-9]{4})/g, (_, grp) => String.fromCharCode(parseInt(grp, 16)));
     
-    const cleanText = sanitizeLatex(unicodeFixed);
+    // v9.1.1: Aggressively collapse whitespace globally
+    const spaceCollapsed = unicodeFixed.replace(/\n{3,}/g, '\n\n');
+    const cleanText = sanitizeLatex(spaceCollapsed);
 
     // Updated Parser for new Tags
     const splitByImagesBalanced = (input: string) => {
@@ -459,6 +517,12 @@ export const LatexRenderer: React.FC<{ content: string; className?: string }> = 
     const initialParts = splitByImagesBalanced(cleanText);
     const finalElements: React.ReactNode[] = [];
 
+    // Helper to detect raw latex in CAS blocks that needs wrapping
+    const hasRawLatex = (line: string) => {
+        // v9.1.3: Include arrow commands in check
+        return /\\(frac|sqrt|approx|cdot|leq|geq|pm|mp|times|div|sum|int|lim|left|right|vec|to|infty)|[\^]|\\[a-zA-Z]+(arrow)|[a-zA-Z]+\{/.test(line);
+    };
+
     initialParts.forEach((part, idx) => {
         if (part.type === 'vector') finalElements.push(<VectorGrid key={`vec-${idx}`} commandStr={part.content} />);
         else if (part.type === 'func') finalElements.push(<FunctionPlot key={`func-${idx}`} commandStr={part.content} />);
@@ -472,24 +536,62 @@ export const LatexRenderer: React.FC<{ content: string; className?: string }> = 
                 if (subPart.type === 'vector') nestedElements.push(<VectorGrid key={`sub-vec-${sIdx}`} commandStr={subPart.content} />);
                 else if (subPart.type === 'func') nestedElements.push(<FunctionPlot key={`sub-func-${sIdx}`} commandStr={subPart.content} />);
                 else if (subPart.type === 'sign') nestedElements.push(<SignChart key={`sub-sign-${sIdx}`} commandStr={subPart.content} />);
-                else nestedElements.push(<span key={`sub-txt-${sIdx}`}>{subPart.content}</span>);
+                // v8.9.46: Added tex2jax_process class to nested elements so MathJax can render math inside the image box
+                else {
+                    // v8.9.47: Explicitly handle line breaks with <br /> for visual evidence text
+                    // v9.1.1: Trim content to reduce excessive whitespace in box
+                    // v9.1.3: Collapse multiple newlines into one to remove "mye mellomrom"
+                    const lines = subPart.content.trim().replace(/\n{2,}/g, '\n').split('\n');
+                    const elements = lines.map((line, i) => {
+                        // v9.1.2: Remove \left and \right commands to prevent balancing errors in CAS blocks
+                        // Also strip leading/trailing $ signs which might confuse wrapper
+                        let cleanLine = line.replace(/\\left/g, '').replace(/\\right/g, '').replace(/^\$|\$$/g, '');
+
+                        // v9.1.1: Auto-Math Wrapper for CAS
+                        // If line looks like math (has latex commands) but is not wrapped in delimiters, wrap it.
+                        let contentToRender = cleanLine;
+                        if (hasRawLatex(cleanLine) && !cleanLine.includes('\\(') && !cleanLine.includes('\\[')) {
+                            contentToRender = `\\( \\displaystyle ${cleanLine} \\)`;
+                        }
+                        return (
+                            <React.Fragment key={i}>
+                                {contentToRender}
+                                {i < lines.length - 1 && <br />}
+                            </React.Fragment>
+                        );
+                    });
+                    nestedElements.push(<span key={`sub-txt-${sIdx}`} className="tex2jax_process">{elements}</span>);
+                }
             });
 
+            // v8.9.39: Removed header "Tolkning av Gemini..." to clean up UI
+            // v9.1.1: Reduced margins (my-2) and padding (p-3) for tighter layout
+            // v9.1.2: Even tighter margins (my-1) and padding (p-2)
+            // v9.1.3: Reduced margin to my-0.5 (2px)
+            // v9.1.4: ZERO margins (my-0) and optimized padding (py-1 px-2)
             finalElements.push(
-                <div key={`img-${idx}`} className="my-6 p-0 bg-slate-100 border-l-[4px] border-indigo-500 rounded-r-xl shadow-md overflow-hidden ring-1 ring-slate-300/50">
-                    <div className="bg-slate-200/80 px-4 py-2 flex items-center justify-between border-b border-slate-300">
-                        <div className="text-[10px] font-black uppercase text-indigo-800 tracking-[0.15em] flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-full bg-indigo-600 shadow-sm"></span>
-                            Tolkning av Gemini ({SYSTEM_VERSION})
-                        </div>
-                    </div>
-                    <div className="p-5 text-[12px] text-slate-900 font-medium leading-[1.7] font-mono whitespace-pre-wrap bg-slate-50/50">
+                <div key={`img-${idx}`} className="my-0 p-0 bg-gray-50 border-l-[4px] border-gray-300 rounded-r-md shadow-sm overflow-hidden ring-1 ring-gray-200">
+                    <div className="py-1 px-2 text-[12px] text-gray-700 font-medium leading-snug font-mono whitespace-pre-wrap bg-gray-50/50">
                         {nestedElements}
                     </div>
                 </div>
             );
         } else {
-            finalElements.push(<span key={`txt-${idx}`} className="tex2jax_process">{part.content}</span>);
+            // v9.1.2: Aggressive whitespace trimming around text parts adjacent to images
+            let trimmedContent = part.content;
+            
+            // If next part is image, trim trailing newlines
+            if (initialParts[idx + 1] && initialParts[idx + 1].type !== 'text') {
+               trimmedContent = trimmedContent.replace(/\n+$/, '');
+            }
+            // If prev part is image, trim leading newlines
+            if (initialParts[idx - 1] && initialParts[idx - 1].type !== 'text') {
+               trimmedContent = trimmedContent.replace(/^\n+/, '');
+            }
+
+            if (trimmedContent) {
+               finalElements.push(<span key={`txt-${idx}`} className="tex2jax_process">{trimmedContent}</span>);
+            }
         }
     });
 

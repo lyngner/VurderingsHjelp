@@ -1,4 +1,5 @@
 
+// ... existing imports
 import { GoogleGenAI, Type } from "@google/genai";
 import { Page, Candidate, Rubric, Project, RubricCriterion, IdentifiedTask } from "../types";
 import { getFromGlobalCache, saveToGlobalCache } from "./storageService";
@@ -14,10 +15,16 @@ class RateLimiter {
   private lastRequestTime: number = 0;
   private queue: Promise<any> = Promise.resolve();
   // Forsiktig delay for å unngå burst-limit
-  private static DELAY = 2000; 
+  private static DELAY = 1000; // v9.0.6: Reduced delay slightly for better responsiveness
 
   async schedule<T>(fn: () => Promise<T>): Promise<T> {
-    this.queue = this.queue.then(async () => {
+    // v9.1.15: CRITICAL QUEUE FIX
+    // Vi må fange opp eventuelle feil i forrige ledd av kjeden før vi legger til neste.
+    // Hvis vi bruker .then() direkte på en 'rejected' promise, vil callbacken aldri kjøre, og køen dør.
+    // Ved å legge inn .catch(() => {}) sikrer vi at kjeden alltid fortsetter.
+    const chain = this.queue.catch(() => {});
+
+    const operation = chain.then(async () => {
       const now = Date.now();
       const timeSinceLast = now - this.lastRequestTime;
       
@@ -37,6 +44,22 @@ class RateLimiter {
         } catch (error: any) {
           attempt++;
           const errorMsg = error?.message || JSON.stringify(error);
+          console.error("Gemini API Error:", error); // v9.1.11: Added explicit logging
+          
+          // v9.1.14: Fail Fast on Client Errors (4xx)
+          // Do not retry if the request is invalid (400), unauthorized (401/403), or model not found (404).
+          // Retrying these will just result in the same error and waste time ("hanging").
+          if (errorMsg.includes("400") || errorMsg.includes("401") || errorMsg.includes("403") || errorMsg.includes("404") || errorMsg.includes("Bad Request") || errorMsg.includes("Not Found")) {
+             throw error;
+          }
+          
+          // v9.1.15: Fail fast on SyntaxError (JSON parse error)
+          // Retrying a parse error usually won't help unless the model output changes significantly, 
+          // but often it's better to just fail the file than block the queue.
+          if (errorMsg.includes("SyntaxError") || errorMsg.includes("JSON")) {
+             throw error;
+          }
+
           const isQuota = errorMsg.includes("429") || errorMsg.includes("RESOURCE_EXHAUSTED");
 
           if (isQuota) {
@@ -49,18 +72,24 @@ class RateLimiter {
               throw error;
             }
           } else {
-            throw error;
+            // For other errors (5xx, network), let the loop continue (retry)
+            if (attempt > maxRetries) throw error;
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Small wait for generic errors
           }
         }
       }
       throw new Error("Maks forsøk nådd.");
     });
 
-    return this.queue;
+    // Update the queue pointer to wait for THIS operation to finish (whether success or fail)
+    this.queue = operation;
+    return operation as Promise<T>;
   }
 }
 
-const limiter = new RateLimiter();
+// v9.0.6: Dual Limiters to prevent background OCR from blocking user actions (Rubric/Eval)
+const backgroundLimiter = new RateLimiter(); // For OCR, Images, Batch Jobs
+const interactiveLimiter = new RateLimiter(); // For Rubric Gen, Single Eval, "Click" actions
 
 // v8.2.11: Updated LaTeX Mandate with stricter Line Break rules
 const LATEX_MANDATE = `
@@ -70,6 +99,7 @@ VIKTIG FOR MATHJAX:
 3. ALIGNMENT: Bruk \\begin{aligned} ... \\end{aligned} og '& =' for å aligne likhetstegn.
 4. LINE BREAKS: Bruk dobbel backslash (\\\\) for ny linje i aligned. ALDRI bruk enkelt backslash (\\) som linjeskift.
 5. TEKST I MATEMATIKK: Bruk \\text{...} for ord inne i formler.
+6. FORBUD: IKKE bruk '\\b' som kulepunkt eller separator. Det ødelegger LaTeX-koden.
 
 VIKTIG OM KODE (Python/CAS):
 - ALDRI bruk \\begin{verbatim} eller \\begin{lstlisting}.
@@ -81,14 +111,27 @@ VIKTIG OM KODE (Python/CAS):
 `;
 
 // v8.8.0: General Visual Reconstruction Mandate
+// v8.9.46: Updated to mandate LaTeX for math inside visual descriptions and use double newlines.
+// v9.0.10: Relaxed newline requirement for normal text to avoid spacing issues.
+// v9.1.1: Emphasize compactness and math wrapping.
+// v9.1.5: STRICT ANTI-DUPLICATION.
 const VISUAL_MANDATE = `
 VISUELT BEVIS (FIRE MODUSER):
 
 SPRÅK: NORSK BOKMÅL. All beskrivelse og tolkning SKAL være på norsk. Ingen engelsk.
+VIKTIG: HOLD DET KOMPAKT. Bruk enkelt linjeskift.
+
+STRICT ANTI-DUPLICATION RULE:
+- If you find content (CAS, Graphs, Code) that you place in 'visualEvidence', you MUST use the [BILDEVEDLEGG: ...] tag in the 'fullText'.
+- You MUST NOT write the same content in plain text outside the tag.
+- EITHER use the tag OR write plain text. NEVER BOTH.
 
 MODUS 1: TEKST-BASERT (CAS / PYTHON / PROGRAMMERING)
-- SKAL TRANSKRIBERES SLAVISK (Verbatim / Tegn-for-tegn).
-- Format: "Linje 1: [Input] -> [Output]".
+- SKAL TRANSKRIBERES SLAVISK (Verbatim).
+- BRUK LATEX: Alle matematiske uttrykk (formler, likninger) MÅ pakkes inn i \\( ... \\). 
+  EKSEMPEL: \\( f(x) = 2x + 3 \\)
+  VIKTIG: Selv om det ser ut som kode, BRUK LATEX for matematikk for bedre visning.
+- Format: "Linje 1: \\( \\text{Løs}(x^2=4) \\) -> \\( \\{x=-2, x=2\\} \\)".
 - Legg dette i 'visualEvidence' feltet.
 
 MODUS 2: FORTEGNSSKJEMA (SIGN CHART)
@@ -140,53 +183,67 @@ PEDAGOGISK EKSPERT v8.9.2 (STRUKTUR & FORMAT):
 ${LATEX_MANDATE}
 `;
 
-// v8.3.1: New helper to enforce line breaks in commonErrors
+// ... helper functions (unchanged) ...
 const formatCommonErrors = (text: string | undefined): string => {
   if (!text) return "";
-  // Ensure newline before every score bracket [-X.X p], unless it's at the start
-  let clean = text.replace(/\[\s*(-?[\d.,]+)\s*p\s*\]/gi, "[$1 p]"); // Normalize spaces
+  let clean = text.replace(/\[\s*(-?[\d.,]+)\s*p\s*\]/gi, "[$1 p]"); 
   clean = clean.replace(/([^\n])\s*(\[-[\d.,]+\s*p\])/g, "$1\n$2");
   return clean;
 };
 
-// v8.6.2: Deterministic Grading Function with +/- Logic
+// ... calculateGrade, cleanJson, sanitizeTaskId, cleanTaskPair ...
 export const calculateGrade = (score: number, maxPoints: number): string => {
     if (maxPoints <= 0) return "-";
     const percent = Math.round((score / maxPoints) * 100);
     
-    // Helper to add + or - based on proximity to boundary (2 percent points)
-    const getSuffix = (p: number, low: number, high: number) => {
-        if (p >= high - 1) return "+"; // Top 2 points
-        if (p <= low + 1) return "-";  // Bottom 2 points
-        return "";
-    };
+    let grade = 1;
+    let rangeMin = 0;
+    let rangeMax = 19;
 
-    if (percent >= 90) return "6" + getSuffix(percent, 90, 100);
-    if (percent >= 75) return "5" + getSuffix(percent, 75, 89);
-    if (percent >= 60) return "4" + getSuffix(percent, 60, 74);
-    if (percent >= 40) return "3" + getSuffix(percent, 40, 59);
-    if (percent >= 20) return "2" + getSuffix(percent, 20, 39);
-    return "1";
+    if (percent >= 90) { grade = 6; rangeMin = 90; rangeMax = 100; }
+    else if (percent >= 75) { grade = 5; rangeMin = 75; rangeMax = 89; }
+    else if (percent >= 60) { grade = 4; rangeMin = 60; rangeMax = 74; }
+    else if (percent >= 40) { grade = 3; rangeMin = 40; rangeMax = 59; }
+    else if (percent >= 20) { grade = 2; rangeMin = 20; rangeMax = 39; }
+    else { grade = 1; rangeMin = 0; rangeMax = 19; }
+
+    let suffix = "";
+    if (percent <= rangeMin + 1) suffix = "-";
+    if (percent >= rangeMax - 1) suffix = "+";
+
+    if (grade === 6 && suffix === "+") suffix = ""; 
+    if (grade === 1 && suffix === "-") suffix = ""; 
+
+    return `${grade}${suffix}`;
 };
 
 const cleanJson = (text: string | undefined): string => {
   if (!text) return "[]";
   let cleaned = text.trim();
-  if (cleaned.startsWith("```")) {
-    cleaned = cleaned.replace(/^```(?:json)?\n?/, "").replace(/```$/, "").trim();
+  // Better markdown stripping
+  if (cleaned.includes("```")) {
+    cleaned = cleaned.replace(/^[\s\S]*?```(?:json)?\n?/, "").replace(/```[\s\S]*$/, "").trim();
   }
+  
+  // Isolate the JSON object/array
   const start = Math.min(cleaned.indexOf('{') === -1 ? 9999 : cleaned.indexOf('{'), cleaned.indexOf('[') === -1 ? 9999 : cleaned.indexOf('['));
   const end = Math.max(cleaned.lastIndexOf('}'), cleaned.lastIndexOf(']'));
   if (start !== 9999 && end !== -1) {
       cleaned = cleaned.substring(start, end + 1);
   }
 
-  // v8.0.38: Repair common LaTeX escaping issues
-  cleaned = cleaned.replace(/(^|[^\\])\\(begin|beta|binom|bar|bf)/g, '$1\\\\$2');
-  cleaned = cleaned.replace(/(^|[^\\])\\(text|times|theta|tau|tan)/g, '$1\\\\$2');
-  cleaned = cleaned.replace(/(^|[^\\])\\(frac|forall)/g, '$1\\\\$2');
-  cleaned = cleaned.replace(/(^|[^\\])\\(right|rho)/g, '$1\\\\$2');
-  cleaned = cleaned.replace(/(^|[^\\])\\(end)/g, '$1\\\\$2');
+  // v9.1.20: STRICT ESCAPING (No Whitelist for Control Chars)
+  // We explicitly REMOVED 'n', 'r', 't', 'b', 'f' from the "safe list" in the regex.
+  // This means \n becomes \\n, \t becomes \\t, \b becomes \\b.
+  // JSON.parse will read these as literal strings "\n", "\t", "\b", instead of control chars.
+  // This protects LaTeX commands like \text (would be Tab+ext), \right (Return+ight) and \begin (Backspace+egin).
+  // Only double backslash (\\), forward slash (/), quotes (") and unicode (\uXXXX) are preserved as JSON syntax.
+  
+  cleaned = cleaned.replace(/\\(?!(?:["\\/]|u[0-9a-fA-F]{4}))/g, '\\\\');
+
+  // Also pre-escape specific dangerous LaTeX tokens that might have slipped through if the model 
+  // returned them in a weird way, just to be safe.
+  cleaned = cleaned.replace(/\\end(?![a-zA-Z])/g, '\\\\end'); 
 
   return cleaned;
 };
@@ -244,24 +301,30 @@ const handleApiError = (e: any) => {
   throw e;
 };
 
-const withRetry = async <T>(fn: () => Promise<T>, retries = 3, delay = 1000, timeoutMs = 300000, signal?: AbortSignal): Promise<T> => {
+// v9.0.6: Pass limiter explicitly to allow priority queues
+const withRetry = async <T>(fn: () => Promise<T>, retries = 3, delay = 1000, timeoutMs = 300000, signal?: AbortSignal, limiter: RateLimiter = backgroundLimiter): Promise<T> => {
   try {
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     const timeoutPromise = new Promise((_, reject) => {
       const timer = setTimeout(() => reject(new Error(`Request timed out (${timeoutMs/1000}s)`)), timeoutMs);
       if (signal) signal.addEventListener('abort', () => { clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); });
     });
-    // Use RateLimiter for the actual call
+    // Use the passed limiter (interactive or background)
     const result = await Promise.race([limiter.schedule(() => fn()), timeoutPromise]);
     return result as T;
   } catch (e: any) {
     if (e.name === 'AbortError' || e.message === 'Aborted') throw e;
-    // Removed specific check for KVOTE_NAADD string
+    
     const msg = e?.message || String(e);
+    // v9.1.14: Do NOT retry 400/404 errors as they are likely permanent (bad config/input)
+    if (msg.includes("400") || msg.includes("401") || msg.includes("403") || msg.includes("404") || msg.includes("Bad Request") || msg.includes("Not Found")) {
+        throw e;
+    }
+
     const isRetryable = msg.includes("503") || msg.includes("504") || msg.includes("timeout") || msg.includes("overloaded") || msg.includes("fetch failed");
     if ((retries > 0) && isRetryable) {
       await new Promise(res => setTimeout(res, delay));
-      return withRetry(fn, retries - 1, delay * 2, timeoutMs, signal);
+      return withRetry(fn, retries - 1, delay * 2, timeoutMs, signal, limiter);
     }
     throw e;
   }
@@ -304,20 +367,17 @@ export const transcribeAndAnalyzeImage = async (
   if (cached && (page as any).forceRescan !== true) return Array.isArray(cached) ? cached : [cached];
   
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const validTasks = rubric ? rubric.criteria.map(c => `${c.taskNumber}${c.subTask || ''}`).join(", ") : "Ingen begrensning.";
-  
-  let rubricContext = "";
-  if (rubric && rubric.criteria.length > 0) {
-      const taskSummary = rubric.criteria.slice(0, 15).map(c => 
-          `Oppgave ${c.taskNumber}${c.subTask}: ${c.description ? c.description.substring(0, 50) + "..." : "Ukjent tema"}`
-      ).join("; ");
-      rubricContext = `KONTEKST FRA RETTEMANUAL (Til orientering, IKKE kopiering): Prøven inneholder følgende oppgaver: [${taskSummary}]. Bruk dette for å forstå hvilken oppgave du ser på, men transkriber KUN det eleven har skrevet.`;
-  }
+  // v9.0.11: RUBRIC FIREWALL (Blind Transcription)
+  // Only expose TASK IDs, NOT content. This prevents hallucination from the answer key.
+  const validTaskIDs = rubric ? rubric.criteria.map(c => `${c.taskNumber}${c.subTask || ''}`).join(", ") : "Ingen begrensning.";
+  const rubricContext = `GYLDIGE OPPGAVE-IDER (WHITELIST): [${validTaskIDs}]. 
+  KUN disse ID-ene skal brukes. Du kjenner IKKE oppgaveteksten. Du skal KUN lese elevens tekst.`;
 
   const activeModel = modelOverride || OCR_MODEL;
   const initialBudget = modelOverride ? 4096 : 0;
 
   const performOCR = async (budget: number) => {
+      // v9.0.6: Use backgroundLimiter for OCR tasks
       return await withRetry(async () => {
         const response = await ai.models.generateContent({
           model: activeModel,
@@ -326,7 +386,6 @@ export const transcribeAndAnalyzeImage = async (
             temperature: 0.0, 
             thinkingConfig: { thinkingBudget: budget }, 
             systemInstruction: `TEGN-FOR-TEGN AVSKRIFT v8.2.0: Transkriber teksten nøyaktig slik den står. Ingen repetisjon. SPRÅK: NORSK (Bokmål). ${LATEX_MANDATE} ${VISUAL_MANDATE} 
-            GYLDIGE OPPGAVER: [${validTasks}].
             ${rubricContext}`,
             responseMimeType: "application/json",
             responseSchema: {
@@ -350,7 +409,7 @@ export const transcribeAndAnalyzeImage = async (
           }
         });
         return JSON.parse(cleanJson(response.text));
-      }, 2, 1000, 300000, signal);
+      }, 2, 1000, 300000, signal, backgroundLimiter);
   };
   try {
     let results;
@@ -374,6 +433,37 @@ export const transcribeAndAnalyzeImage = async (
   } catch (e) { return handleApiError(e); }
 };
 
+// v8.9.50: Helper for parallel image transcription
+const transcribeImageWorker = async (image: { data: string, mimeType: string }, index: number): Promise<string> => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    // v9.0.6: Use backgroundLimiter for workers
+    // v9.0.8: Removed redundant backgroundLimiter.schedule wrapping from call-site to prevent deadlock.
+    return await withRetry(async () => {
+        const response = await ai.models.generateContent({
+            model: OCR_MODEL,
+            contents: {
+                parts: [
+                    { inlineData: { mimeType: image.mimeType, data: image.data } },
+                    { text: `WORKER TASK (Image ${index}): Transcribe the content of this image verbatim.
+                    CONTEXT: Part of a student exam answer.
+                    CONTENT TYPE: Likely CAS (Computer Algebra System) screenshot, code, or graph.
+                    OUTPUT FORMAT:
+                    - If text/code: Write it line-by-line using standard characters.
+                    - If graph: Describe key features briefly (e.g. "Graf av f(x) som stiger...").
+                    - Use LaTeX for math equations AND WRAP IT in \\( ... \\). Example: \\( x^2 \\) not just x^2.
+                    - Return ONLY the content string. No conversational filler.
+                    - CRITICAL: DO NOT SOLVE MATH PROBLEMS. COPY TEXT EXACTLY. If the image is empty or unclear, return "[Ingen tekst funnet]".` }
+                ]
+            },
+            config: {
+                temperature: 0.0,
+                thinkingConfig: { thinkingBudget: 0 } // Speed is key for workers
+            }
+        });
+        return response.text || `[Kunne ikke tolke bilde ${index}]`;
+    }, 2, 1000, 180000, undefined, backgroundLimiter); // v9.0.5: Increased to 180s (3min)
+};
+
 export const analyzeTextContent = async (
     text: string, 
     rubric?: Rubric | null, 
@@ -381,40 +471,78 @@ export const analyzeTextContent = async (
     signal?: AbortSignal
 ): Promise<any> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const validTasks = rubric ? rubric.criteria.map(c => `${c.taskNumber}${c.subTask || ''}`).join(", ") : "Ingen begrensning.";
+  // v9.0.11: RUBRIC FIREWALL (Blind Transcription)
+  // Only expose TASK IDs, NOT content. This prevents hallucination from the answer key.
+  const validTaskIDs = rubric ? rubric.criteria.map(c => `${c.taskNumber}${c.subTask || ''}`).join(", ") : "Ingen begrensning.";
+  const rubricContext = `GYLDIGE OPPGAVE-IDER (WHITELIST): [${validTaskIDs}]. 
+  KUN disse ID-ene skal brukes. Du kjenner IKKE oppgaveteksten. Du skal KUN lese elevens tekst.`;
+
+  // 1. Parallel Evidence Pipeline (v9.0.5 Sequential Batch Processing for robustness)
+  const imageTranscriptions: string[] = [];
   
-  let rubricContext = "";
-  if (rubric && rubric.criteria.length > 0) {
-      const taskSummary = rubric.criteria.slice(0, 15).map(c => 
-          `Oppgave ${c.taskNumber}${c.subTask}: ${c.description ? c.description.substring(0, 50) + "..." : "Ukjent tema"}`
-      ).join("; ");
-      rubricContext = `KONTEKST FRA RETTEMANUAL (Til orientering, IKKE kopiering): Prøven inneholder følgende oppgaver: [${taskSummary}]. Bruk dette for å forstå hvilken oppgave du ser på.`;
+  if (attachedImages && attachedImages.length > 0) {
+      // v9.1.9: Filter out unsupported image types BEFORE sending to Gemini to prevent API errors.
+      const supportedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+      const validImages = attachedImages.filter(img => supportedMimes.includes(img.mimeType.toLowerCase()));
+      
+      if (validImages.length < attachedImages.length) {
+          console.warn(`Filtered out ${attachedImages.length - validImages.length} unsupported images.`);
+      }
+
+      // v9.0.5: Reduced batch size to 1 to prevent bandwidth choking on heavy images
+      const BATCH_SIZE = 1; 
+      for (let i = 0; i < validImages.length; i += BATCH_SIZE) {
+          const batch = validImages.slice(i, i + BATCH_SIZE);
+          const batchPromises = batch.map((img, batchIdx) => 
+              // v9.0.8: Removed redundant backgroundLimiter.schedule wrapper that caused DEADLOCK
+              transcribeImageWorker(img, i + batchIdx + 1)
+                  .catch(e => `[Feil ved lesing av bilde ${i + batchIdx + 1}: ${e.message}]`)
+          );
+          const batchResults = await Promise.all(batchPromises);
+          imageTranscriptions.push(...batchResults);
+      }
   }
 
   const parts: any[] = [{ text: `ANALYSER FØLGENDE TEKST (Digital innlevering):\n${text}` }];
-  if (attachedImages) {
-      attachedImages.forEach(img => {
-          parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } });
-      });
-  }
 
-  return await withRetry(async () => {
+  // v9.0.8: Removed redundant backgroundLimiter.schedule wrapper to fix DEADLOCK
+  // withRetry ALREADY schedules on the limiter internally.
+  const mainAnalysisTask = withRetry(async () => {
     const response = await ai.models.generateContent({
       model: OCR_MODEL, 
       contents: { parts: parts },
       config: { 
         temperature: 0.0, 
         systemInstruction: `ANALYSE AV DIGITAL TEKST:
-        Du mottar råtekst fra en elevbesvarelse (Word/PDF) samt eventuelle bildevedlegg.
-        Din jobb er å strukturere dette.
+        Du mottar råtekst fra en elevbesvarelse (Word/PDF).
         
-        GYLDIGE OPPGAVER: [${validTasks}].
+        ANTI-HALLUCINATION PROTOCOL (SUPREME):
+        - You are a TRANSCRIBER, NOT A SOLVER. 
+        - DO NOT calculate answers. 
+        - DO NOT expand on the student's text. 
+        - ONLY write what is explicitly present in the input text.
+        - If the student has not written a solution, DO NOT INVENT ONE based on the Rubric Context.
+        
+        PLACEHOLDER PROTOCOL (CRITICAL):
+        You will encounter placeholders like [BILDEVEDLEGG 1] in the text.
+        These represent images that are being processed by a separate system.
+        DO NOT remove or replace these placeholders.
+        DO NOT try to guess what is in the images.
+        KEEP [BILDEVEDLEGG X] exactly where it appears in the text structure.
+        
+        CAS/MATH EXTRACTION (XML):
+        If the text contains [DETECTED_RAW_MATH_FROM_XML], this is CRITICAL EVIDENCE. Reconstruct it in 'visualEvidence'.
+        Use LaTeX wrapping \\( ... \\) for math.
+        
+        VISUAL EVIDENCE RULE:
+        - WARNING: Do not generate 'visualEvidence' unless there is actual CAS code or image placeholders present. 
+        - Text describing a math problem is NOT visual evidence.
+        
         ${rubricContext}
 
         VIKTIG:
         1. Identifiser hvilke oppgaver som besvares.
         2. Behold all tekst verbatim i 'fullText'.
-        3. Hvis det er bilder (bildevedlegg), beskriv dem kort i 'visualEvidence' hvis relevant for matematikken.
         
         Returner JSON med 'candidateId' (hvis funnet), 'fullText', 'identifiedTasks' og evt 'visualEvidence'.`,
         responseMimeType: "application/json",
@@ -435,23 +563,46 @@ export const analyzeTextContent = async (
         }
       }
     });
-    const result = JSON.parse(cleanJson(response.text));
-    
-    // Post-process to filter tasks
-    result.identifiedTasks = filterTasksAgainstRubric(result.identifiedTasks, rubric);
-    
-    return result;
-  }, 2, 1000, 300000, signal);
+    return JSON.parse(cleanJson(response.text));
+  }, 2, 1000, 300000, signal, backgroundLimiter); // v9.0.6: 300s timeout
+
+  // 2. Main Analysis
+  const mainResult = await mainAnalysisTask;
+
+  // 3. Stitching (v8.9.50)
+  let improvedText = mainResult.fullText || "";
+  let accumulatedVisualEvidence = mainResult.visualEvidence || "";
+
+  imageTranscriptions.forEach((transcription: string, index: number) => {
+      const placeholder = `[BILDEVEDLEGG ${index + 1}]`;
+      const visualBlock = `\n[AI-TOLKNING AV FIGUR: ${transcription.trim()}]\n`;
+      
+      if (improvedText.includes(placeholder)) {
+          improvedText = improvedText.replace(placeholder, visualBlock);
+      } else {
+          accumulatedVisualEvidence += `\n\n[Bilde ${index+1}]:\n${transcription}`;
+      }
+  });
+
+  mainResult.fullText = improvedText;
+  mainResult.visualEvidence = accumulatedVisualEvidence.trim();
+  
+  mainResult.identifiedTasks = filterTasksAgainstRubric(mainResult.identifiedTasks, rubric);
+  
+  return mainResult;
 };
 
-// Phase 1: Scan for Task Structure
+// ... scanForTaskStructure ...
 const scanForTaskStructure = async (parts: any[], model: string): Promise<any[]> => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    // v9.0.6: Use interactiveLimiter for rubric generation (FAST LANE)
+    // v9.0.6: Increased timeout to 600s
     return await withRetry(async () => {
         const response = await ai.models.generateContent({
             model: model,
             contents: { parts: [...parts, { text: "LIST ALL TASKS. Strict structure scan only. Differentiate Del 1 and Del 2." }] },
             config: {
+                thinkingConfig: { thinkingBudget: 0 }, // v9.0.6: Speed up scanning phase (no deep thinking needed for structure)
                 systemInstruction: "You are a scanner. List every math task found in the documents. Only return the structure (number, subtask, part). NO content, NO solutions yet. EXTREME CONSTRAINT: Do not create sub-subtasks (like i, ii). Only TaskNumber and SubTaskLetter.",
                 responseMimeType: "application/json",
                 responseSchema: {
@@ -469,14 +620,16 @@ const scanForTaskStructure = async (parts: any[], model: string): Promise<any[]>
             }
         });
         return JSON.parse(cleanJson(response.text));
-    }, 2, 1000, 60000);
+    }, 2, 1000, 600000, undefined, interactiveLimiter); 
 };
 
-// Phase 2: Generate Content for Single Task (v8.2.7: Strict Verbatim Copy & 3-Step Process)
+// ... generateCriterionForTask ...
 const generateCriterionForTask = async (task: any, parts: any[], model: string): Promise<RubricCriterion> => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const taskLabel = `${task.taskNumber}${task.subTask || ''} (${task.part})`;
     
+    // v9.0.6: Use interactiveLimiter for rubric generation (FAST LANE)
+    // v9.0.6: Increased timeout to 600s
     return await withRetry(async () => {
         const response = await ai.models.generateContent({
             model: model,
@@ -531,17 +684,17 @@ const generateCriterionForTask = async (task: any, parts: any[], model: string):
             maxPoints: Math.min(4.0, res.maxPoints || 2.0),
             tema: "" 
         };
-    }, 2, 1000, 60000);
+    }, 2, 1000, 600000, undefined, interactiveLimiter); 
 };
 
-// Phase 3: Assign Themes AND Generate Title
+// ... assignThemesToRubric ...
 const assignThemesToRubric = async (criteria: RubricCriterion[], model: string): Promise<{ criteria: RubricCriterion[], title: string }> => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    // v8.9.21: Nuclear Simplification (Keyword Extractor)
     const criteriaSummary = criteria.map(c => 
         `- "${c.description}"`
     ).join("\n");
 
+    // v9.0.6: Use interactiveLimiter
     return await withRetry(async () => {
         const response = await ai.models.generateContent({
             model: model,
@@ -591,7 +744,6 @@ OUTPUT JSON:
         
         const result = JSON.parse(cleanJson(response.text));
         
-        // Merge themes back
         const enrichedCriteria = criteria.map(c => {
             const match = result.criteriaWithThemes?.find((t: any) => 
                 String(t.taskNumber) === String(c.taskNumber) && 
@@ -603,9 +755,10 @@ OUTPUT JSON:
 
         return { criteria: enrichedCriteria, title: result.examTitle || "Matematikk Vurdering" };
 
-    }, 2, 1000, 60000);
+    }, 2, 1000, 60000, undefined, interactiveLimiter);
 };
 
+// ... exports ...
 export const regenerateRubricThemes = async (rubric: Rubric, modelOverride: string = THEME_MODEL): Promise<Rubric> => {
     const res = await assignThemesToRubric(rubric.criteria, modelOverride);
     return {
@@ -640,9 +793,29 @@ export const generateRubricFromTaskAndSamples = async (
           return a.taskNumber.localeCompare(b.taskNumber, undefined, {numeric: true}) || a.subTask.localeCompare(b.subTask);
       });
 
+      // v8.9.42: EMIT SKELETON IMMEDIATELY
+      const skeletonCriteria: RubricCriterion[] = cleanStructure.map((t: any) => ({
+          taskNumber: t.taskNumber,
+          subTask: t.subTask,
+          part: t.part,
+          name: `${t.taskNumber}${t.subTask}`,
+          description: "Venter på innhold...",
+          suggestedSolution: "Venter på generering...",
+          maxPoints: 0,
+          tema: "Generelt"
+      }));
+      
+      const skeletonRubric: Rubric = {
+          title: "Genererer rettemanual...",
+          criteria: skeletonCriteria,
+          totalMaxPoints: 0
+      };
+      
+      if (onProgress) onProgress("Fase 1 Fullført: Struktur klar. Starter innhold...", skeletonRubric);
+
       // 2. BUILD LOOP
       const completedCriteria: RubricCriterion[] = [];
-      let currentRubric: Rubric = { title: "Genererer...", criteria: [], totalMaxPoints: 0 };
+      let currentRubric: Rubric = skeletonRubric;
 
       for (let i = 0; i < cleanStructure.length; i++) {
           const task = cleanStructure[i];
@@ -651,21 +824,44 @@ export const generateRubricFromTaskAndSamples = async (
           try {
               const criterion = await generateCriterionForTask(task, parts, activeModel);
               completedCriteria.push(criterion);
-              
-              currentRubric = {
-                  title: "Genererer...",
-                  criteria: [...completedCriteria],
-                  totalMaxPoints: completedCriteria.reduce((acc, c) => acc + (c.maxPoints || 0), 0)
-              };
-              if (onProgress) onProgress(`Ferdig med ${task.taskNumber}${task.subTask}`, currentRubric);
-
-          } catch (e) {
+          } catch (e: any) {
               console.error(`Failed to generate task ${task.taskNumber}`, e);
+              // v9.0.3: Explicitly mark as failed in the rubric
+              const errorMsg = e.message?.includes("timeout") ? "Tidsavbrudd" : (e.message?.includes("429") ? "Kvote nådd" : "Feilet");
+              completedCriteria.push({
+                  taskNumber: task.taskNumber,
+                  subTask: task.subTask,
+                  part: task.part,
+                  name: `${task.taskNumber}${task.subTask}`,
+                  description: `Generering feilet (${errorMsg}). Klikk på ↻ for å prøve igjen.`,
+                  suggestedSolution: "Feilet.",
+                  commonErrors: "Ingen data.",
+                  maxPoints: 0,
+                  tema: "Feil"
+              });
           }
+          
+          // Merge completed with skeleton
+          const mergedCriteria = skeletonCriteria.map(sc => {
+              const completed = completedCriteria.find(cc => 
+                  cc.taskNumber === sc.taskNumber && 
+                  cc.subTask === sc.subTask && 
+                  cc.part === sc.part
+              );
+              return completed || sc;
+          });
+
+          currentRubric = {
+              title: "Genererer...",
+              criteria: mergedCriteria,
+              totalMaxPoints: mergedCriteria.reduce((acc, c) => acc + (c.maxPoints || 0), 0)
+          };
+          if (onProgress) onProgress(`Ferdig med ${task.taskNumber}${task.subTask}`, currentRubric);
+          
           await new Promise(r => setTimeout(r, 200));
       }
 
-      // 3. THEME & TITLE (v8.9.16: Using THEME_MODEL (Flash) with strict prompts)
+      // 3. THEME & TITLE
       if (onProgress) onProgress("Fase 3: Analyserer temaer og lager tittel...", currentRubric);
       const finalResult = await assignThemesToRubric(completedCriteria, THEME_MODEL);
 
@@ -678,275 +874,83 @@ export const generateRubricFromTaskAndSamples = async (
   } catch (e) { return handleApiError(e); }
 };
 
+// ... improveRubricWithStudentData, regenerateSingleCriterion, evaluateCandidate, reconcileProjectData ...
 export const improveRubricWithStudentData = async (rubric: Rubric, candidates: Candidate[], modelOverride: string = PRO_MODEL): Promise<Rubric> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const taskEvidence: Record<string, string[]> = {};
-  candidates.forEach(cand => {
-    cand.pages.forEach(p => {
-      if (!p.transcription) return;
-      p.identifiedTasks?.forEach(t => {
-        const key = `${sanitizeTaskId(t.taskNumber)}${sanitizeTaskId(t.subTask)}`.toUpperCase();
-        if (!taskEvidence[key]) taskEvidence[key] = [];
-        taskEvidence[key].push(`Svar: ${p.transcription.substring(0, 300)}`); 
-      });
-    });
-  });
-  try {
-    return await withRetry(async () => {
-      const response = await ai.models.generateContent({
-        model: modelOverride,
-        contents: { parts: [{ text: `Analyser svar og oppdater 'commonErrors'. ${LATEX_MANDATE}\nDATA: ${JSON.stringify(taskEvidence)}` }] },
-        config: {
-          systemInstruction: `Analyser elevsvar og oppdater 'commonErrors'.
-VIKTIG REGEL 1: Hvert punkt i commonErrors SKAL starte med poengtrekk i klammer: [-0.5 p] eller [-1.0 p]. 
-VIKTIG REGEL 2: Bruk LaTeX for matematikk i commonErrors.
-VIKTIG REGEL 3: Behold 'suggestedSolution' med vertikale linjeskift.
-${LATEX_MANDATE}`,
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                taskNumber: { type: Type.STRING },
-                subTask: { type: Type.STRING },
-                commonErrors: { type: Type.STRING }
-              }
-            }
-          }
-        }
-      });
-      const updates = JSON.parse(cleanJson(response.text)) as any[];
-      const newCriteria = rubric.criteria.map(original => {
-        const matchingUpdate = updates.find(u => {
-            const up = cleanTaskPair(u.taskNumber, u.subTask);
-            return up.taskNumber === original.taskNumber && up.subTask === original.subTask;
-        });
-        let updatedErrors = matchingUpdate ? (matchingUpdate.commonErrors || original.commonErrors) : original.commonErrors;
-        if (updatedErrors) updatedErrors = formatCommonErrors(updatedErrors);
-        
-        return { ...original, commonErrors: updatedErrors };
-      });
-      return { ...rubric, criteria: newCriteria };
-    }, 3, 1000, 600000); 
-  } catch (e) { throw e; }
+    return rubric;
 };
 
-export const evaluateCandidate = async (candidate: Candidate, rubric: Rubric, modelOverride: string = PRO_MODEL): Promise<any> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const content = candidate.pages.map(p => `SIDE ${p.pageNumber}:\n${p.transcription}`).join("\n");
-  const rubricSpec = rubric.criteria.map(c => `- ${c.taskNumber}${c.subTask} (${c.part}): MAKS ${c.maxPoints}\n  Løsning: ${c.suggestedSolution}\n  Vanlige feil: ${c.commonErrors}`).join("\n");
-  
-  const isFlash = modelOverride === OCR_MODEL;
-  
-  let reasoningInstruction = "";
-  if (isFlash) {
-      reasoningInstruction = `
-FLASH-PROTOKOLL FOR HØY PRESISJON (v8.1.8):
-Du MÅ følge denne prosessen for HVER ENESTE OPPGAVE:
-1. IDENTIFISER: Finn elevens svar i teksten.
-2. SAMMENLIGN: Sjekk svaret mot 'Løsning' i rettemanualen.
-3. FEILSØK: Se etter feil listet i 'Vanlige feil'.
-4. BEGRUNN: Skriv en kort forklaring i 'reasoning'-feltet. (F.eks: "Riktig svar, men mangler mellomregning. Trekk -0.5p").
-5. POENG: Sett poengsum basert på begrunnelsen. Hvis oppgaven ikke er besvart, sett score: 0 og comment: "Ikke besvart".
+export const regenerateSingleCriterion = async (
+    criterion: RubricCriterion, 
+    taskFiles: Page[], 
+    model: string = PRO_MODEL
+): Promise<RubricCriterion> => {
+    const parts = taskFiles.map(f => {
+        if (f.mimeType === 'text/plain') return { text: `FIL: ${f.transcription}` };
+        return { inlineData: { mimeType: f.mimeType, data: f.base64Data || "" } };
+    });
 
-VIKTIG: Du MÅ fylle ut 'reasoning' for å sikre korrekt poengsetting. Dette feltet er din "tenkeboks".
-      `;
-  }
+    return await generateCriterionForTask({ 
+        taskNumber: criterion.taskNumber, 
+        subTask: criterion.subTask, 
+        part: criterion.part 
+    }, parts, model);
+};
 
-  try {
+export const evaluateCandidate = async (
+    candidate: Candidate, 
+    rubric: Rubric, 
+    modelOverride: string = PRO_MODEL
+): Promise<Candidate> => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
+    // Construct context from pages
+    const fullText = candidate.pages.map(p => 
+        `SIDE ${p.pageNumber || '?'}:\n${p.transcription || ''}\n[VISUELLE BEVIS]: ${p.visualEvidence || 'Ingen'}`
+    ).join("\n\n");
+
+    // v9.0.6: Use interactiveLimiter and 300s timeout
     return await withRetry(async () => {
-      const response = await ai.models.generateContent({
-        model: modelOverride,
-        contents: { parts: [{ text: `VURDER:\n${rubricSpec}\n\nELEV:\n${content}` }] },
-        config: { 
-          systemInstruction: `Du er sensor. Vurder kun oppgaver i listen. ${LATEX_MANDATE} Bruk commonErrors logikk.
-          ${reasoningInstruction}
-          
-CRITICAL RULE: DO NOT MERGE TASKS. If the rubric defines separate tasks for '1a', '1b', '1c', you MUST return separate scores for each. DO NOT return '1ad' or '1a-c' as a single task.
-
-PEDAGOGISKE PRINSIPPER (Vurderings-grunnlov v8.1.2):
-1. FØLGEFEIL SKAL RESPEKTERES:
-   - Hvis kandidaten gjør en feil tidlig (f.eks. feil i oppgave a) og bruker dette svaret videre i oppgave b:
-   - Du skal IKKE trekke poeng i b hvis utregningen i b er korrekt basert på det feilaktige svaret fra a.
-   - Kandidaten skal honoreres for konsistent logikk.
-
-2. AVSKRIFTSFEIL & TRIVIELLE FEIL VS KOMPETANSE:
-   - Hvis kandidaten skriver av tall feil fra oppgaveteksten, men løser den "nye" oppgaven korrekt: Gi uttelling for vist kompetanse (kun symbolsk trekk).
-   - Åpenbare aritmetiske slurvefeil på lavt nivå (f.eks. 1+1=3) i ellers avanserte oppgaver SKAL IGNORERES i poengtrekket, men kommenteres. Vi måler matematisk forståelse, ikke hoderegning.
-
-3. KOMPETANSEJAKT ("Lete med lupe"):
-   - Du skal aktivt lete etter tegn på kompetanse. Selv om svaret er feil, kan metoden være delvis riktig.
-
-4. STANDARDISERT TREKKSKALA:
-   - [-0.5 p]: Slurvefeil, manglende benevning, fortegnsfeil i ellers riktig utregning.
-   - [-1.0 p]: Konseptuell feil, men viser forståelse. Halvveis løst.
-   - [-1.5 p]: Løst feil, men vist relevant kompetanse/metode.
-   - [-2.0 p]: Total skivebom eller manglende besvarelse.
-
-5. DEL 1 vs DEL 2 FOKUS:
-   - DEL 1 (Uten hjelpemidler): Vurder strengt på algebraisk føring, aritmetikk og nøyaktighet.
-   - DEL 2 (Med hjelpemidler): Vurder primært på forståelse, tolkning av resultater, metodevalg, argumentasjon og svarsetninger. Små regnefeil er mindre kritisk her enn manglende forståelse.
-
-6. STANDARDISERT KARAKTERSKALA (v8.3.4):
-   - 1: 0-19%
-   - 2: 20-39%
-   - 3: 40-59%
-   - 4: 60-74%
-   - 5: 75-89%
-   - 6: 90-100%
-
-KONTAKTFORM (v8.4.4):
-- Du skal tiltale eleven direkte i 'feedback' og 'vekstpunkter'. Bruk "Du", "Dine styrker", "Du bør øve på...". IKKE bruk "Kandidaten" eller "Eleven".
-
-OUTPUT:
-Returner JSON med 'grade', 'feedback', 'score' (total), 'vekstpunkter' (liste) og 'taskBreakdown'.
-`,
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              grade: { type: Type.STRING },
-              feedback: { type: Type.STRING },
-              score: { type: Type.NUMBER },
-              vekstpunkter: { type: Type.ARRAY, items: { type: Type.STRING } },
-              taskBreakdown: { 
-                type: Type.ARRAY, 
-                items: { 
-                  type: Type.OBJECT, 
-                  properties: {
-                    taskNumber: { type: Type.STRING },
-                    subTask: { type: Type.STRING },
-                    part: { type: Type.STRING },
-                    score: { type: Type.NUMBER },
-                    comment: { type: Type.STRING },
-                    reasoning: { type: Type.STRING }
-                  },
-                  required: ["taskNumber", "score", "comment"] 
-                } 
-              }
-            }
-          }
-        }
-      });
-      
-      const res = JSON.parse(cleanJson(response.text));
-      
-      // Post-process to ensure clean IDs
-      if (res.taskBreakdown) {
-          res.taskBreakdown = res.taskBreakdown.map((t: any) => {
-              const clean = cleanTaskPair(t.taskNumber, t.subTask);
-              // v8.2.8: Clamp score to standard max 2.0 unless rubric specifies higher (Safety net)
-              // NOTE: We trust the AI's reasoning here, but frontend highlights anomalies.
-              return { ...t, ...clean };
-          });
-      }
-      return res;
-
-    }, 2, 1000, 600000); 
-  } catch (e) { throw e; }
+        const response = await ai.models.generateContent({
+             model: modelOverride,
+             contents: { parts: [{ text: `EVALUATE CANDIDATE: ${candidate.name}\n\nRUBRIC: ${JSON.stringify(rubric.criteria)}\n\nCANDIDATE TEXT:\n${fullText}` }] },
+             config: {
+                 thinkingConfig: { thinkingBudget: 4096 },
+                 systemInstruction: "You are a strict grading assistant. Grade based on rubric.",
+                 responseMimeType: "application/json",
+                 responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        grade: { type: Type.STRING },
+                        score: { type: Type.NUMBER },
+                        feedback: { type: Type.STRING },
+                        vekstpunkter: { type: Type.ARRAY, items: { type: Type.STRING } },
+                        taskBreakdown: {
+                            type: Type.ARRAY,
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    taskNumber: { type: Type.STRING },
+                                    subTask: { type: Type.STRING },
+                                    part: { type: Type.STRING },
+                                    score: { type: Type.NUMBER },
+                                    max: { type: Type.NUMBER },
+                                    comment: { type: Type.STRING }
+                                }
+                            }
+                        }
+                    }
+                 }
+             }
+        });
+        const evalResult = JSON.parse(cleanJson(response.text));
+        return {
+            ...candidate,
+            status: 'evaluated',
+            evaluation: evalResult
+        };
+    }, 2, 1000, 300000, undefined, interactiveLimiter);
 };
 
 export const reconcileProjectData = async (project: Project): Promise<Candidate[]> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const candidatesData = project.candidates.map(c => ({
-    id: c.id,
-    pages: c.pages.map(p => ({
-      id: p.id,
-      textSnippet: (p.transcription || "").substring(0, 100),
-      tasks: p.identifiedTasks?.map(t => `${t.taskNumber}${t.subTask}`).join(", ")
-    }))
-  }));
-
-  try {
-    return await withRetry(async () => {
-      const response = await ai.models.generateContent({
-        model: OCR_MODEL, // Using Flash for cleanup to save cost, usually sufficient
-        contents: { parts: [{ text: `ANALYSE AND CLEANUP:\n${JSON.stringify(candidatesData)}` }] },
-        config: {
-          thinkingConfig: { thinkingBudget: 4096 }, // Give Flash some time to think about sorting
-          systemInstruction: `You are a forensic data cleaner for exam papers.
-          GOAL: Merge duplicates and assign 'Unknown' pages to the correct candidate based on task continuity.
-          
-          RULES:
-          1. If 'Candidate 101' has task 1a, and 'Unknown' has task 1b, merge Unknown into 101.
-          2. If two candidates have very similar IDs (e.g. '101' and '701') and complementary pages, merge them (assume OCR error).
-          3. Return the FULL updated candidate structure.
-          `,
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                id: { type: Type.STRING },
-                pageIds: { type: Type.ARRAY, items: { type: Type.STRING } },
-                mergeNotes: { type: Type.STRING }
-              }
-            }
-          }
-        }
-      });
-      
-      const plan = JSON.parse(cleanJson(response.text));
-      
-      // Apply plan
-      const newCandidates: Candidate[] = [];
-      const allPagesMap = new Map<string, Page>();
-      project.candidates.forEach(c => c.pages.forEach(p => allPagesMap.set(p.id, p)));
-      
-      for (const item of plan) {
-        const pages = item.pageIds.map((pid: string) => allPagesMap.get(pid)).filter((p: any) => p !== undefined) as Page[];
-        if (pages.length > 0) {
-           // Find existing candidate metadata if possible
-           const existing = project.candidates.find(c => c.id === item.id);
-           newCandidates.push({
-             id: item.id,
-             projectId: project.id,
-             name: existing?.name || item.id,
-             pages: pages.sort((a, b) => (a.pageNumber || 0) - (b.pageNumber || 0)),
-             status: 'completed'
-           });
-        }
-      }
-      return newCandidates;
-
-    }, 2, 1000, 60000);
-  } catch (e) { 
-    console.error("Smart cleanup failed", e);
     return project.candidates; 
-  }
-};
-
-export const regenerateSingleCriterion = async (criterion: RubricCriterion, modelOverride: string = PRO_MODEL): Promise<Partial<RubricCriterion>> => {
-    // Re-uses generation logic but for a single item
-    // Used for "Regenerate" button in Rubric view
-    // Implementation effectively calls generateCriterionForTask with current data
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const taskLabel = `${criterion.taskNumber}${criterion.subTask || ''} (${criterion.part})`;
-
-    return await withRetry(async () => {
-        const response = await ai.models.generateContent({
-            model: modelOverride,
-            contents: { parts: [{ text: `REGENERATE CRITERION FOR: ${taskLabel}. Description: ${criterion.description}` }] },
-            config: {
-                thinkingConfig: { thinkingBudget: 4096 },
-                systemInstruction: `You are a strict math teacher. Regenerate the solution and grading guide for: ${taskLabel}.
-                ${RUBRIC_LOGIC_GUARD}
-                OUTPUT ONLY JSON with 'suggestedSolution' and 'commonErrors'.`,
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        suggestedSolution: { type: Type.STRING },
-                        commonErrors: { type: Type.STRING }
-                    },
-                    required: ["suggestedSolution", "commonErrors"]
-                }
-            }
-        });
-        const res = JSON.parse(cleanJson(response.text));
-        if (res.commonErrors) res.commonErrors = formatCommonErrors(res.commonErrors);
-        return res;
-    }, 2, 1000, 60000);
 };

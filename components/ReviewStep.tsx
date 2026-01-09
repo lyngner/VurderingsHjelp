@@ -170,9 +170,29 @@ const LazyImage: React.FC<{ page: Page }> = ({ page }) => {
 };
 
 // Helper for hydration
+// v8.9.43: Enhanced to catch raw placeholders like [BILDEVEDLEGG 1]
 const hydrateEvidence = (text: string, evidence?: string) => {
-  if (!evidence || !text) return text;
-  return text.replace(/\[BILDEVEDLEGG:\s*Se visualEvidence\s*\]/gi, `[BILDEVEDLEGG: ${evidence}]`);
+  if (!text) return "";
+  if (!evidence) return text;
+  
+  let hydrated = text;
+  // 1. Catch explicit 'Se visualEvidence'
+  hydrated = hydrated.replace(/\[BILDEVEDLEGG:\s*Se visualEvidence\s*\]/gi, `[BILDEVEDLEGG: ${evidence}]`);
+  // 2. Catch raw placeholders from Mammoth (e.g. [BILDEVEDLEGG 1]) if the AI failed to replace them
+  hydrated = hydrated.replace(/\[BILDEVEDLEGG\s+\d+\]/gi, `[BILDEVEDLEGG: ${evidence}]`);
+  
+  return hydrated;
+};
+
+// v9.1.5: Helper to detect duplication
+const isEvidenceAlreadyInText = (text: string, evidence: string) => {
+    if (!text || !evidence) return false;
+    // Normalize strings: lowercase, remove all whitespace, ignore brackets
+    const normalize = (s: string) => s.toLowerCase().replace(/[\s\[\]\{\}\(\)\\]/g, '');
+    const normText = normalize(text);
+    const normEvidence = normalize(evidence);
+    // Threshold: If > 80% of evidence is in text, consider it duplicated
+    return normText.includes(normEvidence);
 };
 
 // v8.3.5: Extracted PageEditor to handle local state for deferred updates (Enter to commit)
@@ -213,6 +233,18 @@ const PageEditor: React.FC<{
         (e.target as HTMLInputElement).blur();
     }
   };
+
+  // v9.1.5: Smart Duplication Logic
+  const shouldShowFallbackBox = useMemo(() => {
+      if (!page.visualEvidence) return false;
+      const hasTag = page.transcription?.match(/\[(?:AI-TOLKNING AV FIGUR|BILDEVEDLEGG)/);
+      if (hasTag) return false; // Handled by inline replacement
+      
+      // If no tag, check if content is duplicated textually
+      if (isEvidenceAlreadyInText(page.transcription || "", page.visualEvidence)) return false;
+      
+      return true; // Not in tag, not in text -> Show fallback
+  }, [page.transcription, page.visualEvidence]);
 
   return (
     <div className={`grid grid-cols-1 lg:grid-cols-2 gap-8 items-start relative ${isRefreshing ? 'opacity-50 pointer-events-none' : ''}`}>
@@ -334,7 +366,7 @@ const PageEditor: React.FC<{
                    <div className="pl-1">
                      <LatexRenderer content={hydrateEvidence(page.transcription || "", page.visualEvidence)} className="text-base text-white font-medium leading-relaxed" />
                      
-                     {page.visualEvidence && !page.transcription?.match(/\[(?:AI-TOLKNING AV FIGUR|BILDEVEDLEGG)/) && (
+                     {shouldShowFallbackBox && (
                        <div className="mt-8">
                           <LatexRenderer content={`[BILDEVEDLEGG: ${page.visualEvidence}]`} />
                        </div>
@@ -353,6 +385,7 @@ const PageEditor: React.FC<{
   );
 };
 
+// ... Rest of ReviewStep (unchanged)
 interface ReviewStepProps {
   activeProject: Project;
   selectedReviewCandidateId: string | null;
@@ -369,7 +402,7 @@ interface ReviewStepProps {
   handleSmartCleanup?: () => Promise<void>;
   isCleaning: boolean;
   handleRegeneratePage: (candidateId: string, pageId: string) => Promise<void>;
-  initialTaskFilter?: { id: string, part: 1 | 2 } | null; // v8.0.53
+  initialTaskFilter?: { id: string, part: 1 | 2 } | null; 
 }
 
 export const ReviewStep: React.FC<ReviewStepProps> = ({
@@ -401,7 +434,6 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
     }
   }, [selectedReviewCandidateId]);
 
-  // v8.0.53: Apply deep link filter
   useEffect(() => {
     if (initialTaskFilter) {
       setTaskFilter(initialTaskFilter);
@@ -448,8 +480,6 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
     };
   };
 
-  // v8.0.35: Enhanced Completion Status with Part-Check
-  // v8.2.12: Page existence check to avoid missing status if pages are submitted but no tasks found
   const getCandidateStatus = (candidate: Candidate, rubric: Rubric | null) => {
     if (!rubric) return { isComplete: false, d1Status: 'missing', d2Status: 'missing' };
 
@@ -466,7 +496,6 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
     const foundD1 = new Set<string>();
     const foundD2 = new Set<string>();
     
-    // Check if any pages exist for each part (regardless of task detection)
     const hasPagesD1 = candidate.pages.some(p => !(p.part || "Del 1").toLowerCase().includes("2"));
     const hasPagesD2 = candidate.pages.some(p => (p.part || "").toLowerCase().includes("2"));
 
@@ -484,7 +513,6 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
     const checkPart = (rubricTasks: Set<string>, foundTasks: Set<string>, hasPages: boolean) => {
         if (rubricTasks.size === 0) return 'none';
         if (foundTasks.size === 0) {
-            // If pages exist but no tasks found, treat as partial (warning) instead of missing (ban)
             return hasPages ? 'partial' : 'missing';
         }
         return Array.from(rubricTasks).every(t => foundTasks.has(t)) ? 'complete' : 'partial';
@@ -527,7 +555,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
             const newCand: Candidate = {
               id: targetCandidateId,
               projectId: prev.id,
-              name: targetCandidateId, // v8.9.8: Fixed hardcoded 'Kandidat ' prefix
+              name: targetCandidateId, 
               status: 'completed',
               pages: [pageToMove]
             };
@@ -621,7 +649,6 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
     <div className="flex h-full w-full overflow-hidden bg-[#F1F5F9]">
       <aside className="w-64 bg-white border-r flex flex-col shrink-0 no-print shadow-sm h-full">
          <div className="p-4 border-b shrink-0 bg-white/80 sticky top-0 z-20">
-            {/* ... Header and Search ... */}
             <div className="flex justify-between items-center mb-3">
                <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Kandidater</h3>
                {handleSmartCleanup && (
@@ -632,7 +659,6 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
             </div>
             <div className="space-y-3">
               <input type="text" placeholder="Søk..." className="w-full bg-slate-50 border p-2 rounded-lg font-bold text-[10px] outline-none" value={reviewFilter} onChange={e => setReviewFilter(e.target.value)} />
-              {/* Task Pills */}
               {allUniqueTasks.length > 0 && (
                 <div className="flex flex-wrap gap-1 max-h-60 overflow-y-auto custom-scrollbar p-1">
                   {allUniqueTasks.map(t => {
@@ -663,7 +689,6 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
            ) : (
              finalCandidates.map(c => {
                const { del1, del2 } = getGroupedTasks(c);
-               // v8.0.35: Updated Status Check
                const { isComplete, d1Status, d2Status } = getCandidateStatus(c, activeProject.rubric); 
                const isSelected = selectedReviewCandidateId === c.id;
                const isUnknown = c.name.toLowerCase().includes('ukjent');
@@ -683,7 +708,6 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
                          {del2.map(t => (<span key={t} className={`text-[7px] font-black uppercase px-1.5 py-0.5 rounded-md ${isSelected ? 'bg-emerald-500/30' : 'bg-emerald-50 text-emerald-600'}`}>{t}</span>))}
                        </div>
                      )}
-                     {/* v8.0.35: Smart Badges */}
                      <div className="flex gap-1 mt-1 justify-end opacity-80">
                         {d1Status === 'complete' ? <span title="Del 1 Komplett">1️⃣✅</span> : d1Status === 'missing' ? <span title="Ingen Del 1">1️⃣🚫</span> : <span title="Del 1 Ufullstendig/Delvis">1️⃣⚠️</span>}
                         {d2Status === 'complete' ? <span title="Del 2 Komplett">2️⃣✅</span> : d2Status === 'missing' ? <span title="Ingen Del 2">2️⃣🚫</span> : <span title="Del 2 Ufullstendig/Delvis">2️⃣⚠️</span>}

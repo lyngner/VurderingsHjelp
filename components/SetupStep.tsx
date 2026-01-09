@@ -1,3 +1,4 @@
+
 import React, { useMemo, useState } from 'react';
 import { Project, Page, Candidate } from '../types';
 import { Spinner } from './SharedUI';
@@ -21,6 +22,7 @@ interface SetupStepProps {
   onNavigateToCandidate?: (id: string) => void;
   handleSkipFile?: () => void; 
   handleRetryFailed?: () => void;
+  handleDeleteUnprocessedPage?: (pageId: string) => void;
   quotaCount?: number; 
 }
 
@@ -38,15 +40,30 @@ export const SetupStep: React.FC<SetupStepProps> = ({
   handleRetryPage,
   handleSkipFile,
   handleRetryFailed,
+  handleDeleteUnprocessedPage,
   onNavigateToCandidate,
   etaSeconds
 }) => {
-  const hasRubric = !!activeProject.rubric;
+  const hasRubric = !!activeProject.rubric && activeProject.rubric.criteria.length > 0;
   const isProQuotaError = rubricStatus.errorType === 'PRO_QUOTA';
+  const hasError = !!rubricStatus.errorType; 
+  const hasTasks = activeProject.taskFiles.length > 0;
   const [uploadLayoutMode, setUploadLayoutMode] = useState<'A3' | 'A4'>('A3');
   
   const unprocessed = activeProject.unprocessedPages || [];
   const failed = unprocessed.filter(p => p.status === 'error');
+  // v8.9.34: Sort queue to show active item first, then pending
+  const queueList = unprocessed.filter(p => p.status !== 'completed').sort((a, b) => {
+      if (a.id === activePageId) return -1;
+      if (b.id === activePageId) return 1;
+      // Errors at the bottom of queue list (or handled separately)
+      if (a.status === 'error' && b.status !== 'error') return 1;
+      if (b.status === 'error' && a.status !== 'error') return -1;
+      return 0;
+  });
+  
+  // v9.1.7: Calculate failed count for the global retry button
+  const failedCount = queueList.filter(p => p.status === 'error').length;
   
   // Stats calculation
   const stats = useMemo(() => {
@@ -107,6 +124,26 @@ export const SetupStep: React.FC<SetupStepProps> = ({
 
   const displayProgress = batchTotal > 0 ? (batchCompleted / batchTotal) * 100 : 0;
 
+  // v9.0.3: Determine status box styling and text including partial failures
+  const failedTasks = hasRubric ? (activeProject.rubric?.criteria.filter(c => c.description.includes("feilet") || c.description.includes("Venter")).length || 0) : 0;
+  const isPartial = failedTasks > 0;
+
+  const statusBoxClass = rubricStatus.loading 
+      ? 'bg-indigo-50 text-indigo-700 border-indigo-100' 
+      : hasError
+          ? 'bg-rose-50 text-rose-700 border-rose-200 cursor-pointer hover:bg-rose-100'
+          : hasRubric 
+              ? (isPartial ? 'bg-amber-50 text-amber-700 border-amber-100 cursor-pointer hover:bg-amber-100' : 'bg-emerald-50 text-emerald-700 border-emerald-100')
+              : 'bg-slate-50 text-slate-500 border-slate-200 cursor-pointer hover:bg-slate-100';
+
+  const statusBoxText = rubricStatus.loading 
+      ? (hasRubric ? `Oppdaterer manual (${activeProject.rubric?.criteria.length})...` : rubricStatus.text || `Genererer rettemanual...`) 
+      : hasError
+          ? (rubricStatus.text || "Generering feilet. Prøv igjen.")
+          : hasRubric 
+              ? (isPartial ? `Delvis ferdig (${activeProject.rubric?.criteria.length - failedTasks}/${activeProject.rubric?.criteria.length}). ${failedTasks} feilet.` : `Rettemanual klar (${activeProject.rubric?.criteria.length} oppg)`)
+              : `Venter på generering...`;
+
   return (
     <div className="flex h-full w-full overflow-hidden bg-[#F8FAFC]">
        <main className="flex-1 overflow-y-auto custom-scrollbar p-8">
@@ -135,19 +172,16 @@ export const SetupStep: React.FC<SetupStepProps> = ({
                            )}
                        </div>
 
-                       {hasRubric ? (
-                           <div className="bg-emerald-50 text-emerald-700 px-4 py-3 rounded-xl flex items-center justify-center gap-2 text-[10px] font-black uppercase tracking-widest border border-emerald-100 animate-in zoom-in">
-                               <span>✅</span> Fasit Klar ({activeProject.rubric?.criteria.length} oppg)
-                           </div>
-                       ) : (
-                           <button 
-                             onClick={() => handleGenerateRubric()} 
-                             disabled={rubricStatus.loading || activeProject.taskFiles.length === 0}
-                             className="w-full bg-indigo-600 text-white px-6 py-4 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-md disabled:opacity-50 flex items-center justify-center gap-2"
+                       {/* Status Box: Vises alltid hvis det finnes oppgaver */}
+                       {hasTasks && (
+                           <div 
+                                onClick={() => !rubricStatus.loading && handleGenerateRubric()}
+                                className={`${statusBoxClass} px-4 py-3 rounded-xl flex items-center justify-center gap-2 text-[10px] font-black uppercase tracking-widest border animate-in zoom-in transition-all`}
+                                title={!hasRubric && !rubricStatus.loading ? "Klikk for å starte generering manuelt" : ""}
                            >
-                              {rubricStatus.loading ? <Spinner size="w-3 h-3" color="text-white"/> : '✨'}
-                              {rubricStatus.loading ? 'Genererer...' : 'Generer Fasit'}
-                           </button>
+                               {rubricStatus.loading ? <Spinner size="w-3 h-3" color="text-indigo-700"/> : hasError ? <span>⚠️</span> : (isPartial ? <span>⚠️</span> : <span>✅</span>)} 
+                               {statusBoxText}
+                           </div>
                        )}
                        
                        {isProQuotaError && (
@@ -160,7 +194,7 @@ export const SetupStep: React.FC<SetupStepProps> = ({
 
                {/* RIGHT COLUMN: RESPONSES (2/3 width) */}
                <section className="lg:col-span-8 flex flex-col gap-6 relative">
-                   <div className={`bg-white rounded-[32px] p-8 border border-slate-100 shadow-sm flex-1 flex flex-col transition-opacity ${!hasRubric ? 'opacity-50 pointer-events-none grayscale' : 'opacity-100'}`}>
+                   <div className={`bg-white rounded-[32px] p-8 border border-slate-100 shadow-sm flex-1 flex flex-col transition-opacity ${!hasRubric && !isProcessing && !rubricStatus.loading ? 'opacity-50 pointer-events-none grayscale' : 'opacity-100'}`}>
                        
                        <div className="flex justify-between items-start mb-8 border-b border-slate-50 pb-4">
                            <h2 className="text-sm font-black text-emerald-600 uppercase tracking-widest mt-2">2. Besvarelser</h2>
@@ -185,7 +219,7 @@ export const SetupStep: React.FC<SetupStepProps> = ({
 
                        {/* MAIN UPLOAD AREA */}
                        <div className="relative group mb-8">
-                           <label className="border-2 border-dashed border-slate-200 rounded-[32px] p-10 flex flex-col items-center justify-center cursor-pointer hover:bg-slate-50 transition-colors bg-slate-50/30 min-h-[220px]">
+                           <label className="border-2 border-dashed border-slate-200 rounded-[32px] p-10 flex flex-col items-center justify-center cursor-pointer hover:bg-slate-50 transition-colors bg-slate-50/30 min-h-[180px]">
                                <input type="file" multiple accept="image/*,.pdf,.docx" className="hidden" onChange={e => e.target.files && handleCandidateFileSelect(e.target.files, uploadLayoutMode)} />
                                <div className="w-16 h-16 bg-white rounded-2xl shadow-sm flex items-center justify-center text-3xl mb-4 group-hover:scale-110 transition-transform relative border border-slate-100">
                                    📥
@@ -202,55 +236,92 @@ export const SetupStep: React.FC<SetupStepProps> = ({
                                    className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${uploadLayoutMode === 'A3' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:bg-slate-50'}`}
                                    title="Automatisk splitting av A3-oppslag (Standard)"
                                >
-                                   A3 Oppslag (Splitt)
+                                   A3 Oppslag
                                </button>
                                <button 
                                    onClick={(e) => { e.preventDefault(); setUploadLayoutMode('A4'); }}
                                    className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${uploadLayoutMode === 'A4' ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-400 hover:bg-slate-50'}`}
                                    title="Enkeltsider uten splitting"
                                >
-                                   A4 Enkeltside
+                                   A4 Enkel
                                </button>
                            </div>
                        </div>
 
-                       {/* PROCESSING STATUS */}
-                       {(isProcessing || unprocessed.length > 0) && (
-                           <div className="mb-8 bg-white p-6 rounded-[24px] border border-indigo-100 shadow-sm animate-in fade-in slide-in-from-top-2">
+                       {/* PROGRESS & QUEUE LIST (v8.9.34) */}
+                       {(isProcessing || queueList.length > 0) && (
+                           <div className="mb-8">
+                               {/* Progress Bar Header */}
                                <div className="flex justify-between items-end mb-2">
                                    <div className="flex flex-col">
-                                       <span className="text-[10px] font-black uppercase text-indigo-600 tracking-widest mb-1">{currentAction || "Prosesserer..."}</span>
-                                       {etaSeconds && <span className="text-[9px] font-bold text-emerald-600 uppercase tracking-widest animate-pulse">{formatEta(etaSeconds)}</span>}
+                                       <span className="text-[10px] font-black uppercase text-indigo-600 tracking-widest mb-1 animate-pulse">
+                                           {currentAction || "Jobber..."}
+                                       </span>
+                                       {/* v8.9.35: Only show ETA if > 0 */}
+                                       {(etaSeconds || 0) > 0 && <span className="text-[9px] font-bold text-emerald-600 uppercase tracking-widest">Est. tid: {formatEta(etaSeconds || 0)}</span>}
                                    </div>
-                                   <span className="text-[10px] font-bold text-slate-400">{batchCompleted}/{batchTotal}</span>
+                                   {/* v9.1.7: Global Retry Button */}
+                                   <div className="flex items-center gap-4">
+                                       {failedCount > 0 && handleRetryFailed && (
+                                           <button 
+                                               onClick={handleRetryFailed}
+                                               className="flex items-center gap-1.5 bg-rose-100 hover:bg-rose-200 text-rose-700 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all shadow-sm animate-in fade-in"
+                                           >
+                                               <span>↻</span> Prøv {failedCount} feilede på nytt
+                                           </button>
+                                       )}
+                                       <span className="text-[10px] font-bold text-slate-400">{batchCompleted}/{batchTotal}</span>
+                                   </div>
                                </div>
-                               <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                               <div className="h-2 bg-slate-100 rounded-full overflow-hidden mb-4">
                                    <div className="h-full bg-indigo-500 transition-all duration-500 ease-out rounded-full" style={{ width: `${displayProgress}%` }}></div>
                                </div>
+
+                               {/* Live Queue List - "Glass Box" Visualization */}
+                               <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm max-h-[300px] overflow-y-auto custom-scrollbar">
+                                   {queueList.map((p) => {
+                                       const isActive = p.id === activePageId;
+                                       const isError = p.status === 'error';
+                                       const isSkipped = p.status === 'skipped';
+                                       
+                                       return (
+                                           <div key={p.id} className={`p-3 border-b border-slate-50 flex items-center justify-between transition-colors ${isActive ? 'bg-indigo-50/50' : isError ? 'bg-rose-50/50' : 'hover:bg-slate-50'}`}>
+                                               <div className="flex items-center gap-3 min-w-0">
+                                                   <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-indigo-500 animate-pulse' : isError ? 'bg-rose-500' : 'bg-slate-300'}`}></div>
+                                                   <span className={`text-[10px] font-bold truncate ${isActive ? 'text-indigo-700' : isError ? 'text-rose-600' : 'text-slate-600'}`}>
+                                                       {p.fileName}
+                                                   </span>
+                                               </div>
+                                               <div className="flex items-center gap-2 shrink-0">
+                                                   {isActive && <Spinner size="w-3 h-3" color="text-indigo-600" />}
+                                                   <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">
+                                                       {isActive 
+                                                          ? (currentAction?.split(':')[0] || 'Behandler') 
+                                                          : (hasRubric ? p.statusLabel || (isError ? 'Feilet' : isSkipped ? 'Hoppet over' : 'I kø') : 'Venter på struktur...')
+                                                       }
+                                                   </span>
+                                                   {isError && handleRetryFailed && (
+                                                       <button onClick={() => handleRetryPage(p)} className="ml-2 w-5 h-5 bg-white border border-rose-200 rounded-full flex items-center justify-center text-rose-500 hover:bg-rose-50 text-[10px]" title="Prøv denne igjen">↻</button>
+                                                   )}
+                                                   {/* v8.9.41: Allow deleting pending/error items from queue */}
+                                                   {handleDeleteUnprocessedPage && (
+                                                       <button 
+                                                           onClick={() => handleDeleteUnprocessedPage(p.id)} 
+                                                           className="ml-2 w-5 h-5 flex items-center justify-center text-slate-300 hover:text-rose-500 hover:bg-rose-50 rounded-full transition-colors"
+                                                           title="Fjern fra kø"
+                                                       >
+                                                           ✕
+                                                       </button>
+                                                   )}
+                                               </div>
+                                           </div>
+                                       );
+                                   })}
+                               </div>
                            </div>
                        )}
 
-                       {/* FAILED LIST */}
-                       {failed.length > 0 && (
-                           <div className="mb-8 bg-rose-50 p-4 rounded-2xl border border-rose-100">
-                               <div className="flex justify-between items-center mb-2">
-                                   <h3 className="text-[10px] font-black uppercase text-rose-500 tracking-widest">Feilet ({failed.length})</h3>
-                                   {handleRetryFailed && (
-                                       <button onClick={handleRetryFailed} className="text-[9px] font-black uppercase text-rose-600 bg-white border border-rose-200 px-3 py-1 rounded-lg hover:bg-rose-100 shadow-sm">Prøv igjen</button>
-                                   )}
-                               </div>
-                               <div className="flex flex-wrap gap-2">
-                                   {failed.map(p => (
-                                       <div key={p.id} className="bg-white border border-rose-100 text-rose-700 px-3 py-2 rounded-xl text-[10px] font-bold flex items-center gap-2 shadow-sm">
-                                           <span>⚠️</span> {p.fileName}
-                                           <button onClick={() => handleRetryPage(p)} className="ml-2 w-4 h-4 bg-rose-100 rounded-full flex items-center justify-center hover:bg-rose-200">↺</button>
-                                       </div>
-                                   ))}
-                               </div>
-                           </div>
-                       )}
-
-                       {/* CANDIDATE GRID (Cards) */}
+                       {/* COMPLETED CANDIDATE GRID */}
                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pb-10">
                            {sortedCandidates.map(c => {
                                const tasks = getCandidateTaskSummary(c);
